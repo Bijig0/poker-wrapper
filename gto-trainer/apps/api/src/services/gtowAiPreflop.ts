@@ -46,6 +46,7 @@ import { dealtSeats, dealtCount } from "../utils/dealtSeats/dealtSeats";
 import type { ParsedHand, ParsedAction } from "../feed/parsePanelFeed/parsePanelFeed";
 import { gtowSessions, logRoute, type GtowNeed, type GtowSessionId } from "./gtowSessions";
 import { tmark } from "./answerTrace";
+import { tstep, tstepEnd, tstepDetail, USUAL } from "./liveSteps";
 import { gtowRequests } from "./gtowRequestLog";
 // AN AUTH REFUSAL IS NOT A VERDICT (2026-10-08, services/gtowAuth): one token refresh, the same request once more, else
 // "GTO Wizard auth failed twice" — never cached, never read as a refusal of the line or the tree
@@ -785,9 +786,11 @@ function relocate(solId: string, from: GtowSessionId | null, why: string): Promi
   if (!rec) return Promise.resolve({ error: "the tree this solve was posted as is not known in this process — nothing to re-post" });
   const t0 = Date.now();
   const p = (async (): Promise<{ solId: string } | { error: string }> => {
+    tstep("GTO Wizard account busy → re-posting to another account");
     const made = await postPreflopSolution(rec.body, rec.need, { actions: "", board: "" }, rec.locks, { avoid: from ? [from] : [] });
     const secs = ((Date.now() - t0) / 1000).toFixed(1);
     if ("error" in made) {
+      tstepDetail("no other account free — waiting on the first");
       console.log(`[gtow-preflop-repost] solution ${solId.slice(0, 8)} on ${from ?? "?"}: ${why} — NOT re-posted (${secs} s): ${made.error}`);
       tmark("GTO Wizard preflop re-post failed", made.error);
       return made;
@@ -811,6 +814,7 @@ async function relocateIfTime(solId: string, from: GtowSessionId | null, leftMs:
   if (leftMs < need) {
     console.log(`${head} — too little left to re-post (a cold preflop tree${posted.get(solId)?.locks.length ? " and its locks" : ""} needs ~${(need / 1000).toFixed(0)} s): polling on`);
     tmark("GTO Wizard poll hung", `${why} — polling on`);
+    tstepDetail("poll hung — re-asking");
     return null;
   }
   console.log(`${head} — re-posted on another account (${(leftMs / 1000).toFixed(1)} s left, a cold tree needs ~${(need / 1000).toFixed(0)} s)`);
@@ -868,17 +872,19 @@ export async function solvePreflopWithMenus(hand: ParsedHand, heroPos: string | 
 
 async function ensureSolution(key: string, body: any, need: GtowNeed = {}): Promise<{ solId: string } | { error: string }> {
   const hit = solutions.get(key);
-  if (hit) return hit;
+  if (hit) { tstepDetail("tree already built for this hand"); return hit; }
   // A TREE THE STORE HOLDS IS NOT CREATED AGAIN (services/gtowSolveCache): it is handed out as `gc:<key>` without a
   // request and its nodes are served from the store; a node the store lacks mints the solve once (materialisePre).
   const ck = solveCache.enabled ? cacheKeyOf("pre", body, { actions: "", board: "" }) : null;
   if (ck && solveCache.hasTree(ck.key)) {
+    tstepDetail("already solved");
     const p = Promise.resolve({ solId: storedSolId(ck.key) });
     solutions.set(key, p);
     if (solutions.size > 200) solutions.delete(solutions.keys().next().value as string);
     return p;
   }
   const p = (async () => {
+    tstep("Building the preflop tree on GTO Wizard", { detail: ["new tree"] });
     const made = await postPreflopSolution(body, need, { actions: "", board: "" });
     if ("solId" in made) { solOfKey.set(key, made.solId); bound(solOfKey); }
     // a fresh solve: every node reply it gives is stored under the tree's key (the row goes in with the first)
@@ -918,6 +924,7 @@ async function postPreflopSolution(body: any, need: GtowNeed, solution: { action
     const token = await gtowSessions.tokenFor(id);
     if (!token) { last = `${id}: no token`; skipped.push(`${id}: no token`); continue; }
     // [gtow-route] (least-loaded routing, 2026-10-08): which account takes this tree and why — counted on it at once
+    if (skipped.length) tstepDetail("account didn't take it → trying another");
     logRoute(id, need, gtowSessions.noteRouted(id, need, candidates, skipped), avoid.size ? `tree (re-post; ${[...avoid].join(", ")} left out)` : "tree");
     // an auth refusal (services/gtowAuth): one token refresh and the same POST once more — then the next account
     // A REQUEST THAT FAILED (timed out at 20 s, the connection dropped) IS THIS ACCOUNT'S FAILURE, NOT THE TREE'S
@@ -1725,6 +1732,7 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   // not a node — the direct read is dropped and the walk's line is read at once. An address the walk confirms costs
   // nothing: the direct read is the answer, and the prefix nodes the walk read are the ones the pin warms anyway.
   let node: NodeRead;
+  tstep("GTO Wizard solving the preflop tree…", { ...USUAL.aiPreflop, limitMs: nodeTimeoutMs() });
   {
     let abandon = false;
     const direct = fetchNode(sol.solId, line, { stop: () => abandon });
@@ -1776,6 +1784,7 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   }
   if ("error" in node && /NODE_DOES_NOT_EXIST/i.test(node.error)) {
     // the tree has this line, just not under the sizes we named — walk it and find out
+    tstep("Re-reading the line on GTO Wizard's sizes");
     let fixed: { line: string; changed: string[] } | { error: string } = await repairLine(sol.solId, tokens, { end: true });
     // THE LINE FIT: EVERY FIT, ON THIS TREE, NO DEAD MONEY (2026-10-04, hand 4922379136). The tree holds three players
     // to the flop: a second cold-caller or limper is "not offered". From 2026-09-23 the earliest such caller was folded
@@ -1853,12 +1862,14 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
     const cls = heroClass(hand.heroCards);
     const head = `${HERO_OFF_TREE_TAG} hero's ${cls ?? "hand"} reads 0% for every action at his node '${usedLine || "root"}' on GTO Wizard's tree — an earlier action of his own is one this tree never takes with his hand`;
     const no = (why: string): AiPreflopOutcome => {
+      tstepEnd("failed", "Your hand is off GTO Wizard's tree here — no answer");
       console.log(`[hero-self-lock] REFUSED hand ${hand.clientHandId ?? hand.handId ?? "?"} ${cls ?? "?"} at '${usedLine || "root"}': ${why}`);
       return { ok: false, kind: HERO_OFF_TREE, line, reason: `${head}; ${why}` };
     };
     if (!heroSelfLockOn()) return no("HERO_SELF_LOCK=off, so it is not locked back in — no answer");
     // inside poolLockMs (40 s); the lock never pins anything itself, so a late one is simply dropped
     const ms = poolLockMs();
+    tstep("Your earlier action is off the tree → locking it back in", { limitMs: ms });
     let timer: ReturnType<typeof setTimeout> | null = null;
     const r = await Promise.race([
       heroSelfLock(hand, heroPos, shape, treeBody(shape, m), usedSol, usedLine, idx).catch((e): { ok: false; why: string } => ({ ok: false, why: `the self-lock threw: ${e instanceof Error ? e.message : e}` })),
@@ -2599,10 +2610,12 @@ export async function solvePreflopPoolLocked(hand: ParsedHand, heroPos: string |
   }
   const w = poolLimpWeights(target.key);
   const lock = poolLimpLockOf(at.line, at.sols, at.limp, w);
+  tstep(target.complete ? "Re-solving with the small blind's complete locked to the pool's range" : "Re-solving with the limper locked to the pool's range");
   // THE WHOLE LINE (HERO_ISO_RESPONSE_LOCK=on, default off — services/poolIsoResponse): the limper's reply to hero's
   // iso locked in the SAME POST at the pool's call-given-limp rates by hand group; a reply node that cannot be found or
   // read leaves the limp lock alone (said in the note)
   const resp = heroIsoResponseLockOn() && !target.complete ? await isoResponseLocks(parent.solId, shape, tokens, api, target) : null;
+  if (resp?.locks.length) tstepDetail("his reply to your raise locked too");
   const locked = await poolLockSeams.lock(parent.solId, body, [lock, ...(resp?.locks ?? [])]);
   if ("error" in locked) return no(locked.error, line);
   if (opts.warmOnly) return no("warmed (no answer read)", line);
@@ -2785,6 +2798,7 @@ export async function solvePreflopColdCallLocked(hand: ParsedHand, heroPos: stri
   }
   const w = coldCallWeights(target.key);
   const lock = poolLimpLockOf(at.line, at.sols, at.call, w);
+  tstep("Re-solving with the cold-caller locked to the pool's range");
   const locked = await poolLockSeams.lock(parent.solId, body, [lock]);
   if ("error" in locked) return no(locked.error, line);
   // THE LOCK HELD, OR THERE IS NO ANSWER: the caller's node on the locked solution calls exactly the pool's range

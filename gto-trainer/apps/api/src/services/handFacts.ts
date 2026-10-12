@@ -25,8 +25,10 @@ import { handFactsDbPath, openStore } from "./storePaths";
  *
  * ONE ROW PER HAND (`doc` = the whole hand's facts as JSON, a few KB) keyed by the hand key. Only a REAL site hand id
  * is written to disk: when the capture has no clientHandId the key falls back to the wrapper's per-process hand
- * counter, which collides across tables and restarts — those stay in memory. Rows older than RETAIN_DAYS are pruned
- * when the store opens.
+ * counter, which collides across tables and restarts — those stay in memory. NOTHING IS PRUNED (2026-10-12, Brady: "we
+ * should never prune AI preflop decisions"): a row holds the record of the tree each AI preflop answer was read on, the
+ * only way the hand page can show that node later; rows were deleted after 30 days. ~0.4 MB a day (6.8 MB for 5,352
+ * hands, 2026-09-25 → 10-12).
  *
  * WHERE: HAND_FACTS_DB_PATH, else data/hand_facts.sqlite for the API worker itself (bun index.ts) and an in-memory
  * database for everything else — a replay script or a harness re-plays the same hand ids hundreds of times and must
@@ -110,7 +112,6 @@ export interface HandDoc {
   at: number;
 }
 
-const RETAIN_DAYS = 30;
 const MEMORY_MAX = 600;
 const STREETS_MAX = 60;
 const TREES_MAX = 40;
@@ -162,7 +163,6 @@ class HandFacts {
       db.exec("PRAGMA synchronous=NORMAL");
       db.exec("CREATE TABLE IF NOT EXISTS hand_facts (hand_key TEXT PRIMARY KEY, ts INTEGER NOT NULL, doc TEXT NOT NULL) WITHOUT ROWID");
       db.exec("CREATE INDEX IF NOT EXISTS idx_hand_facts_ts ON hand_facts(ts)");
-      db.query("DELETE FROM hand_facts WHERE ts < ?").run(Date.now() - RETAIN_DAYS * 86_400_000);
       this.stmts = {
         get: db.prepare("SELECT doc FROM hand_facts WHERE hand_key = ?"),
         put: db.prepare("INSERT INTO hand_facts (hand_key, ts, doc) VALUES (?, ?, ?) ON CONFLICT(hand_key) DO UPDATE SET ts = excluded.ts, doc = excluded.doc"),

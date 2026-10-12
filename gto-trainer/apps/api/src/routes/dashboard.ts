@@ -7,7 +7,7 @@ import { HandsView } from "../services/handsView";
 import { liveForCaches } from "../services/setupLive";
 import { step } from "../services/answerTrace";
 import { loadReport } from "../services/machineLoad";
-import { Hono } from "hono";
+import { Hono, type Context, type Next } from "hono";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
@@ -22,7 +22,7 @@ import { sameAction, heroActionAt } from "../services/adherence";
 import { checkAnswerIntegrity, isCheckable } from "../services/answerIntegrity";
 import { profiles as accountProfiles, snapshots as balanceSnapshots, reconcile as reconcileBalances, acks as balanceAcks, acceptReading, unacceptReading, rakeEstCents, rakePaidBb, type PricedHand } from "../services/profiles";
 import { fxRate, toAudCents } from "../services/fx";
-import { strategyIdForAnswer, canonicalStrategyId, STRATEGIES, FULL_EXPLOIT_ID, isTestFormat } from "../services/strategies";
+import { strategyIdForAnswer, canonicalStrategyId, STRATEGIES, FULL_EXPLOIT_ID, isTestFormat, SIX_MAX_STRATEGY_ID } from "../services/strategies";
 import { getCatalog } from "../services/chartCatalog";
 import { chartSetup, type ChartSetup } from "../services/chartSetup";
 import { gtowCdp } from "../services/gtowCdp";
@@ -31,6 +31,8 @@ import { gtowSessions, type GtowSessionId } from "../services/gtowSessions";
 import { REPO, factoryFile } from "../services/repoPaths";
 import { adoptionReport, dataLayout, describeLayout, handsDbPath, openStore, resolveAllStores, splitStores, wrapperDebugDir } from "../services/storePaths";
 import { ensureHandsSchema, FINISHED } from "../../../../packages/data-root/handsSchema";
+import { drewNode, handNodeStore, handNodesOn, loadedCommit, nodeKeyOf } from "../services/handNodeStore";
+import { FinishedHandsFeed } from "../services/hhCheckFeed";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { readFileSync } from "node:fs";
 import { buildPreflopTokens3max } from "../feed/buildSolutionUrl/buildSolutionUrl";
@@ -103,7 +105,7 @@ const app = new Hono();
 // heavy reads are listed — the wrapper's own calls (/config, /gtow-status, /gtow-token, /load, /sources/strategies|registry) never wait.
 for (const p of ["/hands", "/analytics", "/hand/*", "/sessions/*", "/profiles/*"]) app.use(p, yieldFirst);  // "/x/*" covers "/x" too
 
-interface HandRow {
+export interface HandRow {
   rowid: number;
   hand_id: number | null;
   played_at: number | null;
@@ -1258,12 +1260,10 @@ export const doneIgnitionHandsAfter = (afterRowid: number): Enriched[] =>
     .map(enrichSync)
     .filter((e): e is Enriched => !!e && isIgnitionHandId(e.clientHandId));
 
-/** The same hands' client ids only — no row data read, nothing enriched (the checker's queue: it enriches just the hands
- *  it has not checked yet; enriching all of them every 10 s froze the API at 3,350 hands, 2026-10-05). */
-export const doneIgnitionHandIdsAfter = (afterRowid: number): string[] =>
-  (openDb()?.query<{ c: string | null }, [number]>(`SELECT client_hand_id AS c FROM hands WHERE rowid > ? AND ${FINISHED} ORDER BY rowid`).all(afterRowid) ?? [])
-    .map((r) => r.c)
-    .filter((c): c is string => !!c && isIgnitionHandId(c));
+/** The checker's queue: the client ids of the Ignition hands finished since its last call (services/hhCheckFeed.ts —
+ *  each finished row once, read from the indexes; asking for every finished hand since the cutoff each tick read every
+ *  one of their rows, the 16-40 s [stall] lines of 2026-10-12 under paging). */
+export const finishedIgnitionIds = new FinishedHandsFeed(openDb, isIgnitionHandId);
 
 /** The newest row id (0 for an empty or missing archive) — the checker's one-time "from here on" cutoff. */
 export const lastArchivedRowid = (): number =>
@@ -1544,6 +1544,50 @@ function poolSeatsFor(hand: ParsedHand, upto: number, street: string, row: any):
   return out;
 }
 
+/**
+ * STORED NODES (2026-10-12, services/handNodeStore.ts): /answer-node and /preflop-path answer from the hand's stored
+ * row when there is one — the hand page then draws at once instead of rebuilding every node — and keep what they
+ * compute for a FINISHED hand (a hand in play is still having its answers logged). `fresh=1` computes (and keeps)
+ * regardless: services/handNodeBuilder.ts fills finished hands that way while no session is live. A row built by
+ * another commit, or one that drew no node and is over NODE_RETRY_MS old, is still served — and queued for the
+ * builder, so the next open has this code's answer.
+ */
+const NODE_RETRY_MS = 6 * 3_600_000;
+const handFinished = (dbId: number): boolean => {
+  try { return !!openDb()?.query<{ x: number }, [number]>(`SELECT 1 AS x FROM hands WHERE rowid = ? AND ${FINISHED}`).get(dbId); }
+  catch { return false; }
+};
+export const storedNodes = (route: "answer-node" | "preflop-path") => async (c: Context, next: Next) => {
+  const q = c.req.query();
+  const dbId = Number(q.dbId);
+  const key = handNodesOn() && Number.isInteger(dbId) && dbId > 0 ? nodeKeyOf(route, q) : null;
+  if (!key) return next();
+  const store = handNodeStore();
+  if (q.fresh !== "1") {
+    const hit = store.get(dbId, key);
+    if (hit) {
+      const drew = drewNode(hit.body);
+      // never the AI preflop path: rebuilding it can cost GTO Wizard quota, so it is only ever built on a click
+      if (key !== "preflop-path:ai" && (hit.commit !== loadedCommit() || (!drew && Date.now() - hit.builtAt > NODE_RETRY_MS))) {
+        const params = new URLSearchParams(Object.entries(q).filter(([k]) => k !== "fresh") as [string, string][]);
+        params.set("fresh", "1");
+        store.refresh.set(`${dbId}|${key}`, { dbId, key, url: `/${route}?${params}` });
+      }
+      return c.json({ ...hit.body, stored: { at: hit.builtAt, commit: hit.commit } });
+    }
+  }
+  await next();
+  if (!c.res.ok || !handFinished(dbId)) return;
+  try { store.put(dbId, key, await c.res.clone().json()); } catch { /* not JSON: nothing to keep */ }
+};
+app.use("/answer-node", storedNodes("answer-node"));
+app.use("/preflop-path", storedNodes("preflop-path"));
+
+/** No logged answer: does this hand's preflop read the 6-max ring charts? Its strategy says so, or its stake does —
+ *  NL200, or NL5, the test stake that plays the NL200 answers (memory: test-stake-nl5). Not a 3-max hand, 4+ seats. */
+export const sixMaxWithoutAnswer = (threeMax: boolean, liveSeats: number, bbUsd: number | null, strategy: () => string | null): boolean =>
+  !threeMax && liveSeats > 3 && (bbUsd === 2 || bbUsd === 0.05 || strategy() === SIX_MAX_STRATEGY_ID);
+
 app.get("/answer-node", async (c) => {
   const dbId = Number(c.req.query("dbId"));
   const upto = Number(c.req.query("upto"));
@@ -1591,7 +1635,7 @@ app.get("/answer-node", async (c) => {
       const noNode = (why: string) => c.json({ ...base, kind: "ai-chain",
         note: `This preflop decision was answered by GTO Wizard AI preflop, not a chart, and its node cannot be shown: ${why}.` });
       const rec = preflopNodeFor({ ...hand, clientHandId: hand.clientHandId ?? e.clientHandId ?? undefined }, upto);
-      if (!rec) return noNode("no record of its tree is kept for this decision (only the last preflop answer of a hand was kept before 2026-10-04, and a hand's facts are pruned after 30 days)");
+      if (!rec) return noNode("no record of its tree is kept for this decision (only the last preflop answer of a hand was kept before 2026-10-04; until 2026-10-12 a hand's facts were also pruned after 30 days)");
       if (rec.piece !== "gtow-ai-preflop") return noNode(`the record kept for this decision is a chart's (${rec.chartId}), not an AI tree's`);
       const key = preflopCacheKeyOf(rec);
       if (!key) return noNode("the tree's key in the GTO Wizard solve cache is not known");
@@ -1696,9 +1740,12 @@ app.get("/answer-node", async (c) => {
     // id looked up in the GTOW DB can only ever come back "not stored", so EVERY ring
     // answer's node opened as an empty grid. Same shape as the 3-max branch — the node
     // comes from the baked SQLite when this machine has it, :8777 otherwise.
+    // NO LOGGED ANSWER (2026-10-12, 176 decisions opened on the crawled GTO Wizard library): the stake alone ($2 bb)
+    // sent every NL5 test hand — which plays the NL200 6-max answers — and every hand of a 6-max session at another
+    // stake to "Cash6m500zGeneral". The hand's own strategy decides first, then the stake.
     const sixMax = logged?.chart
       ? /_6max_/.test(logged.chart)
-      : !threeMax && live.size > 3 && bbUsdOf(e.stakes, e.hand.bbCents) === 2;
+      : sixMaxWithoutAnswer(threeMax, live.size, bbUsdOf(e.stakes, e.hand.bbCents), () => strategyOfHand(e));
     if (sixMax) {
       const tokens = buildPreflopTokens(t, heroPos);
       const choice = chartFor6max(t, heroPos, tokens);
@@ -1734,7 +1781,9 @@ app.get("/answer-node", async (c) => {
           node
             ? (snapped.length ? `sizes snapped to the tree, as the live answer did: ${snapped.map((x) => `${x.from}→${x.to}`).join(", ")}`
               : loggedLine && usedLine !== loggedLine ? "the logged line was not found; showing the raw line instead" : null)
-            : `this line is not in ${chart}'s tree as rebuilt from the archive — live, the sizes were snapped to the nearest tree sizes`,
+            : logged
+              ? `this line is not in ${chart}'s tree as rebuilt from the archive — live, the sizes were snapped to the nearest tree sizes`
+              : `no answer was logged at this decision, and its line is not on ${chart} — live, a line off the chart goes to GTO Wizard AI preflop; "solve it" runs that (GTO Wizard quota)`,
         ].filter(Boolean).join(" · ") || null,
         browse: `${HRC3MAX_BASE}/api/preflop/node?source=${encodeURIComponent(chart)}&line=${encodeURIComponent(usedLine ?? rawLine)}`,
       });
@@ -1753,7 +1802,9 @@ app.get("/answer-node", async (c) => {
     return c.json({
       ...base, kind: "gtow", chart: gametype, depth, line: usedLine, rawLine, loggedLine, node,
       ...(withRanges && node && gametype ? await rangesAlong(usedLine, (ln) => preflopDb.rawNode(gametype, depth, ln), node.pos ?? null) : {}),
-      note: node ? null : "this line is not stored in the crawled preflop DB",
+      note: node ? null : logged
+        ? "this line is not stored in the crawled preflop DB"
+        : `no answer was logged at this decision and no chart of this hand's strategy holds it (${gametype ?? "no chart"} is the old crawled library) — live, it would go to GTO Wizard AI preflop; "solve it" runs that (GTO Wizard quota)`,
     });
   }
 
@@ -2620,6 +2671,47 @@ app.get("/live-node", async (c) => {
 });
 
 /** GET /storage — where every record lives (the one data root), what was adopted from the legacy files, any split. */
+/**
+ * GET /hand-bundle?dbId= — EVERYTHING THE HAND PAGE DRAWS, IN ONE REQUEST (2026-10-12, Brady: "the hands details page
+ * requests from our db, and has all the range charts already present"). The Ranges view and the exact-node view asked
+ * one route per decision; here the page gets them at once, keyed the way it asks (dashboard.html bundleKeyOf):
+ *   preflop-path       every seat's preflop node along the line (stored, services/handNodeStore.ts)
+ *   preflop-path:ai    the GTO Wizard AI preflop path — only when someone already built it (it can cost quota)
+ *   answer-node:<i>    hero's node at decision i, with the ranges (stored)
+ *   solve:<id>         each stored postflop chain solve the hand's answers name (services/solveStore.ts)
+ * A row not stored yet (a hand still in play, or one the builder has not reached) is computed and kept on the way.
+ */
+app.get("/hand-bundle", async (c) => {
+  const dbId = Number(c.req.query("dbId"));
+  const d = openDb();
+  if (!d || !Number.isInteger(dbId)) return c.json({ ok: false, error: "dbId required" }, 400);
+  const row = d.query<HandRow, [number]>(`SELECT ${HAND_COLS} FROM hands WHERE rowid = ?`).get(dbId);
+  const e = row ? enrichSync(row) : null;
+  if (!e) return c.json({ ok: false, error: `no hand #${dbId}` }, 404);
+  const t0 = Date.now();
+  const get = async (url: string) => { try { return await (await app.request(url)).json(); } catch (err) { return { ok: false, error: String(err) }; } };
+  const entries: Record<string, unknown> = {};
+  entries["preflop-path"] = await get(`/preflop-path?dbId=${dbId}`);
+  const ai = handNodesOn() ? handNodeStore().get(dbId, "preflop-path:ai") : null;
+  if (ai) entries["preflop-path:ai"] = ai.body;
+  for (const [i, a] of e.hand.actions.entries()) {
+    if (a.hero && !/^post/.test(a.type)) entries[`answer-node:${i}`] = await get(`/answer-node?dbId=${dbId}&upto=${i}&ranges=1`);
+  }
+  const answers = e.clientHandId ? (answerLog.forHand(e.clientHandId) as any[]) : [];
+  for (const a of answers) {
+    if (a.solve_id == null || entries[`solve:${a.solve_id}`]) continue;
+    const qs = new URLSearchParams({ hand: String(e.clientHandId), ...(a.decision_key ? { key: String(a.decision_key) } : {}) });
+    entries[`solve:${a.solve_id}`] = await get(`/solve/${a.solve_id}?${qs}`);
+  }
+  return c.json({ ok: true, dbId, ms: Date.now() - t0, entries });
+});
+
+/** GET /hand-nodes — the stored hand nodes (services/handNodeStore.ts): rows, bytes, hands built, rebuilds queued. */
+app.get("/hand-nodes", (c) => {
+  const store = handNodeStore();
+  return c.json({ ok: true, on: handNodesOn(), path: store.path, commit: loadedCommit(), ...store.stats(), refreshQueued: store.refresh.size });
+});
+
 app.get("/storage", (c) => {
   const stores = resolveAllStores();
   return c.json({ ok: true, layout: dataLayout(), line: describeLayout(), stores, split: splitStores(stores), adoption: adoptionReport() });

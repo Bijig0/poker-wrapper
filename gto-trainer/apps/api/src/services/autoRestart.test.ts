@@ -177,6 +177,81 @@ describe("AutoRestart", () => {
   });
 });
 
+describe("AutoRestart: a degraded runtime (services/runtimeHealth.ts)", () => {
+  const SLEPT = { kind: "suspend", recycle: true, why: "the machine slept 14.2 h (woke 19:34)" };
+  /** a rig whose runtime answers `deg`, recording what it was told before the exit */
+  const degRig = (deg: { kind?: string; recycle: boolean; why: string } | null, over: Partial<AutoRestartOpts> & { dirtyFiles?: string[] | null } = {}) => {
+    const recycled: { why: string }[] = [];
+    const r = rig({ degraded: () => deg, recycled: (d) => { recycled.push(d); }, ...over });
+    return { ...r, recycled };
+  };
+
+  test("current code, degraded runtime, no session: exits for its supervisor, after keeping the record", async () => {
+    const r = degRig(SLEPT);
+    const st = await r.auto.tick();
+    expect(st.state).toBe("restarting");
+    expect(st.reason).toBe("runtime-degraded");
+    expect(st.why).toContain("the machine slept 14.2 h");
+    expect(r.s.exits).toBe(1);
+    expect(r.recycled).toEqual([SLEPT]);
+    expect(r.s.checks).toBe(0);   // nothing on disk changed: no boot check
+    expect(r.s.log.some((l) => l.includes("(runtime-degraded)"))).toBe(true);
+  });
+
+  test("a live session holds it; it goes when the session ends", async () => {
+    const r = degRig(SLEPT);
+    r.s.busy = "a poker session is live (session_1)";
+    const held = await r.auto.tick();
+    expect(held.state).toBe("held");
+    expect(held.why).toContain("restart held: a poker session is live");
+    expect(r.s.exits).toBe(0);
+    expect(r.recycled).toEqual([]);
+    r.s.busy = null;
+    expect((await r.auto.tick()).state).toBe("restarting");
+    expect(r.s.exits).toBe(1);
+  });
+
+  test("the loop guard's answer (recycle: false) is reported, never acted on", async () => {
+    const r = degRig({ kind: "symptom", recycle: false, why: "a worker was already replaced for this 12 min ago" });
+    const st = await r.auto.tick();
+    expect(st.state).toBe("held");
+    expect(st.reason).toBe("runtime-degraded");
+    expect(r.s.exits).toBe(0);
+  });
+
+  test("DEGRADED_RESTART=off, AUTO_RESTART=off, no supervisor, just started: reported, never exited", async () => {
+    const off = degRig(SLEPT, { env: { DEGRADED_RESTART: "off" } });
+    expect(await off.auto.tick()).toMatchObject({ state: "off", reason: "runtime-degraded" });
+    expect((await off.auto.tick()).why).toContain("DEGRADED_RESTART=off");
+    const autoOff = degRig(SLEPT, { env: { AUTO_RESTART: "off" } });
+    expect((await autoOff.auto.tick()).state).toBe("off");
+    const unsup = degRig(SLEPT, { supervised: () => false });
+    expect((await unsup.auto.tick()).state).toBe("unsupervised");
+    const young = degRig(SLEPT);
+    (young.code as any).bootAt = young.s.now - 5_000;
+    expect((await young.auto.tick()).state).toBe("settling");
+    expect(off.s.exits + autoOff.s.exits + unsup.s.exits + young.s.exits).toBe(0);
+  });
+
+  test("an uncommitted edit to a loaded file blocks it (the restart would load the edit) and the line says both", async () => {
+    const r = degRig(SLEPT, { dirtyFiles: ["a.ts"] });
+    r.edit("a.ts");
+    const st = await r.auto.tick();
+    expect(st.state).toBe("uncommitted");
+    expect(st.why).toContain("the machine slept 14.2 h");
+    expect(r.s.exits).toBe(0);
+  });
+
+  test("a committed change restarts for the change (one restart cures both); healthy = current", async () => {
+    const r = degRig(SLEPT);
+    r.edit("a.ts");
+    expect(await r.auto.tick()).toMatchObject({ state: "restarting", reason: "code-changed" });
+    expect(r.recycled).toEqual([]);
+    const ok = degRig(null);
+    expect((await ok.auto.tick()).state).toBe("current");
+  });
+});
+
 describe("liveSessionReason", () => {
   const reply = (body: unknown, status = 200) => (async () => new Response(JSON.stringify(body), { status })) as unknown as typeof fetch;
   const fail = (e: unknown) => (async () => { throw e; }) as unknown as typeof fetch;

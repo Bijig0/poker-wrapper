@@ -4,12 +4,11 @@
  * acts on anything the client is not currently offering. launch.py: act, raise_to, the pick → relay path, the
  * told-vs-did postcondition, the time bank.
  *
- * AUTO-EXECUTE IS PRACTICE-ONLY BY DEFAULT: it arms on a practice table (the client's playMode=fun / CoinPoker's
- * coinType 2) or the fake table with no further ask. A REAL-MONEY table — Ignition or CoinPoker — needs an
- * explicit, BOUNDED, TEMPORARY test allowance (`/study-auto {allowRealMoney: true, minutes, hands, reason}`) —
- * re-added 2026-09-24 at Brady's request to exercise the auto-execute path where practice tables have no
- * players/aren't available; same shape as the old Python allowance (clamped minutes/hands, cleared on disarm
- * or expiry, never inherited into a new session, never silently re-granted). Not a production mode.
+ * AUTO-EXECUTE IS BOUNDED BY THE SESSION'S BUDGET (autoBudget.ts, 2026-10-12 — replaced the per-arming real-money
+ * test allowance of 2026-09-24): minutes / hands set at session setup, counted only while auto is on, kept across
+ * untick/tick, changed on the panel by Adjust; spent → disarmed. Practice and real money alike; the fake table is
+ * unbounded. A REAL-MONEY table (Ignition or CoinPoker) arms only with `allowRealMoney` — the panel's confirm
+ * dialog sends it, and a session that declared auto-execute carries it (Brady: declaration + budget is enough).
  */
 import * as cdp from "./cdp";
 import { nowMs, sleep, time } from "./clock";
@@ -23,6 +22,8 @@ import { handState, stripButtonsUp, stripReadStale, toActSources } from "./ignit
 import { callIsMaxCommit } from "./terminal";
 import { closeBuyPanel } from "./topup";
 import * as AUTO from "./autoLog";
+import { adjustBudget, budgetState, startCounting, stopCounting } from "./autoBudget";
+import { keyFromRelay, msSinceMark, stepMark, stepMarkRelay } from "./steps";
 
 export const STUDY_ANSWER_TTL_MS = 3000;
 const PICK_TTL_S = STUDY_ANSWER_TTL_MS / 1000;
@@ -608,7 +609,8 @@ export async function actuate(plan: Record<string, any>, guard: ActOpts = {}): P
     const auto = S.study.execSource === "auto";
     // the actuator keeps its own practice-only check; it lets an auto press through on real money only when we
     // vouch for a LIVE bounded allowance (checked here, at press time — not when it was armed)
-    return CP.actuate(plan, { auto, allowReal: auto && autoAllowance().live });
+    const b = autoAllowance();
+    return CP.actuate(plan, { auto, allowReal: auto && !!S.study.autoAllowReal && (!b.bounded || b.live) });
   }
   const g: ActOpts = guard.cards !== undefined ? { cards: guard.cards, strict: guard.strict } : {};
   if (plan.sized) return actuateSizedAllIn(plan, g);
@@ -827,6 +829,11 @@ export function verifyDone(outcome: string, why: string | null, observed: Record
   const rec = S.study.lastExec;
   if (rec && typeof rec === "object" && rec.key === p.key) Object.assign(rec, { outcome, outcomeWhy: why, observed, attempts: p.attempts ?? null });
   AUTO.noteOutcome(p.key, outcome, why, observed?.did ?? null);
+  const took = p.sentAt ? Math.round((time() - p.sentAt) * 1000) : null;
+  const P = String(p.pick ?? "").toUpperCase();
+  stepMarkRelay(p.key, outcome === "confirmed" ? `✓ ${P} landed on the table`
+    : outcome === "diverged" ? `⚠ ${P} pressed — the table took ${pyStr(why)}`
+    : `⚠ ${P} pressed — never showed on the table (${pyStr(why)})`, outcome === "confirmed" ? "ok" : "bad", took);
   if (outcome === "diverged") feedAdd(`Study pick MIS-EXECUTED — told ${pyStr(p.pick ?? null)}, the table took ${pyStr(why)}`);
   else if (outcome === "unknown") feedAdd(`Study pick UNCONFIRMED — ${pyStr(p.pick ?? null)} was sent, the table never showed it (${pyStr(why)})`);
   else if (outcome === "abandoned") feedAdd(`Study pick unverified — ${pyStr(p.pick ?? null)}: ${pyStr(why)}`);
@@ -916,6 +923,9 @@ export function executePick(source: string, waitedS: number | null = null): Prom
     const sized = plan.sized ? { as: res.as ?? null, typed: res.typed ?? null, why: res.why ?? res.sizedPress ?? res.reason ?? null } : null;
     AUTO.notePress(key, { pick, source, ok, reason: ok ? null : res.reason ?? null, buttons: pressRead()?.offer ?? null, atPress: pressRead()?.atPress ?? null,
                           ...(sized ? { sized } : {}) });
+    const wk = keyFromRelay(key);
+    stepMark(wk, ok ? `Pressed ${String(pick ?? "").toUpperCase()}${source === "auto" ? " (auto)" : ""}`
+                    : `${String(pick ?? "").toUpperCase()} refused: ${pyStr(res.reason ?? "refused")}`, ok ? "info" : "warn", msSinceMark(wk, "Answer: "));
     if (ok) {
       S.study.executed = key;
       const waited = waitedS !== null ? `, after ${fmtFixed(waitedS, 1)} s` : "";
@@ -958,46 +968,45 @@ export function executePick(source: string, waitedS: number | null = null): Prom
 /** The executor a test replaces (Python's tests stubbed launch._execute_pick). */
 export const relaySeams = { executePick: (source: string, waitedS: number | null = null) => executePick(source, waitedS) };
 
-// ---- auto-execute: practice / fake table only --------------------------------------------------------------
-/** The real-money allowance's state — never granted in this build (see the header); kept for the panel. */
+// ---- auto-execute: armed by the person (panel) or the session's declaration, bounded by the session's budget -------
+/** The auto-execute budget's state (autoBudget.ts) — the name kept from the old real-money allowance it replaced, for
+ *  the panel, the CoinPoker actuator and the contract recordings. */
 export function autoAllowance(): Record<string, any> {
-  const st = S.study;
-  const until = st.autoRealUntil, cap = st.autoRealHands, frm = st.autoRealFrom;
-  if (!until) return { granted: false, live: false, minutesLeft: null, handsLeft: null };
-  const minsLeft = Math.max(0.0, pyRound((until - time()) / 60, 1));
-  const handsUsed = Math.max(0, S.handNo - (frm !== null && frm !== undefined ? frm : S.handNo));
-  const handsLeft = cap ? Math.max(0, cap - handsUsed) : null;
-  const live = minsLeft > 0 && (handsLeft === null || handsLeft > 0);
-  return { granted: true, live, minutesLeft: minsLeft, handsLeft, handsUsed, reason: st.autoRealReason };
+  return budgetState();
 }
 
-const PRACTICE_ONLY = "auto-execute arms only on a practice table or the fake table (real-money auto-execute is not available)";
+/** Disarm with a reason the person can read (the budget ran out, …): the used time/hands are kept. */
+function disarmAuto(reason: string, said: string): void {
+  const st = S.study;
+  stopCounting();
+  Object.assign(st, { auto: false, autoDue: null, autoAllowReal: false });
+  feedAdd(said);
+  if (S.session.id) S.sessions.event(S.session.id, "study-auto", { on: false, hand: S.handNo, reason, budget: autoAllowance() });
+  log(`[pick] auto off (${reason})`);
+}
 
-/** May auto-execute run against the table in front of us right now? Practice, the fake table, or a live real-money test allowance
- *  (Ignition and CoinPoker both — a site's own practice check decides `practice` above). */
+const REAL_NOT_ALLOWED = "auto-execute was armed for a practice table — this is a REAL-MONEY table: untick and tick it to allow real money";
+
+/** May auto-execute press on the table in front of us right now? The fake table always; otherwise while the budget
+ *  has time and hands left (spent → disarmed here, with a feed line), and on a real-money table only when the arming
+ *  allowed real money (Ignition and CoinPoker both — a site's own practice check decides `practice`). */
 export function autoTableOk(): [boolean, string | null] {
   if (isCgg()) return [false, "auto-execute is not available on ClubGG (the reader only)"];
-  const practice = S.fakeMode || (isCp() ? CP.practice() : S.liveStatus.practice);
-  if (practice) return [true, null];
-  const allow = autoAllowance();
-  if (allow.granted) {
-    if (allow.live) return [true, null];
-    // the grant just ran out — disarm here so the caller isn't left re-testing an expired allowance forever
-    if (S.study.auto) {
-      S.study.auto = false;
-      Object.assign(S.study, { autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null });
-      feedAdd("Auto-execute disarmed — real-money TEST allowance expired");
-      if (S.session.id) S.sessions.event(S.session.id, "study-auto", { on: false, hand: S.handNo, reason: "allowance-expired" });
-      log("[pick] auto off (real-money test allowance expired)");
-    }
-    return [false, "real-money auto-execute test allowance has expired"];
+  if (S.fakeMode) return [true, null];
+  const b = autoAllowance();
+  if (b.bounded && !b.live) {
+    const why = `auto-execute budget spent (${pyStr(b.minutes)} min / ${pyStr(b.hands)} hands) — Adjust it on the panel to go on`;
+    if (S.study.auto) disarmAuto("budget-spent", `Auto-execute OFF — its budget is spent (${pyStr(b.minutesUsed)} min / ${pyStr(b.handsUsed)} hands used). Adjust it on the panel to go on`);
+    return [false, why];
   }
-  return [false, PRACTICE_ONLY];
+  const practice = isCp() ? CP.practice() : S.liveStatus.practice;
+  if (!practice && !S.study.autoAllowReal) return [false, REAL_NOT_ALLOWED];
+  return [true, null];
 }
 
-/** Arm/disarm the auto mode. Arms on a practice / fake table with no ask; a real-money table needs `allowReal`
- *  plus a bounded `minutes`/`hands` (clamped 1-2880 / 1-10000 — raised 2026-09-24 to match the research team's
- *  ~2-day check-in cadence; either running out still disarms it — see autoTableOk). */
+/** Arm/disarm the auto mode. Arming needs budget left (not on the fake table); a real-money table needs `allowReal`
+ *  (the panel asks for it in its confirm; the session's declaration carries it). `minutes`/`hands`, when given, set
+ *  what is left of the budget first (as Adjust does). Disarming keeps what is left. */
 export function setAuto(on: boolean, opts: { allowReal?: boolean; minutes?: number | null; hands?: number | null; reason?: string | null; delay?: string | null; timeBank?: boolean | null; topUp?: boolean | null;
                                             /** who asked: the /study-auto request's source (panel checkbox, headers) or the code path — on the event */
                                             by?: Record<string, unknown> | null } = {}): Record<string, any> {
@@ -1009,13 +1018,14 @@ export function setAuto(on: boolean, opts: { allowReal?: boolean; minutes?: numb
   }
   if (opts.timeBank !== null && opts.timeBank !== undefined) st.timeBank = !!opts.timeBank;
   if (opts.topUp !== null && opts.topUp !== undefined) st.topUp = !!opts.topUp;
+  const hasBudget = (opts.minutes !== null && opts.minutes !== undefined) || (opts.hands !== null && opts.hands !== undefined);
   if (!on) {
-    st.auto = false;
-    st.autoDue = null;
-    Object.assign(st, { autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null });
+    if (st.auto) stopCounting();
+    Object.assign(st, { auto: false, autoDue: null, autoAllowReal: false });
     // the LIVE toggle wins over the declaration
     st.autoDeclared = false;
-    if (S.session.id) S.sessions.event(S.session.id, "study-auto", { on: false, hand: S.handNo, by });
+    if (hasBudget) adjustBudget({ minutes: opts.minutes, hands: opts.hands });
+    if (S.session.id) S.sessions.event(S.session.id, "study-auto", { on: false, hand: S.handNo, by, budget: autoAllowance() });
     log("[pick] auto off");
     return { ok: true, auto: false, allowance: autoAllowance() };
   }
@@ -1024,55 +1034,61 @@ export function setAuto(on: boolean, opts: { allowReal?: boolean; minutes?: numb
     st.auto = false;
     return { ok: false, auto: false, error: "this session's strategy is on demand: every press is yours, so auto-execute cannot arm", allowance: autoAllowance() };
   }
-  const practice = !!(S.fakeMode || (isCp() ? CP.practice() : S.liveStatus.practice));
   if (isCgg()) {
     st.auto = false;
     return { ok: false, auto: false, error: "ClubGG is the reader only: auto-execute cannot arm there", allowance: autoAllowance() };
   }
-  if (!practice) {
-    if (!opts.allowReal) {
-      st.auto = false;
-      const site = isCp() ? "CoinPoker" : "this";
-      return { ok: false, auto: false,
-               error: `${site} is a REAL-MONEY table: auto-execute is practice-only (it arms on a practice table or the fake table) ` +
-                      "unless a bounded test allowance is granted (allowRealMoney: true)",
-               allowance: autoAllowance() };
-    }
-    // TEMPORARY, BOUNDED real-money TEST allowance (Brady, 2026-09-24: exercising auto-execute where practice
-    // tables have no players/are otherwise unavailable — not a production mode; same shape on Ignition and
-    // CoinPoker). Clamped like the old Python allowance; whichever of minutes/hands runs out first disarms
-    // (autoTableOk); off/disarm/session-end always clears it, never inherited.
-    const minutes = Math.min(2880, Math.max(1, pyInt(opts.minutes ?? 10)));
-    const hands = opts.hands === null || opts.hands === undefined ? null : Math.min(10000, Math.max(1, pyInt(opts.hands)));
-    const reason = opts.reason ?? "manual test allowance";
-    Object.assign(st, { autoRealUntil: time() + minutes * 60, autoRealHands: hands ?? 0, autoRealFrom: S.handNo, autoRealReason: reason });
-    st.auto = true;
-    if (S.session.id) {
-      S.sessions.event(S.session.id, "study-auto", {
-        on: true, hand: S.handNo, practice: false, delay: st.autoDelay ?? null,
-        realMoneyAllowance: { minutes, hands, reason, site: isCp() ? "coinpoker" : "ignition" }, by,
-      });
-    }
-    feedAdd(`Auto-execute armed on REAL MONEY — TEMPORARY TEST allowance (${minutes} min / ${hands ?? "no"} hand cap): ${reason}`);
-    log(`[pick] auto ON (REAL-MONEY test allowance, ${minutes}min / ${hands ?? "no cap"} hands: ${reason})`);
-    return { ok: true, auto: true, practice: false, delay: st.autoDelay ?? null, allowance: autoAllowance() };
+  const practice = !!(S.fakeMode || (isCp() ? CP.practice() : S.liveStatus.practice));
+  if (!practice && !opts.allowReal && !st.auto) {
+    const site = isCp() ? "CoinPoker" : "this";
+    return { ok: false, auto: false,
+             error: `${site} is a REAL-MONEY table: arming auto-execute here needs allowRealMoney (the panel asks you to confirm it)`,
+             allowance: autoAllowance() };
   }
+  if (hasBudget) adjustBudget({ minutes: opts.minutes, hands: opts.hands });
+  const b = autoAllowance();
+  if (b.bounded && !b.live) {
+    if (st.auto) disarmAuto("budget-spent", "Auto-execute OFF — its budget is spent. Adjust it on the panel to go on");
+    return { ok: false, auto: false, error: `auto-execute budget spent (${pyStr(b.minutesUsed)} min / ${pyStr(b.handsUsed)} hands used) — Adjust it first`,
+             allowance: b };
+  }
+  const was = !!st.auto;
+  st.autoAllowReal = !!opts.allowReal || (was && !!st.autoAllowReal);
+  if (!was) startCounting();
   st.auto = true;
-  if (S.session.id) {
-    S.sessions.event(S.session.id, "study-auto", { on: true, hand: S.handNo, practice, delay: st.autoDelay ?? null,
-                                                  realMoneyAllowance: null, by });
+  const left = autoAllowance();
+  if (!was) {
+    if (S.session.id) {
+      S.sessions.event(S.session.id, "study-auto", { on: true, hand: S.handNo, practice, realMoney: !practice, delay: st.autoDelay ?? null,
+                                                    reason: opts.reason ?? null, budget: left, by });
+    }
+    // a feed line for a real-money arm only (as before 2026-10-12: a practice arm is the panel's own line)
+    const bud = !left.bounded ? "" : ` — budget ${pyStr(left.minutesLeft)} min / ${pyStr(left.handsLeft)} hands left`;
+    if (!practice) feedAdd(`Auto-execute ON — REAL MONEY${bud}`);
   }
-  log(`[pick] auto ON (practice, ${pyStr(st.autoDelay ?? null)})`);
-  return { ok: true, auto: true, practice, delay: st.autoDelay ?? null, allowance: autoAllowance() };
+  log(`[pick] auto ON (${practice ? "practice" : "REAL MONEY"}, ${pyStr(st.autoDelay ?? null)}, ${pyStr(left.minutesLeft)} min / ${pyStr(left.handsLeft)} hands left)`);
+  return { ok: true, auto: true, practice, delay: st.autoDelay ?? null, allowance: left };
 }
 
-/** A session that DECLARED auto-execute arms itself the moment a table it is allowed on appears. */
+/** ADJUST (the panel's budget editor): what is left of the budget from now. Auto stays as it is (each field is at
+ *  least 1, so an armed auto keeps going). */
+export function setAutoBudget(b: { minutes?: unknown; hands?: unknown }, by: Record<string, unknown> | null = null): Record<string, any> {
+  const { before, after } = adjustBudget(b);
+  feedAdd(`Auto-execute budget set to ${pyStr(after.minutesLeft)} min / ${pyStr(after.handsLeft)} hands left`);
+  if (S.session.id) S.sessions.event(S.session.id, "study-auto-budget", { hand: S.handNo, before, after, by });
+  log(`[pick] auto budget: ${pyStr(before.minutesLeft)} min / ${pyStr(before.handsLeft)} hands left -> ${pyStr(after.minutesLeft)} / ${pyStr(after.handsLeft)}`);
+  return { ok: true, auto: !!S.study.auto, allowance: after };
+}
+
+/** A session that DECLARED auto-execute arms itself the moment a table it may play appears — real money included
+ *  (Brady, 2026-10-12: the declaration plus its budget is the permission). */
 export function maybeAutoArm(): void {
   const st = S.study;
   if (!(st.on && st.autoDeclared && !st.auto)) return;
-  const [ok] = autoTableOk();
-  if (!ok) return;
-  const res = setAuto(true, { by: { via: "declared at session setup — armed when an allowed table appeared" } });
+  if (isCgg() || st.onDemand) return;
+  const b = autoAllowance();
+  if (b.bounded && !b.live) return;
+  const res = setAuto(true, { allowReal: true, by: { via: "session setup (declared) — armed when a table appeared" } });
   if (res.ok) feedAdd("Auto-execute armed (declared at session setup)");
 }
 
@@ -1149,6 +1165,7 @@ export async function maybeAutoAct(): Promise<void> {
       st.autoHeld = { key: r.key, why: holdWhy, at: time() };
       feedAdd(`Auto-execute held — ${holdWhy}`);
       AUTO.noteHeld(r.key, holdWhy, r.pick ?? null);
+      stepMarkRelay(r.key, `Held: ${holdWhy}`, "warn");
       if (S.session.id) S.sessions.event(S.session.id, "study-auto-held", { why: holdWhy, hand: S.handNo, pick: r.pick });
     }
     st.autoDue = null;
@@ -1160,6 +1177,7 @@ export async function maybeAutoAct(): Promise<void> {
     st.autoHeld = null;
     heldS = time() - was.at;
     AUTO.noteResumed(r.key, heldS);
+    stepMarkRelay(r.key, "Hold cleared", "info", Math.round(heldS * 1000));
     feedAdd(`Auto-execute resumed — ${String(was.why).replaceAll("line uncertain — ", "")} cleared after ${fmtFixed(time() - was.at, 1)} s`);
     if (S.session.id) {
       S.sessions.event(S.session.id, "study-auto-resumed", { why: was.why, heldS: pyRound(time() - was.at, 1), hand: S.handNo, pick: r.pick });
@@ -1362,6 +1380,7 @@ export async function maybeFoldNoAnswer(): Promise<void> {
                 reason: ok ? null : res.reason ?? null };
   st.lastNoAnswerFold = rec;
   AUTO.noteNoAnswer(ready && ready.ok && ready.key ? ready.key : key, did, ok, why);
+  stepMark(key, ok ? `No answer in time — ${did.toUpperCase()} (${why})` : `No answer in time — ${did.toUpperCase()} could not be pressed (${pyStr(res.reason ?? null)})`, "bad");
   feedAdd(ok ? `No answer — ${did.toUpperCase()} (fold on no-answer): ${why}`
              : `No answer — fold on no-answer could not act (${pyStr(res.reason ?? null)}): ${why}`);
   if (S.session.id) S.sessions.event(S.session.id, "no-answer-fold", rec);
@@ -1388,6 +1407,7 @@ export async function maybeTakeTime(): Promise<Record<string, any> | null> {
   const ok = !!res.ok;
   if (ok) st.timeBankDecision = decision;
   st.lastTimeBank = { at: nowMs(), label, ok, hand: S.handNo, reason: ok ? null : res.reason ?? null };
+  if (h) stepMark(decision, ok ? `Time bank ${label} pressed` : `Time bank ${label} not pressed`, ok ? "info" : "warn");
   feedAdd(ok ? `Time bank ${label} pressed (the client starts it when the clock reaches 0)`
              : `Time bank ${label} NOT pressed — ${"reason" in res ? pyStr(res.reason) : "refused"}`);
   if (S.session.id) S.sessions.event(S.session.id, "time-bank", { label, ok, hand: S.handNo, reason: ok ? null : res.reason ?? null });

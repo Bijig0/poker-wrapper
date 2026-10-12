@@ -32,6 +32,12 @@ import { MIN_UPTIME_MS, SUPERVISOR_REPLACE_EXIT, type SupervisorWatch, type Watc
  * such restart per supervisor every 5 min, and never while a loaded file has an uncommitted edit (the restart would
  * pick it up). `others` are supervisors with no worker of their own (the GTO Wizard watchdog): only their request
  * file is written, and they act on it within a minute.
+ *
+ * A DEGRADED RUNTIME TOO (2026-10-12, services/runtimeHealth.ts): with `degraded` set, a process whose code and
+ * supervisor are both current is replaced (reason `runtime-degraded`, a plain exit 0) when it came back from a long
+ * sleep or shows the state one comes back in (~250% CPU with its loop blocked most of the time). The same guards —
+ * held while a session is live, uptime, supervised — and never while a loaded file has an uncommitted edit (the
+ * restart would load it). DEGRADED_RESTART=off (or AUTO_RESTART=off) leaves it reported only.
  */
 
 export type AutoState =
@@ -45,8 +51,12 @@ export type AutoState =
   | "supervisor-old"     // the supervisor's config changed, but it predates restarting itself: restart it by hand once
   | "restarting";
 
-/** What a state is about: this process's code, or its supervisor's config / script. */
-export type AutoReason = "code-changed" | "env-changed" | "supervisor-changed";
+/** What a state is about: this process's code, its supervisor's config / script, or the process itself (its runtime
+ *  came back degraded — services/runtimeHealth.ts). */
+export type AutoReason = "code-changed" | "env-changed" | "supervisor-changed" | "runtime-degraded";
+
+/** Why the process should be replaced although nothing on disk changed (services/runtimeHealth.ts's Degraded). */
+export interface DegradedRuntime { why: string; recycle: boolean; kind?: string }
 
 /** A supervisor without a worker of its own (the watchdog): what was decided for it on the last tick. */
 export interface OtherStatus { state: AutoState | "requested"; why: string }
@@ -91,6 +101,10 @@ export interface AutoRestartOpts {
   supervisor?: SupervisorWatch;
   /** supervisors with no worker of their own that this process requests a self-replace for (request file only) */
   others?: SupervisorWatch[];
+  /** the runtime's own reason to be replaced, or null (services/runtimeHealth.ts) */
+  degraded?: () => DegradedRuntime | null;
+  /** called just before a runtime-degraded exit (the loop guard's record) */
+  recycled?: (d: DegradedRuntime) => void;
 }
 
 export class AutoRestart {
@@ -101,8 +115,9 @@ export class AutoRestart {
   private running = false;
   private otherStatus: Record<string, OtherStatus> = {};
   private watch: AutoStatus["watch"] | null = null;
-  private readonly o: Required<Omit<AutoRestartOpts, "env" | "supervisor" | "others">> & {
+  private readonly o: Required<Omit<AutoRestartOpts, "env" | "supervisor" | "others" | "degraded" | "recycled">> & {
     env: NodeJS.ProcessEnv; supervisor?: SupervisorWatch; others: SupervisorWatch[];
+    degraded?: () => DegradedRuntime | null; recycled?: (d: DegradedRuntime) => void;
   };
 
   constructor(opts: AutoRestartOpts) {
@@ -144,6 +159,7 @@ export class AutoRestart {
   }
 
   private get autoOff(): boolean { return /^(off|0|false|no)$/i.test((this.o.env.AUTO_RESTART ?? "").trim()); }
+  private get degradedOff(): boolean { return /^(off|0|false|no)$/i.test((this.o.env.DEGRADED_RESTART ?? "").trim()); }
 
   /** One decision. Returns the status it left; exits the process (via opts.exit) when everything holds. */
   async tick(): Promise<AutoStatus> {
@@ -171,8 +187,9 @@ export class AutoRestart {
     if (sup && sup.state !== "unknown" && !gone) await this.decideOthers(busy);
     if (!st.stale) {
       this.failed = null;
-      if (!supBehind) return this.set("current", "");
-      return this.decideSupervisor(sup!, busy);
+      if (supBehind) return this.decideSupervisor(sup!, busy);
+      const deg = this.o.degraded?.() ?? null;
+      return deg ? this.decideDegraded(deg, sup, gone, busy) : this.set("current", "");
     }
 
     const changed = code.changedFiles();
@@ -184,8 +201,10 @@ export class AutoRestart {
     if (!committed.length) {
       // a supervisor change waits too: restarting the worker for it would load somebody's uncommitted edit
       const andSup = supBehind && sup!.need ? `; the supervisor's ${sup!.need.why} waits as well (a restart would load the edit)` : "";
+      const deg = this.o.degraded?.() ?? null;
+      const andDeg = deg ? `; and ${deg.why} — not restarted for that either (a restart would load the edit)` : "";
       return this.set("uncommitted", `${changed.length} loaded file(s) edited on disk but not committed (${names(changed.map((f) => code.rel(f)))}) — ` +
-        "not picked up until they are committed, or the service is restarted by hand" + andSup, uncommitted);
+        "not picked up until they are committed, or the service is restarted by hand" + andSup + andDeg, uncommitted);
     }
     const what = `${committed.length} committed file(s) changed (${names(committed.map((f) => code.rel(f)))})`;
     if (this.autoOff) return this.set("off", `${what}; AUTO_RESTART=off — restart by hand`, uncommitted, "code-changed");
@@ -254,6 +273,24 @@ export class AutoRestart {
     }
     const s = this.set("restarting", `${what}; asking the supervisor to replace itself (request file + exit ${SUPERVISOR_REPLACE_EXIT})`, [], reason);
     this.o.exit(SUPERVISOR_REPLACE_EXIT);
+    return s;
+  }
+
+  /** Code and supervisor are current; the runtime itself asks to be replaced (services/runtimeHealth.ts). */
+  private async decideDegraded(d: DegradedRuntime, sup: WatchCheck | null, gone: boolean, busy: () => Promise<string | null>): Promise<AutoStatus> {
+    const reason: AutoReason = "runtime-degraded";
+    if (!d.recycle) return this.set("held", d.why, [], reason);
+    if (this.autoOff || this.degradedOff) {
+      return this.set("off", `${d.why}; ${this.autoOff ? "AUTO_RESTART" : "DEGRADED_RESTART"}=off — restart it by hand`, [], reason);
+    }
+    if (!this.o.supervised()) return this.set("unsupervised", `${d.why}; ${this.o.byHand}`, [], reason);
+    if (gone) return this.set("unsupervised", `${d.why}; ${goneWhy(sup!)}`, [], reason);
+    if (this.o.now() - this.o.code.bootAt < this.o.minUptimeMs) return this.set("settling", `${d.why}; this process only just started — restarting shortly`, [], reason);
+    const b = await busy();
+    if (b) return this.set("held", `${d.why}; restart held: ${b}`, [], reason);
+    const s = this.set("restarting", `${d.why}; exiting for the supervisor to relaunch`, [], reason);
+    try { this.o.recycled?.(d); } catch { /* the record only guards a loop */ }
+    this.o.exit(0);
     return s;
   }
 

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { AutoRestart, liveSessionReason } from "./autoRestart";
 import { liveBusy } from "./livePriority";
 import { LoadedCode } from "./loadedCode";
+import { runtimeHealth } from "./runtimeHealth";
 import { JOBS_DIR, SupervisorWatch } from "./supervisorRestart";
 
 /**
@@ -53,7 +54,11 @@ export const autoRestart = new AutoRestart({
   supervisor: new SupervisorWatch({ name: "api", jobsDir: JOBS_DIR, ownPid: supervisorPid }),
   // ... and the GTO Wizard watchdog's, which has no worker to notice them: the API writes its request file
   others: [new SupervisorWatch({ name: "gtow", jobsDir: JOBS_DIR })],
+  // a worker back from a long sleep burns ~250% CPU until it is replaced (services/runtimeHealth.ts, 2026-10-12)
+  degraded: () => runtimeHealth.degraded(),
+  recycled: (d) => runtimeHealth.recycling(d),
 });
+runtimeHealth.setFile(join(JOBS_DIR, "runtime-recycle.json"));
 
 /**
  * The dashboard page is read from disk on every request, so an open tab can be older than the page on disk.

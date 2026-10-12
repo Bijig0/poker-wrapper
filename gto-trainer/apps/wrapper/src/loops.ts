@@ -10,6 +10,7 @@ import { S, seams } from "./state";
 import { dumpEvent, tapFrame } from "./ignition/ws";
 import { feedTick, maybeFlushEnded, maybeSettleSiteClose, noteDisconnect, noteSocketClosed } from "./ignition/reader";
 import { maybeAutoAct, maybeAutoArm, maybeFoldNoAnswer, maybeTakeTime, maybeVerifyExec } from "./relay";
+import { stepsTick } from "./steps";
 import { maybeGuardBuyPanel, maybePrefoldTopUp, maybeTopUp, topUpKpiTick } from "./topup";
 import { maybeEndForDisconnect, maybeEndForNetDrop, maybeReseatAfterSiteClose, maybeSessionAdopt, maybeSessionOrphaned, maybeStandDown } from "./session";
 import { maybeSitBackIn } from "./sitback";
@@ -69,6 +70,7 @@ export async function feedLoopOnce(loop: { fails: number }, onError?: (kind: str
   } catch {}
   try {
     maybeAutoArm();
+    stepsTick();
     await maybePrefoldTopUp();
     await maybeAutoAct();
     await maybeFoldNoAnswer();

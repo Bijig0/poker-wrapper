@@ -62,6 +62,9 @@ export function freshStudy(): Record<string, any> {
     // THE CHAIN LINE (2026-09-25, the API's services/chainPath): this answer's verdict — clean / rebuilt / extra
     // requests / no answer — and the session's clean count, which outlives any one answer
     chain: null, chainSession: null,
+    // LIVE STEPS (steps.ts, 2026-10-12): the decision the step trail is on, when hero's turn on it began, its milestones,
+    // and the API's solve steps for it (POST /panel/steps)
+    steps: null as Record<string, any> | null,
     decisionKey: null, handId: null, solveId: null as number | null, clientHandId: null as string | null,
     // the answer's short all-in press entries (relay.sizedAllInPlan), null = none
     press: null as any[] | null,
@@ -76,9 +79,10 @@ export function freshStudy(): Record<string, any> {
     timeBank: true, timeBankAt: 0.0, lastTimeBank: null, timeBankDecision: null,
     topUp: true, topUpAt: 0.0, topUpHand: null, lastTopUp: null,
     topUpDue: null, topUpTrigger: null,
-    // THE REAL-MONEY AUTO-EXECUTE ALLOWANCE (relay.ts, restored 2026-09-24 after the TS port first left it out): a
-    // time/hand budget granted per session; these fields hold it. Practice and the fake table need no grant.
-    autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null,
+    // THE AUTO-EXECUTE BUDGET (autoBudget.ts, 2026-10-12 — replaced the per-arming real-money allowance): the session's
+    // minutes / hands, what has been used (counted only while auto is on) and the running arming. `autoAllowReal`: the
+    // arming may press on a real-money table (the panel's confirm, or the session's declaration).
+    autoBudget: null, autoUsedS: 0.0, autoUsedHands: 0, autoArmedAt: 0.0, autoArmedHand: null, autoAllowReal: false,
     autoDeclared: false, autoDeclaredReal: false, autoDeclaredBudget: null,
     // ON DEMAND (2026-09-30, the CoinPoker ring strategy): the session's strategy answers only when the panel's Solve
     // asks (relay.requestSolve), and auto-execute cannot arm. `solveRequest` is that press: the decision it was made
