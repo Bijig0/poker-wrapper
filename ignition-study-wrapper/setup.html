@@ -179,16 +179,14 @@
             <div class="seg" id="autoFoldNoAnswer"><button data-v="1" class="plain">Fold (check if free)</button><button data-v="0" class="plain">Wait it out</button></div></div>
           <span class="help">For unattended runs. When a decision gets no answer — the solver gave up on it, your time is down to 4 s (the clock <i>plus</i> the time bank, which the client starts by itself when the clock reaches 0), the clock reaches the time-bank mark with Time bank set to Leave it, or 30 s pass with no readable clock — the wrapper checks if checking is free and otherwise folds, instead of letting the clock run out (a few timeouts sit you out). The same happens when there IS an answer but it is still held, or its press was refused and retried, with 4 s left (a refusal with no retry left does not spend the time bank). Each one is logged as a <b>no-answer-fold</b> session event with its reason, for the no-answer audit. Currently acts on real-money tables too.</span>
         </div>
-        <div class="cp-only help" style="margin-top:6px;color:#ffce56">CoinPoker: auto-execute arms <b>only on a Practice Games table</b> (the server marks those as play chips) unless the real-money box below is ticked too.</div>
-        <div id="auto-real-row" style="display:none;margin-top:8px">
-          <label class="row" style="color:#ff8a80"><input type="checkbox" id="autoRealMoney"> allow it on a REAL-MONEY table</label>
-          <div class="row" style="margin-top:6px"><span class="sub">budget</span>
+                <div id="auto-budget-row" style="margin-top:8px">
+          <div class="row"><span class="sub">budget</span>
             <input type="number" id="auto-min" min="1" max="2880" value="30" style="width:70px"> <span class="sub">minutes</span>
             <input type="number" id="auto-hands" min="1" max="10000" value="50" style="width:70px"> <span class="sub">hands</span>
             <button type="button" id="auto-budget-max" class="plain" style="margin-left:4px">Max</button></div>
-          <span class="help" style="color:#ff8a80">Whichever budget runs out first disarms it. Without this box a real-money table refuses to arm and the declaration waits for a practice table.</span>
+          <span class="help">How long auto-execute may run on each table this session — practice and real money alike. Only time and hands <b>while it is on</b> count; unticking it on the panel keeps what is left, and the panel's <b>Adjust</b> changes it mid-session. Whichever runs out first turns it off.</span>
         </div>
-        <span class="help">Plays each study pick on the table for you, with no keypress — the same relay the panel's action buttons use. This only sets how the panel OPENS; the toggle there turns it on and off during the session. Off arms nothing: you press Enter per decision, which is the assistive path and needs no declaration.</span></div>
+        <span class="help">Plays each study pick on the table for you, with no keypress — the same relay the panel's action buttons use — on practice and real-money tables alike, until the budget runs out. This only sets how the panel OPENS; the checkbox there turns it on and off during the session (one confirm each way). Off arms nothing: you press Enter per decision.</span></div>
       <div class="field ign-only"><span class="k">Time bank</span>
         <div class="seg" id="autoTimeBank"><button data-v="1" class="plain">Always take it</button><button data-v="0" class="plain">Leave it</button></div>
         <span class="help">Ring tables offer a <b>+45s</b> button once your clock reaches about 9 seconds, and start that time bank by themselves when your clock reaches 0. With this on, the wrapper also presses it once per decision, whether picks are pressed or auto-executed (the press has never been seen to change anything on screen before 0). It only buys time; it never chooses an action.</span></div>
@@ -551,8 +549,7 @@ function fillSettings() {
   $("auto-ondemand").style.display = od ? "" : "none";
   $("auto-fold-row").style.display = cfg.autoExecute ? "" : "none";
   $("auto-delay-row").style.display = cfg.autoExecute ? "" : "none";
-  $("auto-real-row").style.display = cfg.autoExecute ? "" : "none";
-  $("autoRealMoney").checked = !!cfg.autoRealMoney;
+  $("auto-budget-row").style.display = od ? "none" : "";
   $("clearCache").checked = !!cfg.clearCache;
   $("auto-min").value = (cfg.autoBudget && cfg.autoBudget.minutes) || 30;
   $("auto-hands").value = (cfg.autoBudget && cfg.autoBudget.hands) || 50;
@@ -572,9 +569,7 @@ function fillSettings() {
       `<div class="sub" style="margin-top:4px">sources this mode answers from: ${srcs.map(esc).join(", ") || "none"} — each is a required check below</div>` +
       (cfg.onDemand ? `<div class="sub" style="margin-top:4px;color:#7fb2ff"><b>on demand</b> — press Solve on the panel for an answer; nothing is solved unasked and nothing auto-executes</div>` : "") +
       (cfg.autoExecute
-        ? `<div class="sub" style="margin-top:4px;color:${cfg.autoRealMoney ? "#ff8a80" : "#ffce56"}">auto-execute <b>declared ON</b>${cfg.autoDelay === "random" ? " · randomized 1.5–2 s per pick" : " · instant"}${cfg.autoFoldNoAnswer ? " · folds (checks if free) on no answer" : ""}${cfg.autoRealMoney
-            ? ` for REAL MONEY — bounded to ${cfg.autoBudget.minutes} min / ${cfg.autoBudget.hands} hands, then it disarms itself`
-            : " — arms on a practice table; on a real-money table it waits until you allow it on the panel"}</div>`
+        ? `<div class="sub" style="margin-top:4px;color:#ffce56">auto-execute <b>declared ON</b>${cfg.autoDelay === "random" ? " · randomized 1.5–2 s per pick" : " · instant"}${cfg.autoFoldNoAnswer ? " · folds (checks if free) on no answer" : ""} — practice or real money, budget ${cfg.autoBudget.minutes} min / ${cfg.autoBudget.hands} hands a table while it is on, then it turns itself off</div>`
         : "");
 }
 
@@ -594,7 +589,7 @@ function readSettings() {
     const w = Number($("stack-reset-wait").value);
     cfg.stackResetWaitS = Number.isFinite(w) && w >= 0 ? w : 60;
   } else { delete cfg.stackResetBb; delete cfg.stackResetWaitS; }
-  cfg.autoRealMoney = cfg.autoExecute && $("autoRealMoney").checked;
+  delete cfg.autoRealMoney;   // 2026-10-12: a declared auto + its budget is the permission (no separate real-money box)
   cfg.clearCache = $("clearCache").checked;
   // the GTO Wizard allowlist: null (every account) unless at least one registered account is unticked
   const gaBoxes = [...document.querySelectorAll("#gtow-allow input[type=checkbox]")];
@@ -648,7 +643,6 @@ $("auto-budget-max").onclick = () => {
   $("auto-hands").value = $("auto-hands").max;
   if (cfg) { readSettings(); fillSettings(); schedulePreflight(); }
 };
-$("autoRealMoney").onchange = () => { if (cfg) { readSettings(); fillSettings(); } };
 $("clearCache").onchange = () => { if (cfg) { readSettings(); fillSettings(); } };
 $("recheck").onclick = () => runPreflight();
 

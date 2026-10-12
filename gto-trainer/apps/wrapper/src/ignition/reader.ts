@@ -7,6 +7,7 @@
  * transient badge alone, so a missed tick delays a line but never loses it and an animation cannot invent one.
  * HERO'S seat is never read this way: the WS owns hero's actions.
  */
+import { stopCounting } from "../autoBudget";
 import * as cdp from "../cdp";
 import { time } from "../clock";
 import { C } from "../config";
@@ -138,7 +139,8 @@ function notePin(what: ReturnType<typeof pinFrame>): void {
 export function noteDisconnect(what: NonNullable<ReturnType<typeof disconnectOf>>, via: string): void {
   if (S.disconnect || !S.session.id) return;
   S.disconnect = { at: time(), slot: TABLES.slot(), ...what, sid: S.session.id, handled: false, via };
-  Object.assign(S.study, { auto: false, autoDue: null, autoRealUntil: 0.0, autoRealHands: 0, autoRealFrom: null, autoRealReason: null,
+  stopCounting();
+  Object.assign(S.study, { auto: false, autoDue: null, autoAllowReal: false,
                            standDownPending: null });
   S.router.cancel = true;
   const said = what.reconnected ? "the client has reconnected by itself" : `${what.text}${what.attempt !== null ? ` (attempt ${what.attempt} of ${what.of})` : ""}`;

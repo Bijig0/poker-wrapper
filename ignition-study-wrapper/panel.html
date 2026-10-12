@@ -139,6 +139,11 @@
   #sa-ready.ok { color: #5ee39a; } #sa-ready.no { color: #8fa1b3; } #sa-ready.bad { color: #ff8a80; }
   #sa-auto-row { display: none; align-items: center; gap: 8px; margin: 6px 0; font-size: 13px; color: #ffce56; }
   #sa-auto-row input { width: 18px; height: 18px; accent-color: #ffce56; }
+  #sa-budget { display: none; align-items: center; gap: 8px; flex-wrap: wrap; margin: -2px 0 6px 26px; font-size: 12px; color: #8fa1b3; }
+  #sa-budget.spent { color: #ff8a80; }
+  #sa-budget button { font-size: 12px; padding: 2px 8px; }
+  #sa-budget-edit { display: none; align-items: center; gap: 6px; flex-wrap: wrap; margin: 0 0 8px 26px; font-size: 12px; }
+  #sa-budget-edit input { width: 64px; }
   #sa-pick.fold { background: #8c2f39; }
   #sa-pick.check, #sa-pick.call { background: #1f7a4d; }
   #sa-pick.raise, #sa-pick.bet { background: #b96a1f; }
@@ -379,7 +384,14 @@
     <button id="sa-pick" style="display:none" title="execute this pick on the table — Enter or Space does the same"></button>
     <button id="sa-solve" style="display:none" title="solve the decision in front of you now — GTO Wizard AI, live; Enter or Space does the same"></button>
     <div id="sa-ready" style="display:none"></div>
-    <label id="sa-auto-row"><input type="checkbox" id="sa-auto"><span>auto-execute picks — available once you are seated at a practice table</span></label>
+    <label id="sa-auto-row"><input type="checkbox" id="sa-auto"><span>auto-execute picks</span></label>
+    <div id="sa-budget"><span id="sa-budget-text"></span><button type="button" id="sa-budget-adjust" class="plain">Adjust</button></div>
+    <div id="sa-budget-edit"><span class="sub">left from now</span>
+      <input type="number" id="sa-budget-min" min="1" max="2880"> <span class="sub">minutes</span>
+      <input type="number" id="sa-budget-hands" min="1" max="10000"> <span class="sub">hands</span>
+      <button type="button" id="sa-budget-max" class="plain">Max</button>
+      <button type="button" id="sa-budget-save">Save</button>
+      <button type="button" id="sa-budget-cancel" class="plain">Cancel</button></div>
     <div id="sa-answer" class="big">— answers off for this session —</div>
     <div id="sa-note" class="sub" style="display:none;color:#ffce56"></div>
     <div id="sa-chain"></div>
@@ -1628,11 +1640,10 @@
     const row = $("sa-auto-row");
     // an ON-DEMAND strategy never auto-executes (the wrapper refuses to arm it): no toggle to offer
     row.style.display = saOn && !s.onDemand ? "flex" : "none";
-    // A real-money table needs an explicit, expiring testing allowance. The
-    // checkbox stays clickable there (the wrapper asks for the allowance when
-    // it is ticked) but the row turns red and counts the budget down, so an
-    // armed real-money auto can never look like an ordinary practice toggle.
+    // THE BUDGET (2026-10-12): the session's minutes / hands for auto-execute on this table, counted only while it is
+    // on, kept across untick/tick, changed by Adjust. Practice and real money alike; the fake table has none.
     const al = s.autoAllowance || {};
+    lastBudget = al;
     const realMoney = !s.practice;
     lastPractice = !realMoney;   // read by the checkbox handler's confirm step
     $("sa-auto").disabled = false;
@@ -1641,25 +1652,27 @@
     const autoText = row.querySelector("span") || row.appendChild(document.createElement("span"));
     const randomized = s.studyAutoDelay === "random";
     const due = s.studyAutoDue;
-    if (!realMoney) {
-      row.title = randomized ? "fires each pick after a fresh random 1.5–2 s wait" : "fires each pick on its own once the answer lands";
-      autoText.textContent = randomized
-        ? (s.studyAuto && due ? `auto-execute picks — randomized, firing in ${due.secondsLeft.toFixed(0)} s (drew ${due.wait.toFixed(1)} s)` : "auto-execute picks — practice table, randomized 1.5–2 s per pick")
-        : "auto-execute picks — practice table, fires on its own";
-    } else if (s.studyAuto && al.live) {
-      row.title = "bounded real-money testing allowance — disarms itself when either budget runs out";
-      autoText.textContent = `⚠ AUTO-EXECUTING ON REAL MONEY — ${al.minutesLeft} min`
-        + (al.handsLeft != null ? ` / ${al.handsLeft} hands` : "") + " left, then it disarms";
-    } else if (al.granted && !al.live) {
-      row.title = "the allowance ran out; tick again to grant a new one";
-      autoText.textContent = "auto-execute — real-money allowance expired, disarmed. Tick to grant another.";
-    } else if ((s.autoDeclared || {}).on) {
-      // declared at setup for a real-money table but not allowed there yet
-      row.title = "declared at session setup; a real-money table still needs you to allow it here";
-      autoText.textContent = "auto-execute — declared at setup, waiting: this is a REAL MONEY table, tick to allow it";
+    const where = realMoney ? "REAL MONEY" : "practice";
+    if (s.studyAuto) {
+      row.title = "untick to stop — what is left of the budget is kept";
+      autoText.textContent = (realMoney ? "⚠ AUTO-EXECUTING ON REAL MONEY" : "auto-executing picks — practice")
+        + (randomized ? (due ? ` — randomized, firing in ${due.secondsLeft.toFixed(0)} s` : " — randomized 1.5–2 s") : " — fires on its own");
     } else {
-      row.title = "real-money table: ticking this grants a bounded testing allowance (240 min / 2000 hands)";
-      autoText.textContent = "auto-execute picks — REAL MONEY table: ticking grants a bounded 240 min / 2000 hand test allowance";
+      row.title = "tick to play every study pick with no keypress, until the budget runs out";
+      autoText.textContent = (s.autoDeclared || {}).on
+        ? `auto-execute picks — declared at setup, waiting for the table (${where})`
+        : `auto-execute picks (${where} table)`;
+    }
+    const bEl = $("sa-budget");
+    if (row.style.display !== "none" && al.bounded) {
+      bEl.style.display = "flex";
+      bEl.classList.toggle("spent", !al.live);
+      $("sa-budget-text").textContent = al.live
+        ? `budget: ${al.minutesLeft} min / ${al.handsLeft} hands left${s.studyAuto ? "" : " (paused while off)"}`
+        : `budget spent (${al.minutesUsed} min / ${al.handsUsed} hands used) — Adjust to go on`;
+    } else {
+      bEl.style.display = "none";
+      $("sa-budget-edit").style.display = "none";
     }
     if (!autoPending) $("sa-auto").checked = !!s.studyAuto;
     // the time bank: offered right now, and the last press this session
@@ -1802,29 +1815,60 @@
     if ($("sa-pick").style.display === "none" && $("sa-solve").style.display !== "none") { doSolve(); return; }
     execPick();
   });
-  let autoPending = false;
+  let autoPending = false, lastBudget = {};
+  // ONE CONFIRM EACH WAY (Brady, 2026-10-12): ticking asks "on, at this budget?", unticking asks "off?" — nothing else.
+  // A real-money arm says so in the dialog and sends allowRealMoney; the budget is the session's (Adjust changes it).
   $("sa-auto").onchange = async () => {
     const want = $("sa-auto").checked;
-    // Arming on a REAL-MONEY table is a deliberate act, so it is confirmed here
-    // and asks the wrapper for a bounded allowance by name. Practice arms plain.
     // who flipped it rides on the session event (a click from a preview tab of this page looks the same otherwise)
     const via = { via: "panel checkbox", page: { focused: document.hasFocus(), visible: document.visibilityState } };
-    let body = { auto: want, ...via };
-    if (want && !lastPractice) {
-      if (!confirm("This is a REAL-MONEY table.\n\nArm auto-execute for 240 minutes or 2000 hands (whichever comes first)?\n\nEvery study pick will be played WITHOUT a keypress until that budget runs out, then it disarms itself.")) {
-        $("sa-auto").checked = false;
-        return;
-      }
-      body = { auto: true, allowRealMoney: true, minutes: 240, hands: 2000, reason: "unattended-path test (practice tables empty)", ...via };
+    const al = lastBudget || {};
+    const left = al.bounded ? `${al.minutesLeft} min / ${al.handsLeft} hands` : "no budget (test table)";
+    if (want && al.bounded && !al.live) {
+      $("sa-auto").checked = false;
+      const line = $("sa-ready"); line.style.display = "block"; line.className = "bad";
+      line.textContent = "auto-execute budget spent — press Adjust to give it more first";
+      return;
     }
+    const ask = want
+      ? `Turn auto-execute ON${lastPractice ? "" : " — REAL MONEY"}?\n\nBudget left: ${left}.\nEvery study pick is played with no keypress until it runs out or you untick.`
+      : `Turn auto-execute OFF?\n\nBudget left: ${left} — kept for when you turn it back on.`;
+    if (!confirm(ask)) { $("sa-auto").checked = !want; return; }
+    const body = { auto: want, ...(want && !lastPractice ? { allowRealMoney: true } : {}), ...via };
     autoPending = true;
     let r;
     try { r = await (await fetch("/study-auto", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json(); }
     catch (e) { r = { ok: false, error: String(e) }; }
     autoPending = false;
     if (!r.ok) { $("sa-auto").checked = false; const line = $("sa-ready"); line.style.display = "block"; line.className = "bad"; line.textContent = r.error || "could not arm auto-execute"; speak("auto refused"); }
-    else speak(r.auto ? (r.practice ? "auto execute on" : "auto execute on, real money, thirty minutes") : "auto execute off");
+    else speak(r.auto ? (r.practice ? "auto execute on" : "auto execute on, real money") : "auto execute off");
+    pollTable();
   };
+  // ADJUST: what is left of the budget from now (the fields open on what is left)
+  $("sa-budget-adjust").onclick = () => {
+    const al = lastBudget || {};
+    $("sa-budget-min").value = al.live ? Math.max(1, Math.ceil(al.minutesLeft)) : (al.minutes || 30);
+    $("sa-budget-hands").value = al.live ? Math.max(1, al.handsLeft) : (al.hands || 50);
+    $("sa-budget-edit").style.display = "flex";
+    $("sa-budget-min").focus();
+  };
+  $("sa-budget-max").onclick = () => { $("sa-budget-min").value = 2880; $("sa-budget-hands").value = 10000; };
+  $("sa-budget-cancel").onclick = () => { $("sa-budget-edit").style.display = "none"; };
+  async function saveBudget() {
+    const body = { minutes: Number($("sa-budget-min").value) || 1, hands: Number($("sa-budget-hands").value) || 1,
+                   via: "panel budget Adjust", page: { focused: document.hasFocus(), visible: document.visibilityState } };
+    let r;
+    try { r = await (await fetch("/study-auto/budget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json(); }
+    catch (e) { r = { ok: false, error: String(e) }; }
+    const line = $("sa-ready"); line.style.display = "block";
+    if (r.ok) { $("sa-budget-edit").style.display = "none"; line.className = "ok"; line.textContent = `✓ auto budget: ${r.allowance.minutesLeft} min / ${r.allowance.handsLeft} hands left`; pollTable(); }
+    else { line.className = "bad"; line.textContent = r.error || "could not set the budget"; }
+  }
+  $("sa-budget-save").onclick = saveBudget;
+  ["sa-budget-min", "sa-budget-hands"].forEach((id) => $(id).addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); saveBudget(); }
+    if (e.key === "Escape") $("sa-budget-edit").style.display = "none";
+  }));
   (async function pollSaHealth() {
     if (!active("game")) { setTimeout(pollSaHealth, 3000); return; }
     // THIS panel's poller (one per panel since 2026-09-20): the top-level status is simply the first one listed,
