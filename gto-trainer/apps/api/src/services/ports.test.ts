@@ -1,3 +1,4 @@
+// SHARED WITH THE CHART FACTORY (setup/shared-with-factory.json): edit it in poker-wrapper only — the factory takes it with `bun scripts/sync_from_wrapper.ts`.
 import { describe, expect, test } from "bun:test";
 import { PORT_DEFAULTS, apiUrl, livePort, port, portOffset, rewritePorts } from "./ports";
 

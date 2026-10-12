@@ -1,3 +1,4 @@
+// SHARED WITH THE CHART FACTORY (setup/shared-with-factory.json): edit it in poker-wrapper only — the factory takes it with `bun scripts/sync_from_wrapper.ts`.
 /**
  * Every port the Poker Wrapper listens on or calls, in ONE place — and ONE setting that moves them all.
  *

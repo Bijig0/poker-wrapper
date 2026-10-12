@@ -1,3 +1,4 @@
+// SHARED WITH THE CHART FACTORY (setup/shared-with-factory.json): edit it in poker-wrapper only — the factory takes it with `bun scripts/sync_from_wrapper.ts`.
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { AutoStatus } from "./autoRestart";
@@ -19,7 +20,9 @@ import { SUPERVISOR_PROTOCOL, pidAlive, readStamp, requestPath, stillRefused, su
  *                replaces itself when no session is live (services/supervisorRestart.ts) — so "behind" is a state
  *                that clears by itself, and the line says when.
  *
- * This file is the same in the poker-wrapper repo and the chart factory's (poker): keep the two copies identical.
+ * The chart factory runs a copy of this file (setup/shared-with-factory.json). Its API reports in its /api/build which
+ * shared files it is behind poker-wrapper's main on (`shared`), and its line here says so — not current — until
+ * `bun scripts/sync_from_wrapper.ts --commit` has run in the factory checkout.
  */
 
 /** This file's own checkout: <repo>/gto-trainer/apps/api/src/services. */
@@ -33,6 +36,36 @@ export interface ServiceBuild extends CodeStatus {
   auto: AutoStatus;
   /** the factory's API hands its own supervisor's line along (it lives in another checkout) */
   supervisor?: SupervisorLine;
+  /** the factory's API: its copies of setup/shared-with-factory.json's files against poker-wrapper's main */
+  shared?: SharedDrift;
+}
+
+/**
+ * The chart factory's copies of the shared files (setup/shared-with-factory.json), as its API sees them against
+ * poker-wrapper's main. Until 2026-10-13 nothing compared them: the factory ran the 10-03 copies for ten days while
+ * the product changed them three times (supervisors restarting themselves, the post-sleep restart).
+ */
+export interface SharedDrift {
+  /** poker-wrapper's main compared against; null when the factory could not read that checkout */
+  wrapperHead: string | null;
+  /** copies that are an older version of poker-wrapper's, or missing: a sync brings them up to date */
+  behind: string[];
+  /** copies that match no version of poker-wrapper's: edited in the factory — move the edit to poker-wrapper */
+  diverged: string[];
+  error?: string;
+}
+
+const sharedOff = (s: SharedDrift | undefined): number => (s ? s.behind.length + s.diverged.length : 0);
+
+/** The shared-code clause of a factory line, or "". */
+export function describeShared(s: SharedDrift | undefined): string {
+  if (!s) return "";
+  const names = (xs: string[]) => xs.map((p) => p.split("/").pop()).slice(0, 4).join(", ") + (xs.length > 4 ? ` +${xs.length - 4} more` : "");
+  const parts: string[] = [];
+  if (s.behind.length) parts.push(`SHARED CODE BEHIND poker-wrapper ${short(s.wrapperHead)} (${names(s.behind)}) — run \`bun scripts/sync_from_wrapper.ts --commit\` in the factory checkout`);
+  if (s.diverged.length) parts.push(`SHARED CODE EDITED IN THE FACTORY (${names(s.diverged)}) — move the edit to poker-wrapper, then sync`);
+  if (!parts.length && s.error) parts.push(`shared code not checked: ${s.error}`);
+  return parts.length ? ` · ${parts.join(" · ")}` : "";
 }
 
 export interface ServiceLine {
@@ -99,9 +132,12 @@ export function describeBuild(b: ServiceBuild, now = Date.now()): string {
   return `${head} · BEHIND THE DISK: ${b.changedCount} loaded file(s) changed (${files})`;
 }
 
-/** A service's line from its own build reply. */
+/** A service's line from its own build reply. The factory's is not current while its shared code is off. */
 export function lineOf(name: string, port: number, build: ServiceBuild, self = false): ServiceLine {
-  return { name, port, up: true, current: !build.stale, build, text: describeBuild(build), ...(self ? { self: true } : {}) };
+  return {
+    name, port, up: true, current: !build.stale && !sharedOff(build.shared), build,
+    text: describeBuild(build) + describeShared(build.shared), ...(self ? { self: true } : {}),
+  };
 }
 
 async function ask(name: string, base: string, port: number, path: string, timeoutMs: number): Promise<ServiceLine | null> {

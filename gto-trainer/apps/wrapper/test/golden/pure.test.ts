@@ -90,6 +90,41 @@ function asRecordedPresets(fn: string, got: any): any {
     [k, p && Array.isArray(p.sites) ? { ...p, sites: p.sites.filter((x: string) => x !== "clubgg") } : p]));
 }
 
+/**
+ * SUPERSEDED 2026-10-09 (d13e475, Brady: "one live GTO Wizard token is enough; accounts down are a warning"): the
+ * network check is no longer required (the mid-session guard still ends a session on a bad link), and the gtow check
+ * passes with level "warn" and a " · WARNING: n of m accounts up …" suffix when some accounts are down. Projected back to
+ * the recorded shape — net required, no level, no suffix; every other field of the preflight is still compared exactly.
+ */
+function asRecordedPreflight1009(fn: string, got: any): any {
+  if (fn !== "sessions.run_preflight" || !got || !Array.isArray(got.checks)) return got;
+  const checks = got.checks.map((c: any) => {
+    if (c?.id === "net") return { ...c, required: true };
+    if (c?.id === "gtow" && c.level === "warn") {
+      const { level: _level, ...rest } = c;
+      return { ...rest, detail: typeof c.detail === "string" ? c.detail.replace(/ · WARNING: .*$/, "") : c.detail };
+    }
+    return c;
+  });
+  const requires = Array.isArray(got.requires) && checks.some((c: any) => c?.id === "net") && !got.requires.includes("net")
+    ? [...got.requires, "net"] : got.requires;
+  const blockers = checks.filter((c: any) => c?.required && !c?.ok).map((c: any) => c.label);
+  return { ...got, checks, requires, blockers, ok: !blockers.length };
+}
+
+/**
+ * SUPERSEDED 2026-10-09 (1edca47, the presence keeper): every strategy preset's config carries `keepPresent: true` (the
+ * session setup's "Presence" option, on unless switched off) — a key the Python wrapper never had. Projected back by
+ * dropping that one key wherever the recording has none; every other field of the presets and merged configs is still
+ * compared exactly.
+ */
+function asRecordedKeepPresent(fn: string, got: any, want: any): any {
+  if (!fn.startsWith("sessions.") || canon(want).includes("keepPresent")) return got;
+  const strip = (v: any): any => (Array.isArray(v) ? v.map(strip)
+    : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).filter(([k]) => k !== "keepPresent").map(([k, x]) => [k, strip(x)])) : v);
+  return strip(got);
+}
+
 test("golden: pure functions match the Python wrapper", async () => {
   const pending = new Map<string, number>();
   const fails: string[] = [];
@@ -120,7 +155,9 @@ test("golden: pure functions match the Python wrapper", async () => {
       // a page snippet is compared with the frame resolver as the recording had it (lib.ts asRecordedFrame)
       if (typeof got === "string") got = asRecordedFrame(got);
       got = asRecordedPreflight(rec.fn, got);
+      got = asRecordedPreflight1009(rec.fn, got);
       got = asRecordedPresets(rec.fn, got);
+      got = asRecordedKeepPresent(rec.fn, got, want);
     } catch (e: any) {
       got = { __error__: `${e?.name || "Error"}: ${e?.message || e}` };
     }
