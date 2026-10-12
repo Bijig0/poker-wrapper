@@ -7,7 +7,7 @@ import { HandsView } from "../services/handsView";
 import { liveForCaches } from "../services/setupLive";
 import { step } from "../services/answerTrace";
 import { loadReport } from "../services/machineLoad";
-import { Hono } from "hono";
+import { Hono, type Context, type Next } from "hono";
 import { Database } from "bun:sqlite";
 import { join } from "node:path";
 import { normalizeHand } from "../feed/normalizeHand/normalizeHand";
@@ -31,6 +31,7 @@ import { gtowSessions, type GtowSessionId } from "../services/gtowSessions";
 import { REPO, factoryFile } from "../services/repoPaths";
 import { adoptionReport, dataLayout, describeLayout, handsDbPath, openStore, resolveAllStores, splitStores, wrapperDebugDir } from "../services/storePaths";
 import { ensureHandsSchema, FINISHED } from "../../../../packages/data-root/handsSchema";
+import { drewNode, handNodeStore, handNodesOn, loadedCommit, nodeKeyOf } from "../services/handNodeStore";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { readFileSync } from "node:fs";
 import { buildPreflopTokens3max } from "../feed/buildSolutionUrl/buildSolutionUrl";
@@ -103,7 +104,7 @@ const app = new Hono();
 // heavy reads are listed — the wrapper's own calls (/config, /gtow-status, /gtow-token, /load, /sources/strategies|registry) never wait.
 for (const p of ["/hands", "/analytics", "/hand/*", "/sessions/*", "/profiles/*"]) app.use(p, yieldFirst);  // "/x/*" covers "/x" too
 
-interface HandRow {
+export interface HandRow {
   rowid: number;
   hand_id: number | null;
   played_at: number | null;
@@ -1544,6 +1545,45 @@ function poolSeatsFor(hand: ParsedHand, upto: number, street: string, row: any):
   return out;
 }
 
+/**
+ * STORED NODES (2026-10-12, services/handNodeStore.ts): /answer-node and /preflop-path answer from the hand's stored
+ * row when there is one — the hand page then draws at once instead of rebuilding every node — and keep what they
+ * compute for a FINISHED hand (a hand in play is still having its answers logged). `fresh=1` computes (and keeps)
+ * regardless: services/handNodeBuilder.ts fills finished hands that way while no session is live. A row built by
+ * another commit, or one that drew no node and is over NODE_RETRY_MS old, is still served — and queued for the
+ * builder, so the next open has this code's answer.
+ */
+const NODE_RETRY_MS = 6 * 3_600_000;
+const handFinished = (dbId: number): boolean => {
+  try { return !!openDb()?.query<{ x: number }, [number]>(`SELECT 1 AS x FROM hands WHERE rowid = ? AND ${FINISHED}`).get(dbId); }
+  catch { return false; }
+};
+const storedNodes = (route: "answer-node" | "preflop-path") => async (c: Context, next: Next) => {
+  const q = c.req.query();
+  const dbId = Number(q.dbId);
+  const key = handNodesOn() && Number.isInteger(dbId) && dbId > 0 ? nodeKeyOf(route, q) : null;
+  if (!key) return next();
+  const store = handNodeStore();
+  if (q.fresh !== "1") {
+    const hit = store.get(dbId, key);
+    if (hit) {
+      const drew = drewNode(hit.body);
+      // never the AI preflop path: rebuilding it can cost GTO Wizard quota, so it is only ever built on a click
+      if (key !== "preflop-path:ai" && (hit.commit !== loadedCommit() || (!drew && Date.now() - hit.builtAt > NODE_RETRY_MS))) {
+        const params = new URLSearchParams(Object.entries(q).filter(([k]) => k !== "fresh") as [string, string][]);
+        params.set("fresh", "1");
+        store.refresh.set(`${dbId}|${key}`, { dbId, key, url: `/${route}?${params}` });
+      }
+      return c.json({ ...hit.body, stored: { at: hit.builtAt, commit: hit.commit } });
+    }
+  }
+  await next();
+  if (!c.res.ok || !handFinished(dbId)) return;
+  try { store.put(dbId, key, await c.res.clone().json()); } catch { /* not JSON: nothing to keep */ }
+};
+app.use("/answer-node", storedNodes("answer-node"));
+app.use("/preflop-path", storedNodes("preflop-path"));
+
 app.get("/answer-node", async (c) => {
   const dbId = Number(c.req.query("dbId"));
   const upto = Number(c.req.query("upto"));
@@ -2183,6 +2223,12 @@ app.get("/live-node", async (c) => {
 });
 
 /** GET /storage — where every record lives (the one data root), what was adopted from the legacy files, any split. */
+/** GET /hand-nodes — the stored hand nodes (services/handNodeStore.ts): rows, bytes, hands built, rebuilds queued. */
+app.get("/hand-nodes", (c) => {
+  const store = handNodeStore();
+  return c.json({ ok: true, on: handNodesOn(), path: store.path, commit: loadedCommit(), ...store.stats(), refreshQueued: store.refresh.size });
+});
+
 app.get("/storage", (c) => {
   const stores = resolveAllStores();
   return c.json({ ok: true, layout: dataLayout(), line: describeLayout(), stores, split: splitStores(stores), adoption: adoptionReport() });

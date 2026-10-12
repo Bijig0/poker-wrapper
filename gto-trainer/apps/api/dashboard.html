@@ -1979,7 +1979,8 @@ async function openAnswerNode(upto) {
   // down the decision list (Brady 2026-10-09: "I'm clicking it and it's not opening anything") — bring it into view
   try { sol.scrollIntoView({ behavior: "smooth", block: "start" }); } catch {}
   let j;
-  try { j = await (await fetch(`/api/dashboard/answer-node?dbId=${DETAIL.dbId}&upto=${upto}`)).json(); }
+  // &ranges=1: the same request as the Ranges view's, so both read the one stored row (routes/dashboard.ts storedNodes)
+  try { j = await (await fetch(`/api/dashboard/answer-node?dbId=${DETAIL.dbId}&upto=${upto}&ranges=1`)).json(); }
   catch (e) { sol.innerHTML = `<div class="card warn">${esc(String(e))}</div>`; return; }
   if (!j.ok) { sol.innerHTML = `<div class="card warn">${esc(j.error ?? "no node")}</div>`; return; }
   const lg = j.logged;
