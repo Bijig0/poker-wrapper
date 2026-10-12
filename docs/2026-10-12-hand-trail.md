@@ -164,3 +164,28 @@ Replace `renderRanges` with `renderTrail`: drop the CoinPoker/on-demand gate; fe
   chart does not hold (a limp into an open-only chart) — each said in the street's note.
 - Tests: `routes/dashboardLiveTrail.test.ts` (live row + stored solve: chips, pending node, facing, others, inputs,
   cache, 404s, off switch).
+
+## 7. Independent review (2026-10-13) and what changed
+
+A separate reviewer (fresh context) read the branch: no correctness blocker; ten findings, all checked against the
+code and fixed:
+
+1. **A folded card fetched anyway** → the panel fetches nothing while the card is folded (auto-execute tables start
+   folded) and loads it when opened; the header says "open to load this hand's trail".
+2. **Every rebuild re-expanded every earlier solve** → expanded solves kept across rebuilds (64, by answer row), and
+   `expandTrace(trace, { lite: true })` skips the per-combo panels and post-action ranges the trail never draws.
+3. **A failing build was re-asked every 3 s** → each street is built in its own try/catch (a broken street becomes a
+   note, never a 500); the panel backs off 3 → 10 → 30 s and gives up on that decision after four tries.
+4. **Last-resort AI trees named the seats SB / BB** → mapped back to the table's seats through the heads-up
+   reduction (`reduceToHeadsUp(...).keptPos`), as the flop's resume does; unmappable seats are tied to no chip.
+5. **Hero's postflop chart could come from a later street's re-tree** → hero's nodes (and everything up to his last
+   decision on the street) come from the street's own answer's solve; only the actions after it from the later solve.
+6. **End-of-hand fetch could read the row before the archive finished it** → one more ask while it still reads live.
+7. **A later AI tree overwrote an earlier decision's villain charts** → the earlier tree keeps the actions before it.
+8. **ClubGG fetched** → the card runs on Ignition only.
+9. **No fetch timeout; redraws closed the raw-request section** → 15 s abort; open sections stay open.
+10. **Tests missed the risky paths** → `dashboardLiveTrail.paths.test.ts`: own-vs-later solve, a rebuild on a new
+    answer, a throwing street, a hand hero folded, a last-resort tree's seat mapping.
+
+After the fixes (last 100 hands, real env): build p50 4.5 ms, p90 35 ms, p99 76 ms (was 226); 179/179 decisions with
+their node; chips with a chart 616/949 (was 584). Full API suite and wrapper unit suite green on the merged result.

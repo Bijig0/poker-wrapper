@@ -1533,7 +1533,9 @@
   // new answer and once more when the hand ends; kept until hero's next decision. Ignition only (CoinPoker hands have no
   // row until they end — its on-demand card above stays). Every click target is a span: no focus, so Enter / Space
   // still execute the pick. Design: poker-wrapper docs/2026-10-12-hand-trail.md.
-  let trHand = null, trKey = null, trData = null, trSel = null, trBusy = false, trEnded = false, trFoldSet = false, trFailAt = 0;
+  let trHand = null, trKey = null, trData = null, trSel = null, trBusy = false, trEnded = false, trFoldSet = false;
+  let trFailAt = 0, trFails = 0, trFailKey = null, trFinalTries = 0;
+  const trRawOpen = new Set();                              // the raw-request sections left open, kept across redraws
   const TR_ST = { preflop: "PREFLOP", flop: "FLOP", turn: "TURN", river: "RIVER" };
   const trWhole = () => {
     const o = {};
@@ -1544,7 +1546,9 @@
     return o;
   };
   const trSecs = (ms) => (ms == null ? "" : ` · ${(ms / 1000).toFixed(1)} s`);
-  // D1: on an auto-execute table the card starts folded, on a manual one open — unless you chose before (remembered)
+  // D1: on an auto-execute table the card starts folded, on a manual one open — unless you chose before (remembered).
+  // Decided before the first fetch: a folded card fetches nothing (review 2026-10-13 — the build shares the study API's
+  // loop with live answers); it loads when you open it.
   function trDefaultFold(s) {
     if (trFoldSet) return;
     trFoldSet = true;
@@ -1556,10 +1560,22 @@
     const btn = card.querySelector(":scope > h2 .cardfold");
     if (btn) { btn.textContent = s.studyAuto ? "+" : "–"; btn.setAttribute("aria-expanded", s.studyAuto ? "false" : "true"); }
   }
+  async function trFetch(hand) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 15000);
+    try {
+      if (!(await rgLib())) return { ok: false, error: "the range grids did not load — the study API (:2000) did not serve the renderer" };
+      const r = await fetch(`${GTOW_API}/api/dashboard/live-trail?hand=${encodeURIComponent(hand)}`, { signal: ctl.signal });
+      return await r.json().catch(() => ({ ok: false, error: `the study API answered ${r.status} without a trail` }));
+    } catch (e) {
+      return { ok: false, error: ctl.signal.aborted ? "the study API took over 15 s — not asked again until the next answer" : `the study API did not answer (${e})` };
+    } finally { clearTimeout(timer); }
+  }
   async function renderTrail(s) {
     const card = $("tr-card");
     const siteId = s.site && typeof s.site === "object" ? s.site.id : s.site;
-    if (siteId === "coinpoker") { if (card.style.display !== "none") card.style.display = "none"; return; }
+    // Ignition only: its live row is what the study API reads (CoinPoker keeps "Ranges at this node"; ClubGG has no row)
+    if (siteId && siteId !== "ignition") { if (card.style.display !== "none") card.style.display = "none"; return; }
     if (trBusy) return;
     const hid = s.hand?.clientHandId ?? null;
     const ref = s.panelAnswerRef;
@@ -1572,26 +1588,37 @@
       want = { hand: trHand, key: trKey, final: true };
     }
     if (!want) return;
-    if (!want.final && trFailAt && Date.now() - trFailAt < 3000) return;    // a failed ask is retried every 3 s, not every tick
-    trBusy = true;
-    let j;
-    try {
-      if (!(await rgLib())) j = { ok: false, error: "the range grids did not load — the study API (:2000) did not serve the renderer" };
-      else j = await (await fetch(`${GTOW_API}/api/dashboard/live-trail?hand=${encodeURIComponent(want.hand)}`)).json();
-    } catch (e) { j = { ok: false, error: `the study API did not answer (${e})` }; } finally { trBusy = false; }
-    if (j && j.off) { card.style.display = "none"; trKey = want.key; trHand = want.hand; return; }
-    if (!j || !j.ok) {
-      trFailAt = Date.now();
-      if (want.final) trEnded = true;
-      if (want.hand !== trHand || !trData) { trData = j || { ok: false, error: "no reply" }; card.style.display = ""; drawTrail(); }
+    trDefaultFold(s);
+    if (card.classList.contains("collapsed")) {
+      // folded: say what is waiting, fetch nothing — opening the card fetches on the next tick
+      card.style.display = "";
+      if (!trData || want.hand !== trHand) $("tr-sub").textContent = "— open to load this hand's trail";
       return;
     }
-    trFailAt = 0;
-    if (want.final) trEnded = true;
-    else { trSel = null; trEnded = false; }                                 // a new decision: select it
+    // a failed ask backs off: 3 s, then 10 s, then 30 s, then gives up on that decision; a new answer starts again
+    const failKey = `${want.hand}|${want.key}|${want.final ? "final" : ""}`;
+    if (failKey !== trFailKey) { trFails = 0; trFailAt = 0; }
+    if (trFails >= 4) return;
+    if (trFailAt && Date.now() - trFailAt < [3000, 10000, 30000][Math.min(trFails, 3) - 1]) return;
+    trBusy = true;
+    let j;
+    try { j = await trFetch(want.hand); } finally { trBusy = false; }
+    if (j && j.off) { card.style.display = "none"; trKey = want.key; trHand = want.hand; return; }
+    if (!j || !j.ok) {
+      trFailAt = Date.now(); trFails++; trFailKey = failKey;
+      if (want.final) trEnded = true;
+      if (want.hand !== trHand || !trData || !trData.ok) { trData = j || { ok: false, error: "no reply" }; card.style.display = ""; drawTrail(); }
+      if (want.hand !== trHand) { trHand = want.hand; trKey = null; }   // the next tick retries this hand (backed off)
+      return;
+    }
+    trFailAt = 0; trFails = 0;
+    if (want.final) {
+      // the archive may not have finished the row yet: one more ask while it still reads as in play
+      trEnded = !j.live || ++trFinalTries >= 2;
+      if (!trEnded) { trFailAt = Date.now(); trFails = 1; trFailKey = failKey; }
+    } else { trSel = null; trEnded = false; trFinalTries = 0; }   // a new decision: select it
     trHand = want.hand; trKey = want.key; trData = j;
     card.style.display = "";
-    trDefaultFold(s);
     drawTrail();
   }
   // hero's class mix at a node, from its class strategy (preflop) — postflop the decision carries the combo's own row
@@ -1662,7 +1689,7 @@
   }
   // ---- the inputs, as used: a table of what a human cross-checks, the raw request beside it ----
   const trRows = (rows) => `<table>${rows.filter((r) => r && r[1] != null && r[1] !== "").map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`).join("")}</table>`;
-  const trRaw = (label, obj) => (obj == null ? "" : `<details><summary>${esc(label)}</summary><pre>${esc(JSON.stringify(obj, null, 1))}</pre></details>`);
+  const trRaw = (label, obj) => (obj == null ? "" : `<details data-raw="${esc(label)}"${trRawOpen.has(label) ? " open" : ""}><summary>${esc(label)}</summary><pre>${esc(JSON.stringify(obj, null, 1))}</pre></details>`);
   const trSeats = (seats) => (seats || []).map((x) => `${esc(x.pos)} ${x.stackBb ?? "?"}`).join(" · ");
   const trRake = (r) => (r ? `${r.pct}%, cap ${r.capBb}bb${r.nfnd === true ? ", no flop no drop" : r.nfnd === false ? ", flop or not" : ""}` : "not stated");
   function trSetupRows(su) {
@@ -1769,6 +1796,11 @@
     $("tr-sel").innerHTML = trDrawSel(j);
     $("tr-inputs").innerHTML = trDrawInputs(j);
   }
+  // a raw-request section opened or closed by hand stays that way across redraws
+  $("tr-card").addEventListener("toggle", (e) => {
+    const d = e.target;
+    if (d && d.dataset && d.dataset.raw) { if (d.open) trRawOpen.add(d.dataset.raw); else trRawOpen.delete(d.dataset.raw); }
+  }, true);
   // one listener for every chip: a street name selects its last decision, a chip its node, "also at your node" a seat
   $("tr-card").addEventListener("click", (e) => {
     const t = e.target.closest("[data-node],[data-st],[data-other],[data-back]");
