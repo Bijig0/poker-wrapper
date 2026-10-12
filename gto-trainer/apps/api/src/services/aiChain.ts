@@ -3,6 +3,7 @@ import { solveStore } from "./solveStore";
 import { isDurableKey } from "./handFacts";
 import { servedActionIndex, servedHeroStrategy, type ServedMix } from "./servedStrategy";
 import { tmark, tspan } from "./answerTrace";
+import { tstep, tstepDetail, USUAL } from "./liveSteps";
 import {
   actionKindOf,
   matchActionIndex,
@@ -1539,6 +1540,9 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     const pinned = played ? pinnedInput(played) : null;
     const treeInput: CustomTreeInput = pinned ? pinned.input : baseInput;
     if (pinned?.carry) streetRec.retree = pinned.carry;
+    tstep(/size-free tree reused|is kept, not re-created/.test(reuse ?? "") ? `Reusing the ${STREET[k]!.toLowerCase()} tree`
+      : pinned ? `Re-building the ${STREET[k]!.toLowerCase()} tree (bet size off the menu)`
+      : `Sending the ${STREET[k]!.toLowerCase()} tree to GTO Wizard`);
     let ens = await gtowApi.ensureCustomSolution(treeInput);
     if (!ens.ok) return fail(`solve: ${ens.error}`);
     let rerouted = false;
@@ -1728,6 +1732,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       if (addrs.length) tmark(`chain ${STREET[k]} prefetch`, `${addrs.length} node(s) asked for ahead of the walk: ${addrs.join(" | ")}`);
     }
 
+    tstep(`GTO Wizard solving the ${STREET[k]!.toLowerCase()} tree…`, {
+      ...(ens.created ? (k === 0 ? USUAL.postflopNewTree : USUAL.postflopNewTreeLater) : USUAL.postflopCached), limitMs: postflopNodeTimeoutMs(n) });
     for (let ti = ti0; ti <= labels.length; ti++) {
       // hero's node from the mid-street checkpoint needs no read: its JSON travelled with it
       let { r: nq, src: nodeSrc, ms: nodeMs } = ti === ti0 && heroDataAtTi0
@@ -1741,6 +1747,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       // its other solves go on), once; too little time left and gtowApi polls on to the clock, as before.
       const hung = !nq.ok && !!nq.hung;
       if (!nq.ok && (nq.status === 429 || hung) && !rerouted) {
+        tstep("GTO Wizard account busy → trying another account", { limitMs: postflopNodeTimeoutMs(n) });
         rerouted = true;
         const from = gtowApi.ownerOf(ens.solId) ?? ens.session;
         gtowApi.forgetSolution(ens.solId);
@@ -1993,6 +2000,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       if (pendingLock && !st.closed && nodeRec.offTree?.soft) {
         const lock = offTreeLock(sols, ai, pendingLock.factor, k + 1, codesBefore);
         const tLock = Date.now();
+        tstep(`Villain's ${kind === "Check" ? "check" : kind === "Call" ? "call" : kind === "Raise" ? "raise" : kind === "AllIn" ? "all-in" : "bet"} is off the solver's tree → locking his range`);
         const lk = await gtowApi.lockedCustomSolution(String(ens.solId), lock);
         if (lk.ok) {
           ens = { ...ens, solId: lk.solId };
@@ -2000,6 +2008,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
           nodeRec.offTree.soft.lock = { ok: true, solId: String(lk.solId) };
         } else {
           nodeRec.offTree.soft.lock = { ok: false, why: lk.error.slice(0, 160) };
+          tstepDetail("lock failed — using the unlocked tree");
         }
         tspan(`chain ${STREET[k]} off-tree node lock`, tLock, lk.ok ? `child ${String(lk.solId).slice(0, 8)}` : lk.error.slice(0, 120));
       }

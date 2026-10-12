@@ -33,8 +33,9 @@ import { handState } from "./ignition/hand";
 import { fetchHandHistory, listHandHistory } from "./ignition/handHistory";
 import { tableState } from "./ignition/reader";
 import { recFrame, recLog, recordings, saveNote, setDebug } from "./ignition/recorder";
-import { act, executePick, raiseTo, requestSolve, setAuto } from "./relay";
+import { act, executePick, raiseTo, requestSolve, setAuto, setAutoBudget } from "./relay";
 import { topUpProbeSecond, topUpRead, topUpRun } from "./topup";
+import { noteAnswerArrived, noteSolveSteps } from "./steps";
 import { peerLeaving } from "./stackReset";
 import * as SESSION from "./session";
 import { buildAll, buildReply, relaunch } from "./build";
@@ -662,7 +663,14 @@ export function buildApp(): Hono {
         rate: typeof ch.session.rate === "number" ? ch.session.rate : null };
     }
     st.at = time();
+    // LIVE STEPS (2026-10-12): the answer's first push for a decision goes on the decision's trail
+    if (live) noteAnswerArrived(st.handId, st.decisionKey, st.pick, b.source, b.tier);
     return json(200, { ok: true });
+  });
+  // LIVE STEPS (2026-10-12, steps.ts): the API's solve steps for one decision, pushed as each one starts and ends
+  app.post("/panel/steps", async (c) => {
+    const b: any = await body(c, Body.panelSteps);
+    return json(200, noteSolveSteps(b));
   });
   // is this wrapper — and the API and chart server beside it — running the code on disk (src/build.ts)
   app.get("/build", async (c) => json(200, await buildReply(queryOf(c).includes("force=1"))));
@@ -767,6 +775,13 @@ export function buildApp(): Hono {
       timeBank: "timeBank" in b ? truthy(b.timeBank) : null, topUp: "topUp" in b ? truthy(b.topUp) : null,
     });
     return json(res.ok ? 200 : 409, res);
+  });
+  // ADJUST (2026-10-12): what is left of this table's auto-execute budget, from now — the panel's budget editor
+  app.post("/study-auto/budget", async (c) => {
+    const b = await body(c, Body.studyAutoBudget);
+    const by = { via: typeof b.via === "string" ? b.via.slice(0, 80) : "http (no via)", page: b.page && typeof b.page === "object" ? b.page : null,
+                 origin: c.req.header("origin") ?? null, referer: c.req.header("referer") ?? null };
+    return json(200, setAutoBudget({ minutes: b.minutes, hands: b.hands }, by));
   });
   app.post("/debug", async (c) => {
     const b = await body(c, Body.debug);

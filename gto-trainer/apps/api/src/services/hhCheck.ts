@@ -11,11 +11,13 @@
  * ends, so rowids are handed out at hand START and hands finish out of order across tables. A rowid watermark would skip
  * a hand still in play (or, held at the lowest live row, let one long hand stall the other tables). So: a one-time
  * cutoff ("from here on", set on the first start and never moved), and every FINISHED hand after it that has no check
- * row yet. A finished row is never reopened, so "no check yet" is the whole rule.
+ * row yet. A finished row is never reopened, so "no check yet" is the whole rule. (2026-10-13: the finished hands are
+ * no longer re-read since the cutoff every tick — services/hhCheckFeed.ts returns each one once, read from the indexes,
+ * keeping the rows still in play open below its high-water rowid.)
  */
 import { offTreeLog } from "./offTreeLog";
 import type { Database } from "bun:sqlite";
-import { archivedByClientHandId, doneIgnitionHandIdsAfter, doneIgnitionHandsAfter, lastArchivedRowid, type Enriched } from "../routes/dashboard";
+import { archivedByClientHandId, doneIgnitionHandsAfter, finishedIgnitionIds, lastArchivedRowid, type Enriched } from "../routes/dashboard";
 import { hhChecksDbPath, openStore } from "./storePaths";
 import { compareHand, compareThroughHero, parseIgnitionHh, type HhDiff, type IgnHand } from "../utils/ignitionHh/ignitionHh";
 import { fetchIgnitionRecord, type RecordResult } from "./ignitionRecord";
@@ -119,6 +121,9 @@ export class HhCheckStore {
   private checked: Set<string> | null = null;
   /** finished ids whose archived row could not be read (memory only — a restart tries them again) */
   readonly unreadable = new Set<string>();
+  /** finished ids with no check yet, over a tick's `maxEnqueue` — read on the next ticks (memory only: a restart's first
+   *  tick is given every finished hand after the cutoff again) */
+  readonly waiting = new Set<string>();
   checkedIds(): Set<string> {
     return (this.checked ??= new Set(this.db.query<{ c: string }, []>("SELECT client_hand_id AS c FROM hh_checks").all().map((r) => r.c)));
   }
@@ -142,9 +147,10 @@ export interface CheckerDeps {
   findArchived: (clientHandId: string) => Enriched | null;
   /** FINISHED hands after the cutoff row (routes/dashboard.doneIgnitionHandsAfter) */
   doneAfter: (rowid: number) => Enriched[];
-  /** the same hands' client ids only, nothing enriched (routes/dashboard.doneIgnitionHandIdsAfter) — when given, the
+  /** client ids only, nothing enriched: at least every hand finished since the last call (all after the cutoff on the
+   *  first; an id may come again) — routes/dashboard.finishedIgnitionIds, services/hhCheckFeed.ts. When given, the
    *  queue is built from these and only the hands with no check row yet are enriched */
-  doneIdsAfter?: (rowid: number) => string[];
+  newDoneIds?: (cutoff: number) => string[];
   lastRowid: () => number;
   now: () => number;
 }
@@ -178,16 +184,26 @@ export async function tick(deps: CheckerDeps, maxAttempts = 5, maxEnqueue = MAX_
   // skip the ones already checked — synchronous work that grew with the archive (3,350 hands: 120 s a tick, every
   // 10 s) and froze the API until its supervisor killed each new worker as hung. Ids first; only an unchecked hand is
   // read in full.
-  if (deps.doneIdsAfter) {
+  if (deps.newDoneIds) {
     // BOUNDED (2026-10-09): the checked set is in memory (one read per process), at most `maxEnqueue` new hands are
-    // read a tick, and they are written in one transaction — no per-hand query or commit in a loop
+    // read a tick, and they are written in one transaction — no per-hand query or commit in a loop.
+    // INCREMENTAL (2026-10-13): only the hands finished since the last tick are asked for; the ones over `maxEnqueue`
+    // wait in memory (store.waiting) for the next tick instead of being asked for again.
     const checked = step("checked ids", () => store.checkedIds());
-    const fresh = step("finished ids", () => deps.doneIdsAfter!(cutoff)).filter((id) => !checked.has(id) && !store.unreadable.has(id));
+    for (const id of step("finished ids", () => deps.newDoneIds!(cutoff))) {
+      if (!checked.has(id) && !store.unreadable.has(id)) store.waiting.add(id);
+    }
     const add: HhCheck[] = [];
-    for (const id of fresh.slice(0, maxEnqueue)) {
-      const e = step("read archived hand", () => deps.findArchived(id));
-      if (e) add.push(freshCheck(e, deps.now()));
-      else store.unreadable.add(id);       // finished but not readable as a hand: not asked again by this process
+    let reads = 0;
+    for (const id of store.waiting) {
+      if (reads >= maxEnqueue) break;
+      if (!checked.has(id)) {
+        reads++;
+        const e = step("read archived hand", () => deps.findArchived(id));
+        if (e) add.push(freshCheck(e, deps.now()));
+        else store.unreadable.add(id);     // finished but not readable as a hand: not asked again by this process
+      }
+      store.waiting.delete(id);
     }
     step("save new", () => store.saveMany(add));
   } else {
@@ -215,7 +231,7 @@ class HhChecker {
     if (this.timer) return;
     const deps: CheckerDeps = {
       store: hhCheckStore(), fetchRecord: (id) => fetchIgnitionRecord(id), findArchived: archivedByClientHandId,
-      doneAfter: doneIgnitionHandsAfter, doneIdsAfter: doneIgnitionHandIdsAfter, lastRowid: lastArchivedRowid, now: Date.now,
+      doneAfter: doneIgnitionHandsAfter, newDoneIds: (cutoff) => finishedIgnitionIds.take(cutoff), lastRowid: lastArchivedRowid, now: Date.now,
     };
     this.timer = setInterval(() => {
       if (this.busy) return;

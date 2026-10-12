@@ -32,6 +32,7 @@ import { gtowRequests } from "./gtowRequestLog";
 import { AUTH_RETRY_RESERVE_MS, authFailedReason, authRefreshBudgetMs, sendWithAuthRetry, type AuthRound } from "./gtowAuth";
 import { NT_AUTH_RETRY, isAuthFailure, refusalDetail } from "./gtowAuthBody";
 import { tmark } from "./answerTrace";
+import { tstepDetail } from "./liveSteps";
 // THE PERSISTENT SOLVE CACHE (2026-09-28, services/gtowSolveCache.ts): beneath ensureCustomSolution / customNode — the
 // level every test stub and replay sits ABOVE — so a stubbed walk never meets it and a live one always does.
 import {
@@ -866,11 +867,15 @@ class GtowApi {
     const hit = this.treeSolCache.get(key);
     // (a check that must reach GTO Wizard never takes a stored tree, not even one this process already handed out)
     if (hit && !(opts.noCache && isStoredSolId(hit))) {
+      tstepDetail("already solved");
       return { ok: true, solId: hit, created: false, session: this.solOwner.get(hit) ?? (isStoredSolId(hit) ? CACHE_SESSION : "primary"),
         ...(isStoredSolId(hit) ? { stored: true } : {}) };
     }
     const pending = this.treePending.get(key);
-    if (pending) return pending.then((r) => (r.ok ? { ...r, created: false, why: `joined a solve another request started (${r.why ?? "same tree"})` } : r));
+    if (pending) {
+      tstepDetail("joined a solve already running");
+      return pending.then((r) => (r.ok ? { ...r, created: false, why: `joined a solve another request started (${r.why ?? "same tree"})` } : r));
+    }
     // WHY is this tree not in the cache? Answered before the solve is even sent, against the last tree of the
     // same board/street/seats, so a re-creation is explained by its own log line rather than inferred later.
     const fp = treeFingerprint(input);
@@ -889,6 +894,7 @@ class GtowApi {
       if (made.stored) {
         // no solve was created and none may ever be: the store holds the tree, and its nodes are served from there
         tmark(`GTO Wizard tree ${fp.street} ${fp.board} served from the solve cache`, `stored tree ${keyOfStoredSolId(made.solId).slice(0, 8)} — no request`);
+        tstepDetail("already solved");
         return { ok: true, solId: made.solId, created: false, session: made.session, stored: true,
           why: `served from the persistent solve cache — no request (the in-process cache did not hold it: ${why})` };
       }
@@ -896,6 +902,7 @@ class GtowApi {
       this.solSeats.set(made.solId, input.mid ? 3 : 2);
       this.solCreatedAt.set(made.solId, Date.now());
       if (this.solCreatedAt.size > READY_SET_MAX) this.solCreatedAt.delete(this.solCreatedAt.keys().next().value as string);
+      tstepDetail("new tree");
       return { ok: true as const, solId: made.solId, created: true, session: made.session, why, ...(made.route ? { route: made.route } : {}) };
     })().finally(() => this.treePending.delete(key));
     this.treePending.set(key, p);
@@ -1202,6 +1209,7 @@ class GtowApi {
           }
           console.log(`[gtow-hung] ${line} — ${repostMs != null ? `too little left to re-post (a cold tree needs ~${(repostMs / 1000).toFixed(1)} s): polling on` : "polling on (no re-post for this read)"}`);
           tmark("GTO Wizard poll hung", line);
+          if (caller !== "prefetch") tstepDetail("poll hung — re-asking");
         }
         if (Date.now() >= deadline) break;
         await new Promise((res) => setTimeout(res, Math.min(CUSTOM_SOLVE_POLL_MS, Math.max(0, deadline - Date.now()))));

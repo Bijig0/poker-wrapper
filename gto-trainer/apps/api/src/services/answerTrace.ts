@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { describeSuspend, isSuspend, runtimeHealth } from "./runtimeHealth";
 
 /**
  * WHERE AN ANSWER'S TIME GOES (2026-09-24). A per-request timeline for POST /api/fast-solver: every step that can
@@ -236,6 +237,14 @@ export function startStallMonitor(): void {
     last = now;
     lastCpu = cpu;
     if (late < STALL_MIN_MS) return;
+    // the machine slept (2026-10-12): a "stall" of 14 h at 0% CPU said "the API froze 50944 s" on /api/load for 5 min
+    // after the lid opened and made the window's summary 16987% blocked. It is not the loop's doing — but a long one
+    // is a reason to replace this worker (services/runtimeHealth.ts).
+    if (isSuspend(late, cpuMs)) {
+      console.log(describeSuspend(now - late, late, cpuMs));
+      runtimeHealth.noteSuspend(now - late, late);
+      return;
+    }
     stalls.push({ at: now - late, ms: late });
     if (stalls.length > STALL_KEEP) stalls.splice(0, stalls.length - STALL_KEEP);
     let rec: StallRecord | null = null;
@@ -248,11 +257,20 @@ export function startStallMonitor(): void {
     summary.add(late, rec);
   }, STALL_TICK_MS);
   // the 5-min summary also prints for a window with no stall at all (its absence would read as "the API was down")
+  let mark = { at: Date.now(), cpu: cpuNowUs() };
   summaryTimer = setInterval(() => {
+    const now = Date.now();
+    if (!summary.due(now)) return;
+    const cpu = cpuNowUs();
+    const proc = processWindow(mark.at, mark.cpu, now, cpu);
+    mark = { at: now, cpu };
     let extra: string | undefined;
     try { extra = summaryExtra?.(); } catch { /* the summary never fails on its extra */ }
-    const line = summary.flush(Date.now(), extra);
-    if (line) console.log(line);
+    const line = summary.flush(now, extra, proc);
+    if (!line) return;
+    console.log(line);
+    const w = summary.lastWindow();
+    if (w && proc) runtimeHealth.noteWindow({ end: w.to, procCpuPct: proc.cpuPct, blockedPct: w.blockedPct });
   }, 10_000);
   (summaryTimer as { unref?: () => void }).unref?.();
   (stallTimer as { unref?: () => void }).unref?.();
@@ -266,12 +284,29 @@ export function startStallMonitor(): void {
  *   blocked time · by longest open: timer hhCheck 95.2 s ×12, GET /api/gtow/accounts 41.0 s ×5, … · short (<300 ms) 2.1 s ×17
  * "by longest open" charges each logged stall (≥ STALL_LOG_MS) to the longest activity open across it (its [stall] line's
  * first name) — an attribution, not proof. Pure accumulator; the monitor feeds it.
+ *
+ * THE WHOLE PROCESS TOO (2026-10-12): "cpu N% of the logged blocked time" only covers the stalls. A worker back from a
+ * long sleep ran at ~250% of a core all the time (services/runtimeHealth.ts) and nothing in the log said so, so the
+ * line also carries this process's CPU over the window and its memory:
+ *   …, cpu 274% of the logged blocked time, this process 249% cpu (rss 1.7 GB, js heap 0.9 GB) · by longest open: …
  */
 export const STALL_SUMMARY_MS = 5 * 60_000;
+/** This process over one summary window: CPU as % of one core (every thread), memory at the window's end. */
+export interface ProcWindow { cpuPct: number; rssMb: number | null; heapMb: number | null }
+
+/** This process between two marks (process.cpuUsage() in µs), or null when the CPU could not be read. */
+export function processWindow(at0: number, cpu0Us: number | null, at1: number, cpu1Us: number | null): ProcWindow | null {
+  if (cpu0Us == null || cpu1Us == null || at1 <= at0) return null;
+  let rssMb: number | null = null, heapMb: number | null = null;
+  try { const m = process.memoryUsage(); rssMb = Math.round(m.rss / 1_048_576); heapMb = Math.round(m.heapUsed / 1_048_576); } catch { /* memory unknown */ }
+  return { cpuPct: Math.round((100 * (cpu1Us - cpu0Us)) / 1000 / (at1 - at0)), rssMb, heapMb };
+}
+
 export class StallSummary {
   private winStart: number | null = null;
   private n = 0; private nLong = 0; private ms = 0; private max = 0; private cpuMs = 0; private cpuWallMs = 0;
   private by = new Map<string, { ms: number; n: number }>();
+  private last: { from: number; to: number; blockedPct: number } | null = null;
   constructor(private windowMs = STALL_SUMMARY_MS, private clock: () => number = () => Date.now()) {}
   /** One stall of `ms` (a logged one carries its record). */
   add(ms: number, rec: StallRecord | null): void {
@@ -284,20 +319,32 @@ export class StallSummary {
     b.ms += ms; b.n++;
     this.by.set(label, b);
   }
+  /** True when flush(now) would print a line (or start the first window): the caller measures the window only then. */
+  due(now: number): boolean {
+    return this.winStart == null || Math.floor(now / this.windowMs) * this.windowMs > this.winStart;
+  }
+
+  /** The window the last printed line covered, or null before the first. */
+  lastWindow(): { from: number; to: number; blockedPct: number } | null { return this.last; }
+
   /** The line for the window that ended before `now`, once; null while the window is still open. `extra` is appended
-   *  (the machine's state at the end of the window, services/machineLoad.ts). */
-  flush(now: number, extra?: string): string | null {
+   *  (the machine's state at the end of the window, services/machineLoad.ts); `proc` is this process over it. */
+  flush(now: number, extra?: string, proc?: ProcWindow | null): string | null {
     const cur = Math.floor(now / this.windowMs) * this.windowMs;
     if (this.winStart == null) { this.winStart = cur; return null; }
     if (cur <= this.winStart) return null;
     const from = this.winStart, to = from + this.windowMs;
     const hhmm = (t: number) => new Date(t).toISOString().slice(11, 16);
     const s = (x: number) => (x / 1000).toFixed(1);
+    const gb = (mb: number | null) => (mb == null ? "?" : (mb / 1024).toFixed(1));
+    const blockedPct = Math.round((100 * this.ms) / this.windowMs);
     const parts = [...this.by.entries()].sort((a, b) => b[1].ms - a[1].ms).slice(0, 6).map(([k, v]) => `${k} ${s(v.ms)} s ×${v.n}`);
     const line = `[stall-summary] ${hhmm(from)}–${hhmm(to)}Z: ${this.n} stalls ≥${STALL_MIN_MS} ms (${this.nLong} ≥1 s), ` +
-      `blocked ${s(this.ms)} s of ${s(this.windowMs)} s (${Math.round((100 * this.ms) / this.windowMs)}%), max ${s(this.max)} s` +
+      `blocked ${s(this.ms)} s of ${s(this.windowMs)} s (${blockedPct}%), max ${s(this.max)} s` +
       (this.cpuWallMs ? `, cpu ${Math.round((100 * this.cpuMs) / this.cpuWallMs)}% of the logged blocked time` : "") +
+      (proc ? `, this process ${proc.cpuPct}% cpu (rss ${gb(proc.rssMb)} GB, js heap ${gb(proc.heapMb)} GB)` : "") +
       (parts.length ? ` · by longest open: ${parts.join(", ")}` : "") + (extra ? ` · ${extra}` : "");
+    this.last = { from, to, blockedPct };
     this.winStart = cur; this.n = 0; this.nLong = 0; this.ms = 0; this.max = 0; this.cpuMs = 0; this.cpuWallMs = 0; this.by.clear();
     return line;
   }
