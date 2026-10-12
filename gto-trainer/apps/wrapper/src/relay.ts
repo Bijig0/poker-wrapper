@@ -269,6 +269,33 @@ export function findControl(pool: any[], label: string, kind: string): any | nul
  * post-ins excluded). executePick hands it to autoLog; kept off the press's result so the /act reply is unchanged.
  */
 let lastPressRead: { offer: string[]; atPress: string | null } | null = null;
+
+/**
+ * THE PRESS'S POINT OF NO RETURN (2026-10-12, session_20261012_211242 table 2, QsTh Raise 2.5): input sent into a page
+ * that is not drawing is not lost — the browser queues it and runs it when drawing resumes — and a CDP call that timed
+ * out says nothing about whether it was sent. Only a TURN-BUTTON click acts at the table (typing the size, a sizing
+ * preset, moving the mouse only fill the bet field), so these count the turn-button clicks sent and the ones whose
+ * reply never came. A press that failed with no turn-button click sent is REFUSED (pressing again is safe); one that
+ * failed after a click went out is UNCERTAIN: the socket decides (maybeVerifyExec), never a timer.
+ */
+export const pressMark = { actionClicks: 0, actionClicksFailed: 0 };
+
+/** Is the browser not drawing our table right now (the page visible, the table on screen)? Presses wait.
+ *  FREEZE_HOLD=off (config/local.env) turns the wait off — presses and the verifier behave as before 2026-10-12. */
+export function frameFrozen(): boolean {
+  if (String(process.env.FREEZE_HOLD ?? "").trim().toLowerCase() === "off") return false;
+  return !isCp() && !isCgg() && S.frameHealth.frozen === true && !stripReadStale();
+}
+export const FROZEN_HOLD_WHY = "the browser has stopped drawing the table — nothing is pressed into a frozen page";
+
+/** A press that did not come back ok: may it still land? `p0` = pressMark before it, `threw` = it raised. A turn-button
+ *  click whose reply never came may; so may anything a press that raised had sent. CoinPoker / ClubGG press through
+ *  their own actuators, whose clicks are not counted here: a raise there is uncertain, a plain refusal is not. */
+export function pressUncertain(p0: { actionClicks: number; actionClicksFailed: number }, threw: boolean): boolean {
+  if (pressMark.actionClicksFailed > p0.actionClicksFailed) return true;
+  if (!threw) return false;
+  return isCp() || isCgg() || pressMark.actionClicks > p0.actionClicks;
+}
 /** read through a function: TypeScript would narrow the variable to null across the awaited press that sets it */
 const pressRead = (): { offer: string[]; atPress: string | null } | null => lastPressRead;
 
@@ -351,9 +378,11 @@ async function actReal(label: string, kind = "action", opts: ActOpts = {}): Prom
     const px = hit.x + hit.w / 2, py = hit.y + hit.h / 2;
     const wrong = await pointIsMyTable(ws, px, py);
     if (wrong) return { ok: false, reason: wrong, offer };
+    if (kind === "action") pressMark.actionClicks += 1;
     try {
       await cdp.dispatchClick(ws, px, py);
     } catch (e: any) {
+      if (kind === "action") pressMark.actionClicksFailed += 1;
       return { ok: false, reason: `click did not go through: ${e?.message ?? e}`, offer };
     }
   } finally {
@@ -877,6 +906,22 @@ export async function maybeVerifyExec(): Promise<void> {
     else verifyDone("unknown", `hero acted (${did}) but it cannot be matched to the pick`, { did });
     return;
   }
+  // A FROZEN TABLE HAS NOT ANSWERED YET (2026-10-12): a click sent into a page that is not drawing is queued, not lost —
+  // it lands when drawing resumes. Nothing is judged "not landed" until the table has drawn again for a full window.
+  if (frameFrozen()) {
+    p.deadline = Math.max(p.deadline, time() + VERIFY_DEADLINE_S);
+    if (!p.frozenSaid) {
+      p.frozenSaid = true;
+      feedAdd(`Study pick ${pyStr(p.pick)}: the table is frozen — waiting for it to draw again before judging the press`);
+    }
+    return;
+  }
+  if (p.frozenSaid && !p.thawedAt) {
+    // the first read drawn again: the queued click runs now — a full window from HERE before "nothing landed"
+    p.thawedAt = time();
+    p.deadline = Math.max(p.deadline, time() + VERIFY_DEADLINE_S);
+    return;
+  }
   if (time() <= p.deadline) return;
   // NOTHING LANDED. Retry only on proof of that, never on a timeout alone.
   if (p.attempts < VERIFY_ATTEMPTS) {
@@ -885,15 +930,26 @@ export async function maybeVerifyExec(): Promise<void> {
       p.attempts += 1;
       p.deadline = time() + VERIFY_DEADLINE_S;
       lastPressRead = null;
-      const res = await actuate(p.plan, { cards: keyCards(p.key) });
+      const p0 = { ...pressMark };
+      let res: Record<string, any>;
+      let threw = false;
+      try {
+        res = await actuate(p.plan, { cards: keyCards(p.key) });
+      } catch (e: any) {
+        threw = true;
+        res = { ok: false, reason: `the press failed: ${e?.message ?? e}` };
+      }
+      const uncertain = !res.ok && pressUncertain(p0, threw);
       AUTO.notePress(p.key, { ok: !!res.ok, reason: res.reason ?? null, buttons: pressRead()?.offer ?? null, atPress: pressRead()?.atPress ?? null });
       feedAdd(`Study pick ${pyStr(p.pick)} did not register — retried (${p.attempts}/${VERIFY_ATTEMPTS})`
-              + (res.ok ? "" : `, refused: ${pyStr(res.reason ?? null)}`));
+              + (res.ok ? "" : uncertain ? `, its click went out unanswered (${pyStr(res.reason ?? null)}) — waiting for the table`
+                : `, refused: ${pyStr(res.reason ?? null)}`));
       if (S.session.id) {
         S.sessions.event(S.session.id, "pick-retried", { pick: p.pick, plan: p.plan, hand: p.handId, attempt: p.attempts,
-                                                        ok: !!res.ok, reason: res.reason ?? null });
+                                                        ok: !!res.ok, reason: res.reason ?? null, uncertain });
       }
-      if (!res.ok) verifyDone("unknown", `retry refused — ${pyStr(res.reason ?? null)}`);
+      // an uncertain retry stays pending: the socket (or the spot moving on) settles it like any sent press
+      if (!res.ok && !uncertain) verifyDone("unknown", `retry refused — ${pyStr(res.reason ?? null)}`);
       return;
     }
     verifyDone("abandoned", whyNot || "the spot is no longer hero's to act on");
@@ -914,10 +970,22 @@ export function executePick(source: string, waitedS: number | null = null): Prom
     const kN = r.kN ?? null;
     S.study.execSource = source;
     lastPressRead = null;
-    const res = await actuate(plan, { cards: keyCards(key) });
+    const p0 = { ...pressMark };
+    let res: Record<string, any>;
+    let threw: string | null = null;
+    try {
+      res = await actuate(plan, { cards: keyCards(key) });
+    } catch (e: any) {
+      // A PRESS THAT THROWS IS A PRESS RESULT (2026-10-12): the QsTh raise's typing step timed out in a frozen page, the
+      // error escaped to the feed loop, and auto-execute never pressed again — the clock ran until Brady clicked
+      threw = String(e?.message ?? e);
+      res = { ok: false, reason: `the press failed: ${threw}`, threw: true };
+    }
     const ok = !!res.ok;
+    const uncertain = !ok && pressUncertain(p0, threw !== null);
+    if (uncertain) res = { ...res, uncertain: true };
     const rec: Record<string, any> = { at: nowMs(), source, pick, plan, ok, result: res, hand: S.handNo, waitedS, key,
-                                       outcome: ok ? "pending" : "refused" };
+                                       outcome: ok || uncertain ? "pending" : "refused" };
     S.study.lastExec = rec;
     // an ALLIN sized to the tree: what was pressed, recorded beside the press (only then — other records as before)
     const sized = plan.sized ? { as: res.as ?? null, typed: res.typed ?? null, why: res.why ?? res.sizedPress ?? res.reason ?? null } : null;
@@ -925,8 +993,10 @@ export function executePick(source: string, waitedS: number | null = null): Prom
                           ...(sized ? { sized } : {}) });
     const wk = keyFromRelay(key);
     stepMark(wk, ok ? `Pressed ${String(pick ?? "").toUpperCase()}${source === "auto" ? " (auto)" : ""}`
+                    : uncertain ? `${String(pick ?? "").toUpperCase()} sent — the table has not answered yet: ${pyStr(res.reason ?? null)}`
                     : `${String(pick ?? "").toUpperCase()} refused: ${pyStr(res.reason ?? "refused")}`, ok ? "info" : "warn", msSinceMark(wk, "Answer: "));
-    if (ok) {
+    if (ok || uncertain) {
+      // an uncertain press is never pressed again by auto-execute: only the verifier, once the socket shows nothing landed
       S.study.executed = key;
       const waited = waitedS !== null ? `, after ${fmtFixed(waitedS, 1)} s` : "";
       const how = res.kind === "sized-all-in" ? ` — SIZED TO THE TREE: ${pyStr(res.why ?? "")}`
@@ -935,7 +1005,9 @@ export function executePick(source: string, waitedS: number | null = null): Prom
         : res.kind === "all-in-raise" ? ` — on ${pyStr(res.clicked ?? "ALL-IN")}: ${pyStr(res.why ?? "the client's only raise is hero's whole stack")}`
         : res.as === "all-in" && plan.kind === "raise-to" ? ` — the client capped ${pyStr(res.typed ?? plan.amount)} at hero's stack: ALL-IN ${pyStr(res.field ?? "")}`
         : res.as === "all-in" && plan.label === "call" ? ` — on ${pyStr(res.clicked ?? "ALL-IN")}: ${pyStr(res.why ?? "the call is hero's whole stack")}` : "";
-      feedAdd(`Study pick executed — ${pyStr(pick)} (${source}${waited})${how}`);
+      if (ok) feedAdd(`Study pick executed — ${pyStr(pick)} (${source}${waited})${how}`);
+      else feedAdd(`Study pick UNCERTAIN — ${pyStr(pick)}: its click went out but the table never answered (${pyStr(res.reason ?? null)}) — `
+                   + "waiting for the table to show it; pressed again only if it never lands");
       if (kN !== null) {
         const h0 = handState() || {};
         const hero0 = h0.heroSeatId ?? null;
@@ -947,15 +1019,15 @@ export function executePick(source: string, waitedS: number | null = null): Prom
           : res.as === "all-in" && plan.kind === "raise-to" ? { kind: "action", label: "all-in", from: plan } : plan;
         S.study.pendingExec = { key, pick, plan: vplan, kN, handId: S.study.handId ?? null, sentAt: time(),
                                 deadline: time() + VERIFY_DEADLINE_S, attempts: 1,
-                                stackAtSend: behind0 !== null ? behind0 + committed0 : null };
+                                stackAtSend: behind0 !== null ? behind0 + committed0 : null, uncertain };
       }
     } else {
       feedAdd(`Study pick NOT executed — ${pyStr(pick)}: ${"reason" in res ? pyStr(res.reason) : "refused"}`);
     }
     if (S.session.id) {
-      S.sessions.event(S.session.id, ok ? "pick-executed" : "pick-refused", { source, pick, plan, hand: S.handNo,
-                                                                             waitedS, reason: ok ? null : res.reason ?? null,
-                                                                             ...(sized ? { sized } : {}) });
+      S.sessions.event(S.session.id, ok ? "pick-executed" : uncertain ? "pick-uncertain" : "pick-refused",
+                       { source, pick, plan, hand: S.handNo, waitedS, reason: ok ? null : res.reason ?? null,
+                         ...(threw !== null ? { threw } : {}), ...(sized ? { sized } : {}) });
     }
     log(`[pick] ${source}: ${pyRepr(pick)} -> ${pyRepr(res)}`);
     return { ok, ...rec };
@@ -1156,6 +1228,7 @@ export async function maybeAutoAct(): Promise<void> {
   // THE STRIP IS COVERED, the line is disputed, or a pre-action top-up is buying: hold (re-tested every tick)
   let holdWhy: string | null = st.uncertain || null;
   if (!holdWhy && S.liveStatus.buyPanel) holdWhy = "Buy-chips panel is over the action strip";
+  if (!holdWhy && frameFrozen()) holdWhy = FROZEN_HOLD_WHY;
   if (!holdWhy && S.topupPrefold.active && time() < S.topupPrefold.deadline) {
     holdWhy = `pre-action top-up in progress (${S.topupPrefold.kind || "terminal"})`;
   }

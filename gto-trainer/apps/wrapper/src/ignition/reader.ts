@@ -337,11 +337,24 @@ export function noteFrame(d: Record<string, any>): boolean {
     : dr.pageHidden ? "the client window is not being drawn (minimized, covered, or its screen is off)"
     : dr.offscreen ? "the client has moved this table off screen (its lobby is in front)"
     : "the browser has stopped drawing this table's frame";
+  F.frozen = drawn === false && !dr.pageHidden && !dr.offscreen;
   const said = drawn === false ? `undrawn:${F.why}` : F.dup > 1 ? `dup:${F.dup}` : "";
   if (said !== F.said) {
     const was = F.said;
+    const wasSince = F.since;
     F.said = said;
     F.since = time();                                  // /state tableFrame.forS: how long the frame has been as it is
+    // EVERY FREEZE ON THE RECORD (2026-10-12): Brave stops producing frames for 3-20 s at a time while the page's
+    // script runs on (session_20261012_211242: 8 s at 21:20, a raise's mouse move never answered). Each one is a
+    // session event with its length, so freezes are counted in every session — not only in a recorded one.
+    if (S.session.id && (said.startsWith("undrawn") || was.startsWith("undrawn"))) {
+      if (said.startsWith("undrawn")) {
+        S.sessions.event(S.session.id, "frame-undrawn", { why: F.why, frozen: F.frozen, hand: S.handNo, idleMs: F.idleMs });
+      } else {
+        S.sessions.event(S.session.id, "frame-drawn-again", { was: was.slice("undrawn:".length), hand: S.handNo,
+                                                              forS: wasSince !== null ? Math.round((time() - wasSince) * 10) / 10 : null });
+      }
+    }
     const table = `table ${pyStr(TABLES.slot() ?? 1)}`;
     const line = drawn === false ? `${table}'s frame is not being drawn: ${F.why} — its board and badges are frozen, reading the table from its socket only`
       : F.dup > 1 ? `${F.dup} frames carry ${table}'s tag in the client — reading the one on screen`
