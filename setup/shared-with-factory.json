@@ -1,0 +1,22 @@
+{
+  "about": "Files the chart factory (the poker repo) runs as COPIES of this repo's. This repo is the source: edit them here, never in the factory. The factory takes them with `bun scripts/sync_from_wrapper.ts --commit` (run in the factory checkout, C:\\Users\\Brady\\poker); until it does, `bun setup/live.ts` and both dashboard bars show the factory as behind. Each file must import only node:/bun: modules and other files in this list, so the copy runs the same there.",
+  "files": [
+    "gto-trainer/apps/api/src/services/answerTrace.ts",
+    "gto-trainer/apps/api/src/services/answerTrace.test.ts",
+    "gto-trainer/apps/api/src/services/answerTrace.steps.test.ts",
+    "gto-trainer/apps/api/src/services/answerTrace.activity.test.ts",
+    "gto-trainer/apps/api/src/services/runtimeHealth.ts",
+    "gto-trainer/apps/api/src/services/runtimeHealth.test.ts",
+    "gto-trainer/apps/api/src/services/autoRestart.ts",
+    "gto-trainer/apps/api/src/services/autoRestart.test.ts",
+    "gto-trainer/apps/api/src/services/loadedCode.ts",
+    "gto-trainer/apps/api/src/services/loadedCode.test.ts",
+    "gto-trainer/apps/api/src/services/liveStatus.ts",
+    "gto-trainer/apps/api/src/services/liveStatus.test.ts",
+    "gto-trainer/apps/api/src/services/ports.ts",
+    "gto-trainer/apps/api/src/services/ports.test.ts",
+    "gto-trainer/apps/api/src/services/supervisorRestart.ts",
+    "gto-trainer/apps/api/src/services/supervisorRestart.test.ts",
+    "gto-trainer/apps/api/src/test/tempDir.ts"
+  ]
+}

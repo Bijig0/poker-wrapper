@@ -1,8 +1,9 @@
+// SHARED WITH THE CHART FACTORY (setup/shared-with-factory.json): edit it in poker-wrapper only — the factory takes it with `bun scripts/sync_from_wrapper.ts`.
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describeBuild, liveStatus, supervisorLine, withAutoState, type ServiceBuild } from "./liveStatus";
+import { describeBuild, describeShared, lineOf, liveStatus, supervisorLine, withAutoState, type ServiceBuild } from "./liveStatus";
 import { localEnvKeyHashes } from "./supervisorRestart";
 
 const dirs: string[] = [];
@@ -34,6 +35,25 @@ describe("describeBuild", () => {
   test("current code, degraded runtime: still current, and the line says so (services/runtimeHealth.ts)", () => {
     const b = build({ auto: { state: "held", reason: "runtime-degraded", why: "the machine slept 14.2 h (woke 19:34); restart held: a poker session is live (s1)", uncommitted: [], checkedAt: NOW } });
     expect(describeBuild(b, NOW)).toBe("dd69935 · up 10 min · current · DEGRADED [held] the machine slept 14.2 h (woke 19:34); restart held: a poker session is live (s1)");
+  });
+});
+
+describe("the factory's shared code (setup/shared-with-factory.json)", () => {
+  const head = "81cae83aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  test("copies behind poker-wrapper: the line is not current and names the command", () => {
+    const b = build({ service: "factory", shared: { wrapperHead: head, behind: ["gto-trainer/apps/api/src/services/autoRestart.ts", "gto-trainer/apps/api/src/services/liveStatus.ts"], diverged: [] } });
+    const line = lineOf("factory", 2100, b);
+    expect(line.current).toBe(false);
+    expect(line.text).toEndWith(" · current · SHARED CODE BEHIND poker-wrapper 81cae83 (autoRestart.ts, liveStatus.ts) — " +
+      "run `bun scripts/sync_from_wrapper.ts --commit` in the factory checkout");
+  });
+  test("a copy edited in the factory is named; all in step = current; no report = as before", () => {
+    expect(describeShared({ wrapperHead: head, behind: [], diverged: ["gto-trainer/apps/api/src/services/ports.ts"] }))
+      .toBe(" · SHARED CODE EDITED IN THE FACTORY (ports.ts) — move the edit to poker-wrapper, then sync");
+    expect(lineOf("factory", 2100, build({ shared: { wrapperHead: head, behind: [], diverged: [] } })).current).toBe(true);
+    expect(lineOf("api", 2000, build()).text).toBe(describeBuild(build()));
+    expect(describeShared({ wrapperHead: null, behind: [], diverged: [], error: "no poker-wrapper checkout at C:/x" }))
+      .toBe(" · shared code not checked: no poker-wrapper checkout at C:/x");
   });
 });
 
