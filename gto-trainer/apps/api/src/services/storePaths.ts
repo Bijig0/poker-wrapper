@@ -50,6 +50,9 @@ export const gtowAccountsPath = (): string => storePath("gtow-accounts", join(di
 export const gtowCachePath = (): string | null =>
   /^off$/i.test(process.env.GTOW_CACHE_DB_PATH?.trim() ?? "") ? null
     : storePath("gtow-cache", join(dirname(central()), "gtow-cache.sqlite"), "GTOW_CACHE_DB_PATH").path;
+/** The hand page's nodes, stored per hand (services/handNodeStore.ts): its own file beside the central database —
+ *  rebuildable, and kept out of the file every page and backup reads. */
+export const handNodesDbPath = (): string => storePath("hand-nodes", join(dirname(central()), "hand-nodes.sqlite"), "HAND_NODES_DB_PATH").path;
 export const fxCachePath = (): string => storePath("fx", api("fx.json")).path;
 export const balanceAcksPath = (): string => storePath("balance-acks", api("balance-acks.json")).path;
 export const backgroundLockPath = (): string => storePath("background-lock", api("background.lock"), "API_BACKGROUND_LOCK").path;
@@ -87,6 +90,6 @@ export function storeWriteFailed(store: string, e: unknown): void {
 export function resolveAllStores(): StoreEntry[] {
   for (const f of [centralDbPath, answersDbPath, solvesDbPath, gtowRequestsPath, pollerEventsPath, exitLogPath, jobsDbPath, missQueueDbPath,
     riverMesDbPath, riverMesConfigPath, mesRiverCacheDir, tasksPath, fxCachePath, balanceAcksPath, backgroundLockPath,
-    handsDbPath, sessionsDbPath, profilesJsonPath, wrapperDebugDir, hhChecksDbPath, gtowCachePath]) f();
+    handsDbPath, sessionsDbPath, profilesJsonPath, wrapperDebugDir, hhChecksDbPath, gtowCachePath, handNodesDbPath]) f();
   return storeReport();
 }

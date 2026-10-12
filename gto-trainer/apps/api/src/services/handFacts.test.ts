@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, it } from "bun:test";
+import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -20,6 +21,15 @@ describe("handFacts — the hand's facts, write-through (2026-09-25)", () => {
     expect(isDurableKey("140706500001")).toBe(true);
     expect(isDurableKey("37")).toBe(false);
     expect(isDurableKey("")).toBe(false);
+  });
+
+  it("nothing is pruned: a year-old hand's AI preflop record is still read after a restart (2026-10-12)", () => {
+    const path = join(dir, "noprune.sqlite");
+    new HandFacts(path).setPreflop("4920000009", pin("4920000009"), "AdKc");
+    const raw = new Database(path);
+    raw.run("UPDATE hand_facts SET ts = ? WHERE hand_key = ?", [Date.now() - 365 * 86_400_000, "4920000009"]);
+    raw.close();
+    expect(new HandFacts(path).get("4920000009")?.heroCards).toBe("AdKc");
   });
 
   it("every fact survives a restart: a second store on the same file reads it back", () => {

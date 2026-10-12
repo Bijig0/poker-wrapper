@@ -29,6 +29,7 @@ import { loadReport, machineSampler } from "./src/services/machineLoad";
 import { startBackgroundLock, onBackgroundOwnership } from "./src/services/backgroundLock";
 import ignitionHhRoutes from "./src/routes/ignitionHh";
 import { hhChecker } from "./src/services/hhCheck";
+import { handNodeBuilder } from "./src/services/handNodeBuilder";
 import { replayScheduler } from "./src/services/replayScheduler";
 import { livePort, port as apiPort, rewritePorts } from "./src/services/ports";
 import { hrc6maxDb, provenanceAuditLine, trustAuditLine } from "./src/services/hrc6maxDb";
@@ -276,6 +277,9 @@ void adoption.then(() => onBackgroundOwnership(() => {
 
   // Checks every hand archived from here on against Ignition's own hand history (services/hhCheck.ts).
   if (!dashboardOnly) hhChecker.start();
+
+  // Stores every finished hand's nodes for the hand page while no session is live (services/handNodeBuilder.ts).
+  if (!dashboardOnly) handNodeBuilder.start();
 
   // Check #13: once a day, when the table is quiet, replay the live decisions against their recordings (services/replayScheduler.ts).
   if (!dashboardOnly) replayScheduler.start();
