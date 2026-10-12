@@ -30,6 +30,13 @@ describe("verdict rules", () => {
     expect(verdictOf({ now: NOW, stalls: [stall(1000, 2_000, noSteps)], cpu: [], heavy: [] }).reasons[0]).toContain("(GET /api/dashboard/analytics was running)");
   });
 
+  it("a degraded runtime is a warning, said first (services/runtimeHealth.ts)", () => {
+    const why = "the API is degraded: the machine slept 14.2 h (woke 19:34) — it restarts itself when no session is live";
+    expect(verdictOf({ now: NOW, stalls: [], cpu: [], heavy: [], degraded: why })).toEqual({ verdict: "warn", reasons: [why] });
+    const both = verdictOf({ now: NOW, stalls: [stall(10_000, 1_400)], cpu: [], heavy: [], degraded: why });
+    expect(both.reasons).toEqual([why, "the API froze 1.4 s at 12:19"]);
+  });
+
   it("a freeze of 1-5 s is a warning", () => {
     const v = verdictOf({ now: NOW, stalls: [stall(10_000, 1_400)], cpu: [], heavy: [] });
     expect(v).toEqual({ verdict: "warn", reasons: ["the API froze 1.4 s at 12:19"] });

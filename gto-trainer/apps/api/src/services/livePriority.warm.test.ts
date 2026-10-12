@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import {
   __resetLivePriority, cachedBehindLive, coldBuilding, keepWarm, liveBegin, liveEnd, peekCached, setCached, warmBehindLive,
 } from "./livePriority";
-import { StallSummary } from "./answerTrace";
+import { processWindow, StallSummary } from "./answerTrace";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -88,5 +88,33 @@ describe("StallSummary (the 5-min [stall-summary] line)", () => {
     t = Date.UTC(2026, 9, 9, 0, 10, 0);
     expect(s.flush(t, "machine cpu 64% (last samples) · session live")).toBe("[stall-summary] 00:05–00:10Z: 0 stalls ≥100 ms (0 ≥1 s), " +
       "blocked 0.0 s of 300.0 s (0%), max 0.0 s · machine cpu 64% (last samples) · session live");
+  });
+
+  it("carries this process's CPU and memory over the window, says when a line is due, and keeps the window", () => {
+    let t = Date.UTC(2026, 9, 12, 14, 20, 0);
+    const s = new StallSummary(300_000, () => t);
+    expect(s.due(t)).toBe(true);                // the first call opens the window
+    expect(s.flush(t)).toBeNull();
+    expect(s.due(t + 60_000)).toBe(false);
+    expect(s.lastWindow()).toBeNull();
+    s.add(231_000, { at: t, ms: 231_000, cpuMs: 630_000, open: [] });
+    t = Date.UTC(2026, 9, 12, 14, 25, 4);
+    expect(s.due(t)).toBe(true);
+    const line = s.flush(t, "session live", { cpuPct: 249, rssMb: 1752, heapMb: 931 })!;
+    expect(line).toBe("[stall-summary] 14:20–14:25Z: 1 stalls ≥100 ms (1 ≥1 s), blocked 231.0 s of 300.0 s (77%), max 231.0 s, " +
+      "cpu 273% of the logged blocked time, this process 249% cpu (rss 1.7 GB, js heap 0.9 GB) · " +
+      "by longest open: no request open (a timer or background job) 231.0 s ×1 · session live");
+    expect(s.lastWindow()).toEqual({ from: Date.UTC(2026, 9, 12, 14, 20), to: Date.UTC(2026, 9, 12, 14, 25), blockedPct: 77 });
+    expect(s.due(t)).toBe(false);
+  });
+});
+
+describe("processWindow", () => {
+  it("is CPU over the wall as % of one core (every thread), with memory; null without both CPU readings", () => {
+    const w = processWindow(0, 1_000_000, 10_000, 25_900_000)!;   // 24.9 s of CPU in 10 s
+    expect(w.cpuPct).toBe(249);
+    expect(w.rssMb).toBeGreaterThan(0);
+    expect(processWindow(0, null, 10_000, 5)).toBeNull();
+    expect(processWindow(10_000, 1, 10_000, 5)).toBeNull();
   });
 });

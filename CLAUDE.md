@@ -49,6 +49,11 @@ Read README.md first: what each folder is, the three services and their ports, t
     `Stop-Process` of a supervisor its headless `conhost.exe` can linger (parent = the task engine, NO children) and
     the task refuses a new instance (LastTaskResult 0x800710E0) while it reads "Running" — stop that conhost (it has no
     children) and start the task again. A clean exit (what a self-replace does) takes its conhost with it.
+  - **A degraded runtime restarts too** (2026-10-12, `services/runtimeHealth.ts`): an API worker that slept through a
+    long lid-close (11-14 h) came back at ~250% CPU with its loop blocked ~75%, until replaced. The worker now replaces
+    itself (reason `runtime-degraded`, exit 0, held while a session is live) after a suspend of 30 min or more (logged
+    as `[suspend]`, not as a stall) or after two 5-min windows at ≥150% CPU and ≥20% blocked (once an hour at most).
+    `[stall-summary]` lines carry `this process N% cpu (rss, js heap)`. `DEGRADED_RESTART=off` reports only.
   - Pages (`dashboard.html`, `static/study`, `setup.html`, `panel.html`) are read from disk on every request: an
     edit in the main checkout is live on save, ahead of the routes behind it — land the route first, or in the same
     merge.
