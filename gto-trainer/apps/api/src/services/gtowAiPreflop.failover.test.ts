@@ -6,7 +6,10 @@
  *     of the read, and the read goes on there — the caller's old solution id keeps answering (`moved`);
  *   - a 429 on the owning account re-posts the same way, or, with no time left, forgets the tree's memo so the next ask
  *     posts afresh elsewhere (it used to hand the walled solve back for every re-ask);
- *   - a node-lock POST that fails is sent once more on the same account (the parent lives there).
+ *   - a node-lock POST that fails is sent once more on the same account (the parent lives there);
+ *   - (2026-10-13) a re-post leaves out EVERY account the read has hung or walled on, not only the last one — it used to
+ *     ping-pong back to the account that hung first — and the read never waits past its own clock (not for a poll wait,
+ *     not for a re-post onto a slow account: that one lands for the next ask).
  * The network is a fake fetch keyed on the bearer token (one per account); a hang rejects when the poll's own
  * AbortSignal fires, exactly as a real timed-out request does.
  *
@@ -18,7 +21,7 @@
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 
-/** each test's own timeout: the longest (a read polled to its 4 s end, and one poll wait past it) takes ~5 s */
+/** each test's own timeout: the longest (a read polled to its 4 s end) takes ~4 s */
 const T = 15_000;
 
 let P: typeof import("./gtowAiPreflop");
@@ -77,6 +80,8 @@ interface Fake {
   walled: Set<string>;
   /** accounts whose tree POST fails (the request throws) */
   treeFails: Set<string>;
+  /** accounts whose tree POST replies only after this many ms (a slow account, well inside the 20 s request bound) */
+  slowTree: Map<string, number>;
   /** how many lock POSTs on an account still fail before one lands */
   lockFails: Map<string, number>;
   /** solution ids minted per account */
@@ -84,7 +89,7 @@ interface Fake {
 }
 const NODE = { action_solutions: [{ action: { code: "R2.5", type: "RAISE", betsize: "2.5" }, strategy: new Array(1326).fill(1) }] };
 function fakeGtow(): Fake {
-  const f: Fake = { seen: [], hang: new Set(), walled: new Set(), treeFails: new Set(), lockFails: new Map(), ownerOf: new Map() };
+  const f: Fake = { seen: [], hang: new Set(), walled: new Set(), treeFails: new Set(), slowTree: new Map(), lockFails: new Map(), ownerOf: new Map() };
   let seq = 0;
   const timeoutErr = () => Object.assign(new Error("The operation timed out."), { name: "TimeoutError" });
   /** a poll that never replies: rejected when its own AbortSignal fires (the read's bound), as a real one is. `hold`
@@ -103,6 +108,8 @@ function fakeGtow(): Fake {
     if (u.pathname.endsWith("/custom-trees/")) {
       f.seen.push({ kind: "tree", acct, body: JSON.parse(init.body) });
       if (f.treeFails.has(acct)) return failed();
+      const slow = f.slowTree.get(acct);
+      if (slow) return new Promise<Response>((res) => setTimeout(() => res(Response.json({ id: `tree-${++seq}` }, { status: 201 })), slow));
       return Response.json({ id: `tree-${++seq}` }, { status: 201 });
     }
     if (u.pathname.endsWith("/custom-solutions/")) {
@@ -129,6 +136,7 @@ const BODY = { players: [{ position: "BTN" }, { position: "BB" }], tag: "failove
 const LOCK = { action_history: [], strategy: [{ action: "C", strategy: [] }], hands_locked: [], previous_nodes_lock_type: "street_all" as const };
 const polls = (f: Fake, acct: string) => f.seen.filter((x) => x.kind === "poll" && x.acct === acct).length;
 const trees = (f: Fake) => f.seen.filter((x) => x.kind === "tree").map((x) => x.acct);
+const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
 describe("a tree or solution POST that fails", () => {
   it("moves on to the next account instead of throwing out of the solve", async () => {
@@ -190,7 +198,7 @@ describe("a poll that hangs on the owning account", () => {
     expect(trees(f)).toEqual(["primary", "secondary"]);
   }, T);
 
-  it("every account hangs: the read still ends on its own clock — no answer, never an endless re-post", async () => {
+  it("every account hangs: one re-post per account at most, never back to one that hung — the read ends on its own clock", async () => {
     const f = fakeGtow();
     f.hang.add("primary"); f.hang.add("secondary");
     const made = await P.poolLockSeams.solve("k-hang-all", BODY, { preflop: true });
@@ -198,10 +206,12 @@ describe("a poll that hangs on the owning account", () => {
     const n = await P.fetchNode((made as { solId: string }).solId, "");
     expect("error" in n).toBe(true);
     expect((n as { error: string }).error).toMatch(/did not return the node in time/);
-    // the 4 s read, plus the poll wait (POLL_MS 1.2 s) that can start just before its end, plus slack
-    expect(Date.now() - t0).toBeLessThan(4_000 + 1_200 + 1_000);
-    // a re-post needs GTOW_PREFLOP_REPOST_MS of the read left, and only a poll that hung a full POLL_HANG_MS asks for one
-    expect(trees(f).length).toBeLessThanOrEqual(1 + Math.ceil((4_000 - 500) / 200));
+    // the 4 s read and slack: the poll wait (POLL_MS 1.2 s) is clipped to the read's clock — it used to run up to 1.2 s past
+    expect(Date.now() - t0).toBeLessThan(4_000 + 1_000);
+    // primary hung → re-posted on secondary; secondary hung → nobody left this read has not hung on: polled on there. It
+    // used to re-post back onto primary, then secondary, … (~15 re-posts in this 4 s read)
+    expect(trees(f)).toEqual(["primary", "secondary"]);
+    expect(polls(f, "primary")).toBe(1);
   }, T);
 
   it("with too little of the read left for a cold tree: polls on and ends as before, nothing re-posted", async () => {
@@ -233,6 +243,69 @@ describe("a poll that hangs on the owning account", () => {
     expect(f.ownerOf.get(newLock.body.parent_solution_id)).toBe("secondary");
     expect(newLock.body.last_node_lock).toEqual(LOCK);
     expect(newParent.body.custom_tree_id).toMatch(/^tree-/);
+  }, T);
+});
+
+describe("three accounts, two of them stuck", () => {
+  it("primary and secondary hang, ultra-2 answers: the 2nd re-post goes to ultra-2, never back to primary", async () => {
+    routeIds = ["primary", "secondary", "ultra-2"];
+    const f = fakeGtow();
+    f.hang.add("primary"); f.hang.add("secondary");
+    const made = await P.poolLockSeams.solve("k-hang-three", BODY, { preflop: true });
+    const old = (made as { solId: string }).solId;
+    const t0 = Date.now();
+    const n = await P.fetchNode(old, "");
+    expect("error" in n).toBe(false);
+    expect(Date.now() - t0).toBeLessThan(3_000);
+    expect(trees(f)).toEqual(["primary", "secondary", "ultra-2"]);
+    expect(polls(f, "primary")).toBe(1);
+    expect(polls(f, "secondary")).toBe(1);
+    expect(polls(f, "ultra-2")).toBe(1);
+    // a later read of the OLD id goes to the LAST replacement — `moved` followed to its end, not one hop (secondary, hung)
+    const again = await P.fetchNode(old, "F");
+    expect("error" in again).toBe(false);
+    expect(polls(f, "primary")).toBe(1);
+    expect(polls(f, "secondary")).toBe(1);
+    expect(polls(f, "ultra-2")).toBe(2);
+  }, T);
+
+  it("a wall counts as a hang: primary 429s, secondary hangs → ultra-2, not back to primary", async () => {
+    // (the fake's routing never blocks a walled account — live, noteFailure does — so this is the read's own list at work)
+    routeIds = ["primary", "secondary", "ultra-2"];
+    const f = fakeGtow();
+    f.walled.add("primary"); f.hang.add("secondary");
+    const made = await P.poolLockSeams.solve("k-wall-hang-three", BODY, { preflop: true });
+    const n = await P.fetchNode((made as { solId: string }).solId, "");
+    expect("error" in n).toBe(false);
+    expect(trees(f)).toEqual(["primary", "secondary", "ultra-2"]);
+    expect(polls(f, "primary")).toBe(1);
+    expect(failures).toEqual([{ id: "primary", status: 429 }]);
+  }, T);
+});
+
+describe("a re-post onto a slow account", () => {
+  it("does not hold the read past its clock: the read ends on time, the re-post lands for the next ask", async () => {
+    process.env.GTOW_NODE_TIMEOUT_MS = "1500";
+    const f = fakeGtow();
+    f.hang.add("primary");
+    f.slowTree.set("secondary", 2_500);
+    const made = await P.poolLockSeams.solve("k-hang-slow", BODY, { preflop: true });
+    const old = (made as { solId: string }).solId;
+    const t0 = Date.now();
+    const n = await P.fetchNode(old, "");
+    expect("error" in n).toBe(true);
+    expect((n as { error: string }).error).toMatch(/did not return the node in time/);
+    // the 1.5 s read and slack — it used to wait the slow tree POST out (2.5 s here; up to 20 s per POST live)
+    expect(Date.now() - t0).toBeLessThan(1_500 + 700);
+    // the re-post goes on without the read and lands…
+    for (let i = 0; i < 80 && !f.seen.some((x) => x.kind === "solution" && x.acct === "secondary"); i++) await sleep(50);
+    await sleep(50);
+    expect(trees(f)).toEqual(["primary", "secondary"]);
+    // …so the next ask of the old id goes straight to it: no poll of the hung account
+    const next = await P.fetchNode(old, "");
+    expect("error" in next).toBe(false);
+    expect(polls(f, "primary")).toBe(1);
+    expect(polls(f, "secondary")).toBe(1);
   }, T);
 });
 
