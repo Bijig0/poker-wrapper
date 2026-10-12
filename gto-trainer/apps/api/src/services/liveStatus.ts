@@ -86,7 +86,12 @@ function ago(ms: number, now: number): string {
 /** The sentence for one service's build reply. */
 export function describeBuild(b: ServiceBuild, now = Date.now()): string {
   const head = `${short(b.commit)} · up ${ago(b.bootAt, now)}`;
-  if (!b.stale) return `${head} · current`;
+  if (!b.stale) {
+    // running what is on disk, but the process itself wants replacing (services/runtimeHealth.ts)
+    const a = b.auto;
+    if (a?.reason === "runtime-degraded" && a.state !== "current" && a.why) return `${head} · current · DEGRADED [${a.state}] ${a.why}`;
+    return `${head} · current`;
+  }
   const files = b.changed.slice(0, 3).join(", ") + (b.changedCount > 3 ? ` +${b.changedCount - 3} more` : "");
   const st = b.auto?.state;
   // the auto-restart's own sentence when it has looked; before its first tick only the files are known

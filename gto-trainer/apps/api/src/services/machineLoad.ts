@@ -1,5 +1,6 @@
 import os from "node:os";
 import { asActivity, lastLoggedStall, loggedStallsSince, setStallSummaryExtra, type StallRecord } from "./answerTrace";
+import { degradedReason, runtimeHealth } from "./runtimeHealth";
 import { refreshSessionLive, sessionLiveCached } from "./sessionLive";
 
 /**
@@ -26,7 +27,8 @@ import { refreshSessionLive, sessionLiveCached } from "./sessionLive";
  *
  * VERDICT RULE:
  *   heavy — any stall >= 5 s in the last 5 min, OR cpuPct >= 85 sustained (every sample of the last minute, two at least)
- *   warn  — any stall >= 1 s in the last 5 min, OR cpuPct >= 60, OR any heavy process
+ *   warn  — any stall >= 1 s in the last 5 min, OR cpuPct >= 60, OR any heavy process, OR the API's runtime is
+ *           degraded (services/runtimeHealth.ts: back from a long sleep, or ~250% CPU with its loop mostly blocked)
  *   ok    — none of these
  * `reasons` holds a plain sentence for every condition that holds (the heavy ones first).
  */
@@ -69,11 +71,14 @@ export interface VerdictInput {
   /** machine CPU samples, oldest first */
   cpu: { at: number; pct: number }[];
   heavy: HeavyProc[];
+  /** the API's runtime is degraded (services/runtimeHealth.ts): the sentence, or null */
+  degraded?: string | null;
 }
 
 export function verdictOf(x: VerdictInput): { verdict: Verdict; reasons: string[] } {
   const heavyWhy: string[] = [];
   const warnWhy: string[] = [];
+  if (x.degraded) warnWhy.push(x.degraded);
   const worst = x.stalls.reduce<StallRecord | null>((w, s) => (!w || s.ms > w.ms ? s : w), null);
   if (worst && worst.ms >= WARN_STALL_MS) {
     const big = x.stalls.filter((s) => s.ms >= WARN_STALL_MS).length;
@@ -295,7 +300,8 @@ export function loadReport(now = Date.now(), sampler: MachineSampler = machineSa
   const s5 = loggedStallsSince(now - WINDOW_5M);
   const s1 = s5.filter((s) => s.at + s.ms >= now - 60_000);
   const { cpu, heavy } = sampler.state(now);
-  const { verdict, reasons } = verdictOf({ now, stalls: s5, cpu, heavy });
+  const deg = runtimeHealth.degraded();
+  const { verdict, reasons } = verdictOf({ now, stalls: s5, cpu, heavy, degraded: deg ? degradedReason(deg) : null });
   const lastCpu = cpu[cpu.length - 1];
   return {
     ok: true,

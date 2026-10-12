@@ -31,6 +31,10 @@ describe("describeBuild", () => {
     const b = build({ stale: true, changedCount: 4, changed: ["a.ts", "b.ts", "c.ts", "d.ts"] });
     expect(describeBuild(b, NOW)).toBe("dd69935 · up 10 min · BEHIND THE DISK: 4 loaded file(s) changed (a.ts, b.ts, c.ts +1 more)");
   });
+  test("current code, degraded runtime: still current, and the line says so (services/runtimeHealth.ts)", () => {
+    const b = build({ auto: { state: "held", reason: "runtime-degraded", why: "the machine slept 14.2 h (woke 19:34); restart held: a poker session is live (s1)", uncommitted: [], checkedAt: NOW } });
+    expect(describeBuild(b, NOW)).toBe("dd69935 · up 10 min · current · DEGRADED [held] the machine slept 14.2 h (woke 19:34); restart held: a poker session is live (s1)");
+  });
 });
 
 describe("supervisorLine", () => {
