@@ -118,6 +118,17 @@ export const POOL_LIMP_CHART_SB = `${SITE_6MAX}_6max_D100_olimp_pool`; // limps 
  *  Since the v2 pool3 re-solve (2026-10-02) it is the FALLBACK for three-limper lines: read when the pool3 tree's node
  *  is not trusted or the tree cannot hold the third limper (a v1 tree not yet replaced) — see limp3Reroute. */
 export const POOL_WIDE_CHART = `${SITE_6MAX}_6max_D100_olimp_widex`;
+/**
+ * THE EVEN HERO-FREE LIMP TREE (2026-10-13, Brady; bad-solution audit finding #5). NOT GTO — OUR OWN ANSWER: behind a lone
+ * deep limper, hero in the HJ/CO/BTN read the equilibrium D100_olimp, whose first-in limp is residue (UTG 0.57%, HJ 0.39%,
+ * CO 0.20%, BTN 0.09% of hands), so KTo folded 99.99% to a limp the pool makes with 3.1% of hands; pool3 and the pilot
+ * could not answer him because they lock his own over-limp. This tree locks ONLY the four first-in limps (UTG/HJ/CO/BTN)
+ * to locks_v2's limp_first_deep (the committed table, n=667, the same range as pool3) and solves everything else: hero's
+ * fold / over-limp / every iso size, the blinds, and the limper's reply to the iso (left solved by Brady's choice — the
+ * pool folds ~23% to an iso, the tree ~51%). poker-zenbook solves/sixmax_grid/limp-v2-d100-herofree, queued 2026-10-13.
+ * Register entry: approximations.ts "pool-free-limp-chart" (DEEP_LIMP_POOLH=off).
+ */
+export const POOL_FREE_CHART = `${SITE_6MAX}_6max_D100_olimp_poolh`;
 
 /**
  * THE V2 POOL3 SHAPE (2026-10-02 re-solve, ids unchanged: even `_olimp_pool3` / `_olimp_pool` / `_olimp`, uneven
@@ -196,6 +207,26 @@ export function poolLimpChart(tokens: string[], hero: Seat6 | ""): PoolLimpPick 
   }
   if (POOL_LIMP_LOCKED.has(line)) return null;
   return { id: POOL_LIMP_CHART, note: "pool-locked limp tree (limps and the SB's complete at the pool's measured ranges)" };
+}
+
+/**
+ * Does hero (HJ/CO/BTN) sit behind exactly ONE other non-blind limp before any raise? Then POOL_FREE_CHART answers every
+ * preflop decision of his in the hand — his own node (fold / over-limp / iso) and the later ones (facing the limper's
+ * limp-raise, a squeeze, an iso behind his over-limp), so the hand is read on one tree. Returns the limper's seat; the
+ * picker adds the stack test (a deep limper: the tree locks him at the deep range). DEEP_LIMP_POOLH=off = no.
+ */
+export function poolFreeChart(tokens: string[], hero: Seat6 | ""): (PoolLimpPick & { limper: Seat6 }) | null {
+  if (String(process.env.DEEP_LIMP_POOLH ?? "on").toLowerCase() === "off") return null;
+  if (hero !== "HJ" && hero !== "CO" && hero !== "BTN") return null;
+  const toks = tokens.map((t) => String(t ?? "").trim().toUpperCase());
+  const firstRaise = toks.findIndex((t) => t === "RAI" || /^R[\d.]+$/.test(t));
+  const h = SEATS6.indexOf(hero);
+  const others: number[] = [];
+  for (let i = 0; i < Math.min(4, firstRaise < 0 ? toks.length : firstRaise); i++) if (i !== h && toks[i] === "C") others.push(i);
+  if (others.length !== 1 || others[0]! > h) return null;
+  const limper = SEATS6[others[0]!]!;
+  return { id: POOL_FREE_CHART, limper,
+    note: `hero-free pool limp tree (the ${limper}'s first-in limp at the pool's measured range, hero's own node solved — not GTO, our own read of the pool)` };
 }
 
 /** The opening-orbit line through the THIRD limp (e.g. "C-F-C-C"), or null when the line has fewer than three limps
@@ -574,14 +605,21 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
     // reading — see poolLimpChart. Shallower rungs keep their equilibrium limp chart until the D50/D75 pool
     // re-solves exist.
     const pool = open === "limp" && depth >= DEEP6 ? poolLimpChart(tokens, me) : null;
-    if (pool) notes.push(pool.note);
+    // the even hero-free tree first for hero in HJ/CO/BTN behind one DEEP limper (as dealt, so a limper who later folded
+    // keeps the hand on it); a short one is the uneven trees' (and the pool limp lock's) — never the deep range
+    const freePick = open === "limp" && depth >= DEEP6 ? poolFreeChart(tokens, me) : null;
+    const free = freePick && Number(byPos[freePick.limper] ?? NaN) > 85 ? freePick : null;
+    if (free) notes.push(free.note);
+    else if (pool) notes.push(pool.note);
     const ladder = evenLadder(depth, open);
     // a limped pot past the deepest limp tree: the 100bb limp chart IS its chart (evenLadder) — said once, as prose
     if (open === "limp" && !LIMP_RUNGS6.includes(depth)) {
       notes.push(`${depth}bb limped pot — no limp tree past ${LIMP_RUNGS6[LIMP_RUNGS6.length - 1]}bb (by decision); the ${nearest(LIMP_RUNGS6, depth)}bb limp chart answers`);
     }
-    const cands = pool ? [pool.id, ...(pool.limp3Fallback ? [pool.limp3Fallback] : []), ...ladder] : ladder;
-    const c = finish(pool ? pool.id : ladder[0]!, cands, depth, depth, "EQ", open);
+    // behind the hero-free tree: exactly what answered before it (it falls back there until it is baked)
+    const before = pool ? [pool.id, ...(pool.limp3Fallback ? [pool.limp3Fallback] : []), ...ladder] : ladder;
+    const cands = free ? [free.id, ...before] : before;
+    const c = finish(cands[0]!, cands, depth, depth, "EQ", open);
     return pool?.limp3Fallback ? { ...c, limp3Fallback: pool.limp3Fallback } : c;
   };
 
@@ -788,7 +826,7 @@ export function unnameable6max(id: string): string | null {
   if (rest.startsWith("P_")) return null;
   const val = (t: string) => Number(t.replace("_", "."));
   let m: RegExpExecArray | null;
-  if ((m = /^D(\d+)_olimp(?:_(?:pool\d*|poolx\d*|widex?))?$/.exec(rest))) {
+  if ((m = /^D(\d+)_olimp(?:_(?:pool\d*|poolh|poolx\d*|widex?))?$/.exec(rest))) {
     const d = Number(m[1]);
     return LIMP_RUNGS6.includes(d) ? null : `limp depth ${d}bb is not a limp rung (${LIMP_RUNGS6.join("/")})`;
   }
