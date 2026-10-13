@@ -42,8 +42,17 @@ function script(replies: Record<string, Reply[]>, hedgeAccount = "ultra-2") {
   const saved = { ensure: api.ensureCustomSolution, node: api.customNode, lock: api.lockedCustomSolution, hedge: api.hedgeSolution, adopt: api.adoptSolution };
   const trees: any[] = [], hedges: any[] = [], adopted: string[] = [], reads: string[] = [];
   const left = Object.fromEntries(Object.entries(replies).map(([k, v]) => [k, v.slice()]));
+  const siblings = new Map<string, string>();
+  const saved2 = { sibling: api.hedgeSibling, owner: api.ownerOf };
   api.ensureCustomSolution = async (input: any) => { trees.push(input); return { ok: true, solId: `sol-${input.startingStreet}`, created: true, session: "secondary" }; };
-  api.hedgeSolution = async (input: any, opts: any) => { hedges.push({ input, opts }); return { ok: true, solId: `hedge-${input.startingStreet}`, created: true, session: hedgeAccount, route: "least-loaded (no solve of ours running on it)" }; };
+  api.hedgeSolution = async (input: any, opts: any) => {
+    hedges.push({ input, opts });
+    const solId = `hedge-${input.startingStreet}`;
+    if (opts?.of) { siblings.set(opts.of, solId); siblings.set(solId, opts.of); }
+    return { ok: true, solId, created: true, session: hedgeAccount, route: "least-loaded (no solve of ours running on it)" };
+  };
+  api.hedgeSibling = (solId: string) => siblings.get(solId) ?? null;
+  api.ownerOf = (solId: string) => (solId.startsWith("hedge-") ? hedgeAccount : null);
   api.adoptSolution = (_input: any, solId: string) => { adopted.push(solId); };
   api.lockedCustomSolution = async (parent: string) => ({ ok: true, solId: `${parent}-locked`, created: true, session: "secondary" });
   api.customNode = async (solId: string, q: any) => {
@@ -57,7 +66,7 @@ function script(replies: Record<string, Reply[]>, hedgeAccount = "ultra-2") {
     if ("okAfterMs" in r) { await sleep(r.okAfterMs); return { ok: true, data: r.data, solveSecs: r.okAfterMs / 1000, cached: false, src: "fetched" }; }
     return { ok: true, data: r, solveSecs: 0, cached: false, src: "fetched" };
   };
-  return { trees, hedges, adopted, reads, restore: () => Object.assign(api, { ensureCustomSolution: saved.ensure, customNode: saved.node, lockedCustomSolution: saved.lock, hedgeSolution: saved.hedge, adoptSolution: saved.adopt }) };
+  return { trees, hedges, adopted, reads, restore: () => Object.assign(api, { ensureCustomSolution: saved.ensure, customNode: saved.node, lockedCustomSolution: saved.lock, hedgeSolution: saved.hedge, adoptSolution: saved.adopt, hedgeSibling: saved2.sibling, ownerOf: saved2.owner }) };
 }
 
 const ENV = ["GTOW_HUNG_HEDGE", "OFFTREE_LOCK_FALLBACK", "OFFTREE_RANGE", "OFFTREE_LOCK", "OFFTREE_BLEND_W"] as const;
@@ -91,7 +100,7 @@ describe("the hedge after a hung poll (GTOW_HUNG_HEDGE, default on)", () => {
     expect(flop.leak?.code).toBe("tree:hung-hedge");
     expect(flop.treeWhy).toMatch(/second solve on ultra-2 answered first/);
     expect(s.hedges).toHaveLength(1);
-    expect(s.hedges[0].opts).toEqual({ avoid: ["secondary"] });          // the hung solve's owner is left out
+    expect(s.hedges[0].opts).toEqual({ avoid: ["secondary"], of: "sol-FLOP" });   // the hung solve's owner is left out
     expect(s.adopted).toEqual(["hedge-FLOP"]);                             // the rest of the hand reads the hedge
     expect(s.trees).toHaveLength(1);                                       // the first solve was NOT forgotten and re-posted
   });
@@ -126,6 +135,26 @@ describe("the hedge after a hung poll (GTOW_HUNG_HEDGE, default on)", () => {
     expect(r.ok).toBe(false);
     expect(s.hedges).toHaveLength(1);
     expect(s.adopted).toEqual([]);
+  });
+
+  it("the poller's next attempt finds the hedge still running: it races the pair again, no third solve", async () => {
+    delete process.env.GTOW_HUNG_HEDGE;
+    const s = script({
+      // attempt 1: the read hangs, neither solve answers; attempt 2: the read hangs again (the solve is old), the hedge answers
+      "sol-FLOP|": [{ hung: true }, { failAfterMs: 20 }, { hung: true }, { failAfterMs: 20 }],
+      "hedge-FLOP|": [{ failAfterMs: 20 }, node("BB", checkOrBet, "hedge-root")],
+      "hedge-FLOP|X": [heroNode("hedge-hero")],
+    }); restore = s.restore;
+    const first = await solveAiChain({ ...base, streets: [["X"]] });
+    expect(first.ok).toBe(false);
+    const second = await solveAiChain({ ...base, streets: [["X"]] });
+    expect(second.ok).toBe(true);
+    expect(s.hedges).toHaveLength(1);                                      // posted once, by the first attempt
+    expect(s.hedges[0].opts).toEqual({ avoid: ["secondary"], of: "sol-FLOP" });
+    expect(s.adopted).toEqual(["hedge-FLOP"]);
+    const flop = second.trace!.streets[0]!;
+    expect(flop.solId).toBe("hedge-FLOP");
+    expect(flop.treeWhy).toMatch(/posted by an earlier attempt/);
   });
 
   it("GTOW_HUNG_HEDGE=off: the 2026-10-08 re-post — the hung solve is forgotten and the tree posted again elsewhere", async () => {

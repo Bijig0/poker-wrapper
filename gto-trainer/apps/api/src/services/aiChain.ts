@@ -1792,8 +1792,12 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         const tHedge = Date.now();
         const clock = postflopNodeTimeoutMs(n);
         const keep: Promise<HedgeRead> = readNode(oldSol, codes.join("-"), clock).then((x) => ({ ...x, made: null }));
+        // a hedge already running alongside this solve (the poller's earlier attempt posted it): race it again, no third solve
+        const sibling = gtowApi.hedgeSibling(oldSol);
         const hedge: Promise<HedgeRead> = (async (): Promise<HedgeRead> => {
-          const made = await gtowApi.hedgeSolution(treeInput, from ? { avoid: [from] } : {});
+          const made: HedgeMade = sibling
+            ? { ok: true, solId: sibling, created: false, session: gtowApi.ownerOf(sibling) ?? "?", why: "hedge: the second solve posted by an earlier attempt, still running" }
+            : await gtowApi.hedgeSolution(treeInput, { ...(from ? { avoid: [from] } : {}), of: oldSol });
           if (!made.ok) return { r: made, src: "failed", ms: Date.now() - tHedge, made: null };
           return { ...(await readNode(made.solId, codes.join("-"), clock)), made };
         })();
@@ -1804,11 +1808,11 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         if (made && made.ok && won.r.ok) {
           gtowApi.adoptSolution(treeInput, made.solId);
           ens = made;
-          solves++;
+          if (made.created) solves++;
           streetRec.solId = String(made.solId);
           streetRec.account = made.session;
           if (made.route) streetRec.route = made.route;
-          streetRec.treeWhy = `${streetRec.treeWhy ? `${streetRec.treeWhy}; then ` : ""}a second solve on ${acct} answered first (hedge after a hung poll on ${from}; the first solve kept running)`;
+          streetRec.treeWhy = `${streetRec.treeWhy ? `${streetRec.treeWhy}; then ` : ""}a second solve on ${acct} answered first (hedge after a hung poll on ${from}; the first solve kept running${sibling ? "; the hedge was posted by an earlier attempt" : ""})`;
           streetRec.leak = { code: "tree:hung-hedge", why: `the ${STREET[k]!.toLowerCase()} tree was solved a second time on ${acct} after a poll on ${from} hung — the second solve answered first` };
           recordTree(true);
         } else {
