@@ -37,6 +37,18 @@
  * < 1% alone (isOffTreePostflop); OFFTREE_MAX_HAND=0.02 brings the old second condition back. maxHand is still computed
  * and shown. The preflop fit's isOffTree keeps both halves.
  *
+ * THE BLEND (2026-10-13, Brady: "lock on … just go for it", after the EV test). The soft range covers the hands real
+ * players hold but throws away the action's STRENGTH signal: at the trigger (82 NL100/200 off-tree actions with real
+ * cards) real players held two pair+ 14.6% / air 30.5%, the soft range 6.7% / 40.0% (= his range before the action), the
+ * QRE sliver 15.6% / 26.5% (shape test, poker-data/audits/offtree-shape-2026-10-13). An EV test then solved hero's node
+ * after 95 real heads-up off-tree wagers (poker-data-offtree-ev, 978 requests) with villain's node locked to each range
+ * and scored hero's answer against a reference range matching the real cards' hand-category mix: loss % of pot, today's
+ * QRE 1.35 [0.94, 1.82], soft 1.85 [1.03, 3.23], BLEND 0.73 [0.54, 0.93] (beats QRE +0.62 [+0.22, +1.10], soft +1.13
+ * [+0.39, +2.38]). The blend = OFFTREE_BLEND_W (0.5) x his QRE narrowing + the rest x the soft range, each normalised to
+ * one, as a per-combo factor on his range scaled so the most likely hand keeps weight 1 (blendOffTreeRange). Default
+ * since 2026-10-13: OFFTREE_RANGE unset = blend (soft / log / off as before), and the mid-street lock ON (OFFTREE_LOCK
+ * unset = on), so hero's own answer on the street of the off-tree action is solved against it too.
+ *
  * Pure: the chain computes the numbers on the node it already read.
  */
 
@@ -58,9 +70,12 @@ export interface OffTreeStats {
   evGapBb: number | null;
 }
 
-/** What the soft range did at an off-tree node (OFFTREE_RANGE = soft or log). */
+/** What the off-tree range did at an off-tree node (OFFTREE_RANGE = blend, soft or log). */
 export interface OffTreeSoft {
-  mode: "soft" | "log";
+  /** blend = the blend carried (default since 2026-10-13) · soft = the soft range carried · log = computed, QRE kept */
+  mode: "blend" | "soft" | "log";
+  /** the blend's weight on his QRE narrowing (mode blend, and log since 2026-10-13: log computes the blend) */
+  w?: number;
   /** the temperature as a share of the pot, and the pot it was taken of (bb) */
   t: number;
   pot: number;
@@ -130,11 +145,19 @@ export function offTreeMaxHand(): number {
  *  every hand, when one is set). The preflop fit keeps isOffTree. */
 export const isOffTreePostflop = (s: OffTreeStats): boolean => s.nodeFreq < OFF_TREE_NODE_FREQ && s.maxHand < offTreeMaxHand();
 
-/** OFFTREE_RANGE, read at every decision: soft (unset) = carry the soft range · log = compute and record it, keep the QRE
- *  narrowing · off = neither (the narrowing of before 2026-10-06). */
-export function offTreeRangeMode(): "soft" | "log" | "off" {
-  const v = String(process.env.OFFTREE_RANGE ?? "soft").trim().toLowerCase();
-  return v === "off" || v === "0" || v === "false" ? "off" : v === "log" ? "log" : "soft";
+/** OFFTREE_RANGE, read at every decision: blend (unset, since 2026-10-13) = carry the blend · soft = carry the soft range
+ *  (the rule 2026-10-06 .. 10-13) · log = compute and record the blend, keep the QRE narrowing · off = neither (the
+ *  narrowing of before 2026-10-06). */
+export function offTreeRangeMode(): "blend" | "soft" | "log" | "off" {
+  const v = String(process.env.OFFTREE_RANGE ?? "blend").trim().toLowerCase();
+  return v === "off" || v === "0" || v === "false" ? "off" : v === "log" ? "log" : v === "soft" ? "soft" : "blend";
+}
+/** OFFTREE_BLEND_W, read at every decision: the blend's weight on his QRE narrowing, in [0, 1] (0 = the soft range's
+ *  shape, 1 = QRE's); unset or not a number = 0.5, the weight the EV test measured. */
+export function offTreeBlendW(): number {
+  const raw = process.env.OFFTREE_BLEND_W;
+  const v = raw == null || raw.trim() === "" ? NaN : Number(raw);
+  return Number.isFinite(v) && v >= 0 && v <= 1 ? v : 0.5;
 }
 /** the soft range's temperature as a share of the pot: OFFTREE_RANGE_T when it is a sane number, else 0.20 (pool-soft: 0.20).
  *  T RE-FITTED 2026-10-06 on the trigger itself: with the NL200 pilot (526 heads-up NL200 spots solved on GTO Wizard
@@ -146,9 +169,10 @@ export function offTreeSoftT(): number {
   const t = Number(process.env.OFFTREE_RANGE_T);
   return Number.isFinite(t) && t > 0 && t < 100 ? t : OFF_TREE_SOFT_T;
 }
-/** OFFTREE_LOCK=on: an off-tree villain action with more of the street to read is node-locked so the rest of the street
- *  (hero's node included) is solved against the soft range. Off unless set: each lock is a GTO Wizard request. */
-export const offTreeLockOn = (): boolean => String(process.env.OFFTREE_LOCK ?? "off").trim().toLowerCase() === "on";
+/** OFFTREE_LOCK: an off-tree villain action with more of the street to read is node-locked so the rest of the street
+ *  (hero's node included) is solved against the range carried (the blend). ON unless set off (2026-10-13, after the EV
+ *  test: hero's answer on that street is where the blend measured best); each lock is one GTO Wizard POST + its reads. */
+export const offTreeLockOn = (): boolean => !/^(off|0|false|no)$/.test(String(process.env.OFFTREE_LOCK ?? "on").trim().toLowerCase());
 
 /**
  * THE SOFT RANGE after an off-tree action: range(h) x exp(-dEV_h / (t x pot)), dEV_h = the hand's best action's EV minus
@@ -185,6 +209,56 @@ export function softOffTreeRange(range: number[], sols: Sol[], taken: number, po
   }
   if (!(combos > 0)) return { why: "the soft range came out empty" };
   return { range: out, combos, factor };
+}
+
+/**
+ * THE BLEND after an off-tree action (2026-10-13, the header): w x his QRE narrowing (range x the solver's strategy for the
+ * action) + (1 - w) x the soft range, each normalised to one, as a per-combo factor on his range scaled so its largest is 1
+ * (the most likely hand keeps his whole weight; never above the range's own). `factor` is what a node lock gives the
+ * action (offTreeLock scales by the largest factor anyway). Falls back to the soft range alone when the QRE narrowing is
+ * empty, and says why when the soft range is not computable.
+ */
+export function blendOffTreeRange(range: number[], sols: Sol[], taken: number, pot: number, t: number, w: number):
+  { range: number[]; combos: number; factor: number[] } | { why: string } {
+  const sr = softOffTreeRange(range, sols, taken, pot, t);
+  if ("why" in sr) return sr;
+  const strat = sols[taken]?.strategy ?? [];
+  const n = range.length;
+  const qre = new Array<number>(n).fill(0);
+  let qSum = 0;
+  // the same combos the soft range keeps (a board card / a hand the node plays no strategy for is not his)
+  for (let i = 0; i < n; i++) {
+    const x = (range[i] ?? 0) > 0 && (sr.factor[i] ?? 0) > 0 ? (range[i] ?? 0) * Math.max(0, strat[i] ?? 0) : 0;
+    qre[i] = x; qSum += x;
+  }
+  let sSum = 0;
+  for (const x of sr.range) sSum += x;
+  const wq = qSum > 0 ? Math.min(1, Math.max(0, w)) : 0;
+  const factor = new Array<number>(n).fill(0);
+  let top = 0;
+  for (let i = 0; i < n; i++) {
+    const wi = range[i] ?? 0;
+    if (!(wi > 0)) continue;
+    const mix = wq * (qSum > 0 ? qre[i]! / qSum : 0) + (1 - wq) * (sSum > 0 ? sr.range[i]! / sSum : 0);
+    factor[i] = mix / wi;
+    if (factor[i]! > top) top = factor[i]!;
+  }
+  if (!(top > 0)) return { why: "the blend came out empty" };
+  const out = new Array<number>(n).fill(0);
+  let combos = 0;
+  for (let i = 0; i < n; i++) { factor[i] = factor[i]! / top; out[i] = (range[i] ?? 0) * factor[i]!; combos += out[i]!; }
+  return { range: out, combos, factor };
+}
+
+/** The range an off-tree node CARRIED, rebuilt from what the trace keeps (the node's per-combo strategies and EVs, and
+ *  the rule's record): the pages that redraw a walk (routes/dashboard expandTrace, stress500 views) must show the range
+ *  the solver was given after the action, not range x QRE. null = the node carried range x strategy (no rule applied). */
+export function carriedOffTreeRange(range: number[], sols: Sol[], taken: number, soft: OffTreeSoft | undefined | null): number[] | null {
+  if (!soft?.applied) return null;
+  const r = soft.mode === "soft"
+    ? softOffTreeRange(range, sols, taken, soft.pot, soft.t)
+    : blendOffTreeRange(range, sols, taken, soft.pot, soft.t, soft.w ?? 0.5);
+  return "why" in r ? null : r.range;
 }
 
 /** A NODE LOCK (GTO Wizard's last_node_lock, services/gtowAiPreflop NodeLock) that makes villain's range after the
@@ -231,12 +305,16 @@ export const offTreeText = (l: OffTreeLine): string =>
   (l.soft ? ` · ${softText(l.soft)}` : "");
 
 const combosText = (x: number): string => (x >= 10 ? x.toFixed(0) : x >= 0.1 ? x.toFixed(1) : x.toFixed(3));
-/** "his range carried as 55 combos instead of QRE's 0.007 (soft, T = 20% of the 10.4bb pot)" */
-export const softText = (s: OffTreeSoft): string =>
-  s.softCombos == null ? `soft range not computable (${s.why ?? "?"}): QRE narrowing kept`
+/** "his range carried as 55 combos instead of QRE's 0.007 (blend: 50% QRE + soft, T = 20% of the 10.4bb pot)" */
+export const softText = (s: OffTreeSoft): string => {
+  const blend = s.w != null && s.mode !== "soft";
+  const tText = `T = ${Math.round(s.t * 1000) / 10}% of the ${Math.round(s.pot * 100) / 100}bb pot`;
+  const rule = blend ? `blend: ${Math.round(s.w! * 100)}% QRE + soft, ${tText}` : `soft, ${tText}`;
+  return s.softCombos == null ? `${blend ? "blend" : "soft range"} not computable (${s.why ?? "?"}): QRE narrowing kept`
     : `his range ${s.applied ? "carried as" : "would be"} ${combosText(s.softCombos)} combos instead of QRE's ${combosText(s.qreCombos)} ` +
-      `(soft, T = ${Math.round(s.t * 1000) / 10}% of the ${Math.round(s.pot * 100) / 100}bb pot${s.applied ? "" : "; OFFTREE_RANGE=log, QRE kept"})` +
+      `(${rule}${s.applied ? "" : "; OFFTREE_RANGE=log, QRE kept"})` +
       (s.lock ? (s.lock.ok ? "; the rest of the street node-locked to it" : `; node lock failed (${s.lock.why ?? "?"}), the rest of the street on the unlocked tree`) : "");
+};
 
 const RANKS = "23456789TJQKA";
 /** The spot family a pool range would be keyed by: street, the action and who took it, the board's high card. */

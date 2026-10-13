@@ -16,7 +16,7 @@ import { chipsAfter, contestedChips, effectiveStack } from "../utils/tableMoney/
 import { handFacts, type StreetRecord } from "./handFacts";
 import type { RangeCheck, StreetPath } from "./chainPath";
 import {
-  OFF_TREE_DUST, isOffTreePostflop, offTreeLock, offTreeLockOn, offTreeRangeMode, offTreeSoftT, offTreeStats, softOffTreeRange,
+  OFF_TREE_DUST, blendOffTreeRange, isOffTreePostflop, offTreeBlendW, offTreeLock, offTreeLockOn, offTreeRangeMode, offTreeSoftT, offTreeStats, softOffTreeRange,
   type OffTreeLine, type OffTreeSoft,
 } from "./offTree";
 import { currentRequestScope } from "./requestScope";
@@ -1972,10 +1972,13 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
           const t = offTreeSoftT();
           const potAt = nodeRec.potNode;
           const qreCombos = after.reduce((x, y) => x + y, 0);
-          const sr = softOffTreeRange(seats[actor]!.range, sols, ai, potAt, t);
+          // THE BLEND (default since 2026-10-13; log computes it too): half his QRE narrowing, half the soft range —
+          // OFFTREE_RANGE=soft keeps the soft range alone (services/offTree header)
+          const w = mode === "soft" ? undefined : offTreeBlendW();
+          const sr = w == null ? softOffTreeRange(seats[actor]!.range, sols, ai, potAt, t) : blendOffTreeRange(seats[actor]!.range, sols, ai, potAt, t, w);
           const soft: OffTreeSoft = "why" in sr
-            ? { mode, t, pot: potAt, qreCombos, softCombos: null, applied: false, why: sr.why }
-            : { mode, t, pot: potAt, qreCombos, softCombos: sr.combos, applied: mode === "soft" };
+            ? { mode, t, pot: potAt, qreCombos, softCombos: null, applied: false, why: sr.why, ...(w != null ? { w } : {}) }
+            : { mode, t, pot: potAt, qreCombos, softCombos: sr.combos, applied: mode === "soft" || mode === "blend", ...(w != null ? { w } : {}) };
           if (soft.applied && !("why" in sr)) {
             after = sr.range;
             if (offTreeLockOn()) pendingLock = { factor: sr.factor };

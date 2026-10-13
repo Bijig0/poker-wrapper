@@ -62,7 +62,7 @@ export class OffTreeLog {
         soft_mode, soft_t, qre_combos, soft_combos) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
         key, Date.now(), meta.clientHandId, meta.sessionId, meta.origin, l.street, board, meta.heroPos, l.seat, l.inPosition ? 1 : 0,
         l.action, l.code, l.betsize, l.potNode, JSON.stringify(l.codes), l.nodeFreq, l.maxHand, l.evGapBb, offTreeFamily(l, board), null,
-        !l.soft ? null : l.soft.softCombos == null ? "not-computable" : l.soft.applied ? "soft" : "log", l.soft?.t ?? null, l.soft?.qreCombos ?? null, l.soft?.softCombos ?? null);
+        !l.soft ? null : l.soft.softCombos == null ? "not-computable" : l.soft.applied ? l.soft.mode : "log", l.soft?.t ?? null, l.soft?.qreCombos ?? null, l.soft?.softCombos ?? null);
     } catch (e) {
       console.warn(`[off-tree] could not log a line: ${e instanceof Error ? e.message : e}`);
     }

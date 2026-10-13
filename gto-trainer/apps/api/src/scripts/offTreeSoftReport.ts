@@ -1,6 +1,8 @@
 /**
  * THE SOFT-RANGE EXPERIMENT'S DIAGNOSTIC (2026-10-06; services/offTree softOffTreeRange, register entries offtree-soft-range
- * and offtree-node-lock, switches OFFTREE_RANGE=soft|log|off, OFFTREE_RANGE_T, OFFTREE_LOCK=on|off). Reads the central
+ * and offtree-node-lock, switches OFFTREE_RANGE=blend|soft|log|off, OFFTREE_BLEND_W, OFFTREE_RANGE_T, OFFTREE_LOCK=on|off;
+ * since 2026-10-13 the default carries the BLEND and locks the rest of the street to it — soft_mode "blend"; the
+ * "soft" columns hold whichever range the rule carried). Reads the central
  * database only — no requests, no solves:
  *   - every off-tree villain line logged since --since (off_tree_lines): what the detector flagged, and the range carried
  *     after it — QRE's combos against the soft range's — by spot family;
@@ -42,7 +44,7 @@ const byMode = new Map<string, number>();
 for (const l of lines) byMode.set(l.soft_mode ?? "(none: OFFTREE_RANGE=off or old code)", (byMode.get(l.soft_mode ?? "(none: OFFTREE_RANGE=off or old code)") ?? 0) + 1);
 console.log(`  by mode: ${[...byMode].map(([k, n]) => `${k} ${n}`).join(" · ") || "—"}`);
 const soft = lines.filter((l) => l.soft_combos != null);
-console.log(`  range after the action (median): QRE ${c3(med(soft.map((l) => l.qre_combos ?? NaN)))} combos → soft ${c3(med(soft.map((l) => l.soft_combos ?? NaN)))}`);
+console.log(`  range after the action (median): QRE ${c3(med(soft.map((l) => l.qre_combos ?? NaN)))} combos → carried ${c3(med(soft.map((l) => l.soft_combos ?? NaN)))}`);
 const fams = new Map<string, Line[]>();
 for (const l of lines) fams.set(l.family, [...(fams.get(l.family) ?? []), l]);
 console.log("\n  by family:");
