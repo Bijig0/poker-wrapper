@@ -9,7 +9,10 @@
  *   - a node-lock POST that fails is sent once more on the same account (the parent lives there);
  *   - (2026-10-13) a re-post leaves out EVERY account the read has hung or walled on, not only the last one — it used to
  *     ping-pong back to the account that hung first — and the read never waits past its own clock (not for a poll wait,
- *     not for a re-post onto a slow account: that one lands for the next ask).
+ *     not for a re-post onto a slow account: that one lands for the next ask);
+ *   - (independent review 2026-10-13) a STORED tree (gc:) whose minted solve was re-posted and then walled is really
+ *     forgotten — the next miss mints it afresh, not on the walled replacement — and a tree / solution reply that is not
+ *     JSON moves on to the next account, never a throw out of the solve.
  * The network is a fake fetch keyed on the bearer token (one per account); a hang rejects when the poll's own
  * AbortSignal fires, exactly as a real timed-out request does.
  *
@@ -20,11 +23,15 @@
  * the socket would. Every test has its own timeout too (T), which works only because the hang holds that timer.
  */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /** each test's own timeout: the longest (a read polled to its 4 s end) takes ~4 s */
 const T = 15_000;
 
 let P: typeof import("./gtowAiPreflop");
+let C: typeof import("./gtowSolveCache");
 let gtowSessions: typeof import("./gtowSessions").gtowSessions;
 const POOL_METHODS = ["route", "routeIgnoringBlocks", "liveFirst", "tokenFor", "bestToken", "noteSuccess", "noteFailure", "noteRouted", "forceRefresh"] as const;
 const savedPool: { m: string; own: boolean; fn: unknown }[] = [];
@@ -35,6 +42,7 @@ const savedEnv: Record<string, string | undefined> = {};
 
 beforeAll(async () => {
   P = await import("./gtowAiPreflop");
+  C = await import("./gtowSolveCache");
   ({ gtowSessions } = await import("./gtowSessions"));
   const s = gtowSessions as any;
   for (const m of POOL_METHODS) savedPool.push({ m, own: Object.prototype.hasOwnProperty.call(s, m), fn: s[m] });
@@ -54,6 +62,7 @@ afterAll(() => {
   const s = gtowSessions as any;
   for (const { m, own, fn } of savedPool) { if (own) s[m] = fn; else delete s[m]; }
   for (const k of ENV) { if (savedEnv[k] === undefined) delete process.env[k]; else process.env[k] = savedEnv[k]; }
+  P.setPreflopSolveCache(null);
   P.resetAiPreflopMemory();
 });
 
@@ -66,10 +75,39 @@ beforeEach(() => {
 });
 afterEach(() => {
   globalThis.fetch = realFetch;
+  P.setPreflopSolveCache(null);
   P.resetAiPreflopMemory();
   routeIds = ["primary", "secondary"];
   failures = [];
+  for (const c of caches.splice(0)) c.close();
+  for (const d of dirs.splice(0)) try { rmSync(d, { recursive: true, force: true }); } catch { /* WAL handle settling */ }
 });
+/** a solve cache of the test's own, on a temp file (the process's is off under bun test) */
+const dirs: string[] = [];
+const caches: { close(): void }[] = [];
+const tempCache = () => {
+  const d = mkdtempSync(join(tmpdir(), "gtow-failover-")); dirs.push(d);
+  const c = new C.GtowSolveCache({ path: join(d, "gtow-cache.sqlite"), flushMs: 1 });
+  caches.push(c);
+  P.setPreflopSolveCache(c);
+  return c;
+};
+/** BODY as a tree the store holds (an earlier process solved it and kept one node, 'R9' — none the tests read): its
+ *  stored id, which ensureSolution hands out with no request */
+const storedTree = (): string => {
+  const c = tempCache();
+  const ck = C.cacheKeyOf("pre", BODY, { actions: "", board: "" });
+  c.noteTree(ck.key, "pre", ck.body);
+  c.putNode(ck.key, C.nodeAddr({ preflop: "R9" }), C.NODE_OK, JSON.stringify(NODE));
+  return C.storedSolId(ck.key);
+};
+/** console.log captured for the body of `fn` (and echoed): the [gtow-route] / [gtow-preflop-repost] lines */
+async function logged<R>(fn: () => Promise<R>): Promise<{ r: R; lines: string[] }> {
+  const lines: string[] = [];
+  const log = console.log;
+  console.log = (...a: unknown[]) => { lines.push(a.map(String).join(" ")); log(...a); };
+  try { return { r: await fn(), lines }; } finally { console.log = log; }
+}
 
 interface Seen { kind: "tree" | "solution" | "lock" | "poll"; acct: string; sol?: string | null; body?: any }
 interface Fake {
@@ -80,6 +118,10 @@ interface Fake {
   hangPolls: Map<string, number>;
   /** accounts whose tree POST answers 201 with a body that is not JSON */
   badTree: Set<string>;
+  /** accounts whose solution POST (not a lock) answers 201 with a body that is not JSON */
+  badSolution: Set<string>;
+  /** tree ids sent as numbers (they are strings otherwise) */
+  numericTreeIds: boolean;
   /** accounts whose polls answer 429 */
   walled: Set<string>;
   /** accounts whose polls answer 204 "not solved yet" at once, every time */
@@ -95,8 +137,8 @@ interface Fake {
 }
 const NODE = { action_solutions: [{ action: { code: "R2.5", type: "RAISE", betsize: "2.5" }, strategy: new Array(1326).fill(1) }] };
 function fakeGtow(): Fake {
-  const f: Fake = { seen: [], hang: new Set(), hangPolls: new Map(), badTree: new Set(), walled: new Set(), unsolved: new Set(), treeFails: new Set(),
-    slowTree: new Map(), lockFails: new Map(), ownerOf: new Map() };
+  const f: Fake = { seen: [], hang: new Set(), hangPolls: new Map(), badTree: new Set(), badSolution: new Set(), numericTreeIds: false, walled: new Set(),
+    unsolved: new Set(), treeFails: new Set(), slowTree: new Map(), lockFails: new Map(), ownerOf: new Map() };
   let seq = 0;
   const timeoutErr = () => Object.assign(new Error("The operation timed out."), { name: "TimeoutError" });
   /** a poll that never replies: rejected when its own AbortSignal fires (the read's bound), as a real one is. `hold`
@@ -118,7 +160,7 @@ function fakeGtow(): Fake {
       if (f.badTree.has(acct)) return new Response("<html>bad gateway</html>", { status: 201 });
       const slow = f.slowTree.get(acct);
       if (slow) return new Promise<Response>((res) => setTimeout(() => res(Response.json({ id: `tree-${++seq}` }, { status: 201 })), slow));
-      return Response.json({ id: `tree-${++seq}` }, { status: 201 });
+      return Response.json({ id: f.numericTreeIds ? 1000 + ++seq : `tree-${++seq}` }, { status: 201 });
     }
     if (u.pathname.endsWith("/custom-solutions/")) {
       const body = JSON.parse(init.body);
@@ -127,7 +169,7 @@ function fakeGtow(): Fake {
       if (kind === "lock") {
         const left = f.lockFails.get(acct) ?? 0;
         if (left > 0) { f.lockFails.set(acct, left - 1); return failed(); }
-      }
+      } else if (f.badSolution.has(acct)) return new Response("<html>bad gateway</html>", { status: 201 });
       const id = `sol-${++seq}-${acct}`;
       f.ownerOf.set(id, acct);
       return Response.json({ id }, { status: 201 });
@@ -436,20 +478,135 @@ describe("a re-post another read made", () => {
 });
 
 describe("a re-post whose reply is not JSON", () => {
-  it("is a failed re-post, said in the log — never a throw out of the read", async () => {
+  it("is a failed re-post, said in the log with its reason — never a throw out of the read", async () => {
     process.env.GTOW_NODE_TIMEOUT_MS = "1500";
     const f = fakeGtow();
     f.hang.add("primary"); f.badTree.add("secondary");
     const made = await P.poolLockSeams.solve("k-bad-tree", BODY, { preflop: true });
-    const lines: string[] = [];
-    const log = console.log;
-    console.log = (...a: unknown[]) => { lines.push(a.map(String).join(" ")); log(...a); };
-    let n: Awaited<ReturnType<typeof P.fetchNode>>;
-    try { n = await P.fetchNode((made as { solId: string }).solId, ""); } finally { console.log = log; }
+    const { r: n, lines } = await logged(() => P.fetchNode((made as { solId: string }).solId, ""));
     expect("error" in n).toBe(true);
     expect((n as { error: string }).error).toMatch(/did not return the node in time/);
-    expect(lines.some((l) => /\[gtow-preflop-repost\].*NOT re-posted.*the re-post threw/.test(l))).toBe(true);
+    // the account's failure, as a failed request is (it used to throw, caught only by relocate: "the re-post threw")
+    expect(lines.some((l) => /\[gtow-route\] secondary: the preflop tree reply was not JSON .*— the next account is tried/.test(l))).toBe(true);
+    expect(lines.some((l) => /\[gtow-preflop-repost\].*NOT re-posted.*custom-trees reply on secondary was not JSON/.test(l))).toBe(true);
     expect(trees(f)).toEqual(["primary", "secondary"]);
+  }, T);
+
+  it("a re-post that throws all the same (anything unforeseen) is said in the log — never a throw out of the read", async () => {
+    process.env.GTOW_NODE_TIMEOUT_MS = "1500";
+    const f = fakeGtow();
+    f.hang.add("primary");
+    const made = await P.poolLockSeams.solve("k-repost-throws", BODY, { preflop: true });
+    const s = gtowSessions as any;
+    const tokenFor = s.tokenFor;
+    s.tokenFor = async (id: string) => { if (id === "secondary") throw new Error("token store unreadable"); return `tok-${id}`; };
+    try {
+      const { r: n, lines } = await logged(() => P.fetchNode((made as { solId: string }).solId, ""));
+      expect("error" in n).toBe(true);
+      expect((n as { error: string }).error).toMatch(/did not return the node in time/);
+      expect(lines.some((l) => /\[gtow-preflop-repost\].*NOT re-posted.*the re-post threw: token store unreadable/.test(l))).toBe(true);
+      expect(trees(f)).toEqual(["primary"]);
+    } finally { s.tokenFor = tokenFor; }
+  }, T);
+});
+
+describe("a tree or solution reply that is not JSON (independent review 2026-10-13)", () => {
+  it("a tree reply: the next account is tried, said in the log — it used to throw out of the solve", async () => {
+    const f = fakeGtow();
+    f.badTree.add("primary");
+    const { r, lines } = await logged(() => P.poolLockSeams.solve("k-bad-tree-first", BODY, { preflop: true }));
+    expect("solId" in r).toBe(true);
+    expect(trees(f)).toEqual(["primary", "secondary"]);
+    expect(f.ownerOf.get((r as { solId: string }).solId)).toBe("secondary");
+    expect(lines.some((l) => l.includes("[gtow-route] primary: the preflop tree reply was not JSON (201: <html>bad gateway</html>) — the next account is tried"))).toBe(true);
+    // the solve's polls carry its own account's token
+    const n = await P.fetchNode((r as { solId: string }).solId, "");
+    expect("error" in n).toBe(false);
+    expect(polls(f, "primary")).toBe(0);
+  }, T);
+
+  it("a solution reply: the same — the tree is posted afresh on the next account", async () => {
+    const f = fakeGtow();
+    f.badSolution.add("primary");
+    const { r, lines } = await logged(() => P.poolLockSeams.solve("k-bad-solution", BODY, { preflop: true }));
+    expect("solId" in r).toBe(true);
+    expect(f.seen.filter((x) => x.kind !== "poll").map((x) => `${x.kind}@${x.acct}`))
+      .toEqual(["tree@primary", "solution@primary", "tree@secondary", "solution@secondary"]);
+    expect(f.ownerOf.get((r as { solId: string }).solId)).toBe("secondary");
+    expect(lines.some((l) => l.includes("[gtow-route] primary: the preflop solution reply was not JSON (201: <html>bad gateway</html>) — the next account is tried"))).toBe(true);
+  }, T);
+
+  it("a good reply's id is passed on as GTO Wizard sent it: a numeric tree id reaches the solution POST as a number", async () => {
+    const f = fakeGtow();
+    f.numericTreeIds = true;
+    const r = await P.poolLockSeams.solve("k-numeric-tree", BODY, { preflop: true });
+    expect("solId" in r).toBe(true);
+    const sent = f.seen.find((x) => x.kind === "solution")!.body.custom_tree_id;
+    expect(typeof sent).toBe("number");
+  }, T);
+
+  it("nobody left: a refusal with the reason, not a throw — and not memoised, the next ask tries again", async () => {
+    const f = fakeGtow();
+    f.badTree.add("primary"); f.badSolution.add("secondary");
+    const r = await P.poolLockSeams.solve("k-bad-all", BODY, { preflop: true });
+    expect("error" in r).toBe(true);
+    expect((r as { error: string }).error).toMatch(/custom-solutions reply on secondary was not JSON/);
+    f.badTree.clear(); f.badSolution.clear();
+    const again = await P.poolLockSeams.solve("k-bad-all", BODY, { preflop: true });
+    expect("solId" in again).toBe(true);
+  }, T);
+
+  it("materialising a stored tree: the next account is tried — not a throw out of the read", async () => {
+    const f = fakeGtow();
+    const stored = storedTree();
+    const made = await P.poolLockSeams.solve("k-bad-stored", BODY, { preflop: true });
+    const gc = (made as { solId: string }).solId;
+    expect(gc).toBe(stored);
+    expect(trees(f)).toEqual([]);
+    f.badTree.add("primary");
+    const n = await P.fetchNode(gc, "");
+    expect("error" in n).toBe(false);
+    expect(trees(f)).toEqual(["primary", "secondary"]);
+    expect(polls(f, "primary")).toBe(0);
+    expect(polls(f, "secondary")).toBe(1);
+  }, T);
+});
+
+describe("a STORED tree (gc:) whose minted solve was re-posted, then walled (independent review 2026-10-13)", () => {
+  it("is really forgotten: the next miss mints the tree afresh through routing — never back onto the walled replacement", async () => {
+    routeIds = ["primary", "secondary", "ultra-2"];
+    const f = fakeGtow();
+    // the store holds this tree (an earlier process solved it): handed out as gc:<key>, no request
+    const stored = storedTree();
+    const made = await P.poolLockSeams.solve("k-stored-wall", BODY, { preflop: true });
+    const gc = (made as { solId: string }).solId;
+    expect(gc).toBe(stored);
+    expect(trees(f)).toEqual([]);
+    // a node the store lacks mints it (on primary); primary hangs → re-posted on secondary, which answers
+    f.hang.add("primary");
+    expect("error" in (await P.fetchNode(gc, ""))).toBe(false);
+    expect(trees(f)).toEqual(["primary", "secondary"]);
+    // secondary walls, with no time left to re-post: the read ends on the 429 and the solve is forgotten
+    f.walled.add("secondary");
+    process.env.GTOW_PREFLOP_REPOST_MS = "100000";
+    const walled = await P.fetchNode(gc, "F");
+    expect((walled as { error: string }).error).toMatch(/429/);
+    expect(failures).toEqual([{ id: "secondary", status: 429 }]);
+    // the pool now routes around the walled account (noteFailure, live). The next miss of the SAME gc id mints the tree
+    // afresh there — it used to go gc → the first solve minted (primary's) → moved → secondary's, walled, again
+    routeIds = ["ultra-2"];
+    const onSecondary = polls(f, "secondary");
+    const again = await P.fetchNode(gc, "F");
+    expect("error" in again).toBe(false);
+    expect(trees(f)).toEqual(["primary", "secondary", "ultra-2"]);
+    expect(polls(f, "secondary")).toBe(onSecondary);
+    // the gc: memo is kept (it costs nothing): the same id, no tree posted; a node already read costs no request
+    const same = await P.poolLockSeams.solve("k-stored-wall", BODY, { preflop: true });
+    expect((same as { solId: string }).solId).toBe(gc);
+    const seen = f.seen.length;
+    expect("error" in (await P.fetchNode(gc, ""))).toBe(false);
+    expect(f.seen.length).toBe(seen);
+    expect(trees(f).length).toBe(3);
   }, T);
 });
 
