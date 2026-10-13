@@ -121,10 +121,13 @@ export function buildApp(): Hono {
     await next();
     if (origin) c.res.headers.set("Access-Control-Allow-Origin", origin);
   });
-  // someone DOING something on these pages (any request but a read; /quit is a new instance taking over) holds the
-  // wrapper's own relaunch for a while (build.ts, 2026-10-13): it never pulls the page out from under a click
+  // someone DOING something on these pages holds the wrapper's own relaunch for a while (build.ts, 2026-10-13): it
+  // never pulls the page out from under a click. A PERSON is a browser — a page's POST carries an Origin header — and
+  // not a server-side caller: the study API's poller POSTs /panel/answer every second even with no session, and when
+  // that counted the self-relaunch was held for as long as the API ran (2026-10-13 04:22-13:29). /quit is a new
+  // instance taking over.
   app.use(async (c, next) => {
-    if (c.req.method !== "GET" && c.req.method !== "HEAD" && new URL(c.req.url).pathname !== "/quit") noteUserAction();
+    if (c.req.method !== "GET" && c.req.method !== "HEAD" && c.req.header("origin") && new URL(c.req.url).pathname !== "/quit") noteUserAction();
     await next();
   });
   app.onError((e: any) => json(500, { ok: false, error: `${e?.name && e.name !== "Error" ? e.name : "Exception"}: ${e?.message ?? e}` }));

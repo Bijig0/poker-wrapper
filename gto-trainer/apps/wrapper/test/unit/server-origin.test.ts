@@ -30,6 +30,18 @@ test("the study API (a local origin) and server-side callers (no Origin) pass th
   expect(serverSide.status).toBe(404);
 });
 
+test("only a browser's POST counts as someone using the pages (the self-relaunch's hold) — never the study API's poller", async () => {
+  const { userActionAt } = await import("../../src/build");
+  const before = userActionAt();
+  // the poller's /panel/answer push: server-side, no Origin — every second, with or without a session
+  await app.request("/panel/answer", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+  await app.request("/definitely-not-a-route", { method: "POST", body: "{}" });
+  expect(userActionAt()).toBe(before);
+  // a page's POST (same-origin fetch sends Origin) is
+  await app.request("/definitely-not-a-route", { method: "POST", headers: { Origin: "http://127.0.0.1:7700" }, body: "{}" });
+  expect(userActionAt()).toBeGreaterThan(before);
+});
+
 test("the CORS header names only an allowed origin — a foreign page cannot read /state (hero's cards)", async () => {
   const foreign = await app.request("/definitely-not-a-route", { headers: { Origin: "https://evil.example" } });
   expect(foreign.headers.get("access-control-allow-origin")).toBeNull();
