@@ -151,7 +151,11 @@ describe.skipIf(gated)("hand 4920544353: the BTN's turn jam is an all-in in the 
     const turn = treesOn("TURN");
     expect(turn.length).toBeGreaterThan(0);
     for (const t of turn) { expect(t.stack).toBe(21.6); expect([t.oopPos, t.mid?.pos ?? null, t.ipPos]).toEqual(["CO", null, "BTN"]); }
-    expect(r.warning).toContain("fold:SB at 31.6bb behind (BB 31.4 / CO 97.4 / BTN 31.6), not the 49.8bb of the whole field");
+    // CHANGED 2026-10-14 evening (replanKeeping): hero's flop decision (facing the BB's bet) was answered on ghost:BTN +
+    // ghost:SB; at the jam the BTN has raised (ghost:BTN dropped) and the SB has folded, so the kept ghost:SB IS the exact
+    // BB/CO/BTN tree — the same tree the fresh pick called "fold:SB", now under the label the hand's walks were recorded with
+    expect(r.warning).toContain("ghost:SB at 31.6bb behind (BB 31.4 / CO 97.4 / BTN 31.6), not the 49.8bb of the whole field");
+    expect(r.warning).toContain("nothing collapsed — the SB folded since, so ghost:SB is the tree of the 3 seats still in: ghost:BTN dropped — the BTN raised the flop");
   }, 120_000);
 
   test("every multiway node 429 (as live): no answer, named — never the heads-up last resort", async () => {
@@ -159,7 +163,7 @@ describe.skipIf(gated)("hand 4920544353: the BTN's turn jam is an all-in in the 
     const r = await replayTo(JAM);
     multiway429 = false;
     expect(r.ok).toBe(false);
-    expect(r.reason).toContain("fold:SB: node: spot-solution 429");
+    expect(r.reason).toContain("ghost:SB: node: spot-solution 429");   // was "fold:SB" before replanKeeping (2026-10-14): the same tree
     expect([...trees.values()].some((t) => /^last-resort/.test(t.planTag ?? ""))).toBe(false);
     expect(treesOn("TURN")).toEqual([]);
   }, 120_000);

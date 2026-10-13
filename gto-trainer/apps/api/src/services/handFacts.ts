@@ -2,7 +2,9 @@ import { Database } from "bun:sqlite";
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import type { PlanRecipe } from "./multiwayCollapse";
 import type { PreflopPin, PreflopNodeRecord } from "./preflopPin";
+import type { RerootFact } from "./multiwayRerootKeep";
 import { emptyCounts, type RequestCounts } from "./requestScope";
 import { handFactsDbPath, openStore } from "./storePaths";
 
@@ -109,6 +111,28 @@ export interface HandDoc {
   trees?: TreeRecord[];
   /** GTO Wizard requests spent on this hand, by the origin of the call that made them ("live", "warm", …) */
   requests?: Record<string, RequestCounts>;
+  /** the 4+ way collapses the hand's postflop answers are walked on (fastSolve.keepCollapses) */
+  collapses?: KeptCollapses;
+  /** the hand's KEPT RE-ROOT (services/multiwayRerootKeep) — only on the hand's own `<hand>#reroot` row, never on the
+   *  hand's doc: its entering ranges are ~14 KB a seat, and the hand's doc is rewritten by every other fact */
+  reroot?: RerootFact;
+  at: number;
+}
+
+/**
+ * THE HAND'S COLLAPSES (2026-10-14): the recipes of the three-seat trees a 4+ way hand was last answered on, so a later
+ * decision walks the same trees (multiwayCollapse.replanKeeping) — after an API restart mid-hand too. A fact: which
+ * trees the hand's answers were read on cannot be re-derived once a villain has folded since.
+ */
+export interface KeptCollapses {
+  heroPos: string;
+  recipes: PlanRecipe[];
+  mode: "blend" | "single";
+  /** the pick's why without its "folded since" clause */
+  why: string;
+  /** the postflop line the recipes were kept on ("seat:X|F|C|R|RAI" per street): a decision whose line does not extend it
+   *  is not later in this hand (a replay from the start) and ignores them */
+  line?: string[][];
   at: number;
 }
 
@@ -117,8 +141,11 @@ const STREETS_MAX = 60;
 const TREES_MAX = 40;
 const PREFLOP_NODES_MAX = 12;
 
-/** A key worth persisting: a real site hand id, not the wrapper's small per-process counter (see above). */
-export const isDurableKey = (key: string): boolean => !!key && !/^\d{1,6}$/.test(key);
+/** A key worth persisting: a real site hand id, not the wrapper's small per-process counter (see above). A derived key
+ *  (`<hand>#reroot`, `<hand>#lr-narrow`) is as durable as the hand it derives from. */
+export const isDurableKey = (key: string): boolean => { const base = key.split("#")[0] ?? ""; return !!base && !/^\d{1,6}$/.test(base); };
+/** the hand's kept-re-root row (HandDoc.reroot) */
+const rerootKeyOf = (key: string): string => `${key}#reroot`;
 
 function assertTestSafePath(path: string): void {
   if (process.env.NODE_ENV !== "test") return;
@@ -280,6 +307,17 @@ class HandFacts {
   forgetStreets(key: string): void {
     const d0 = this.get(key);
     if (d0?.streets || d0?.trees) this.update(key, (d) => { delete d.streets; delete d.trees; });
+    // the kept re-root rests on the streets walked: a cold walk of the hand starts without it
+    this.forgetReroot(key);
+  }
+
+  // ── the hand's kept re-root (multiwayRerootKeep): its own row, `<hand>#reroot` ─────────────────────────────────
+  reroot(key: string): RerootFact | undefined { return key ? this.get(rerootKeyOf(key))?.reroot : undefined; }
+  setReroot(key: string, fact: RerootFact): void {
+    if (key) this.update(rerootKeyOf(key), (d) => { d.reroot = fact; });
+  }
+  forgetReroot(key: string): void {
+    if (key && this.get(rerootKeyOf(key))) this.forget(rerootKeyOf(key));
   }
 
   // ── the trees the chain asked for (TreeRecord) ───────────────────────────────────────────────────────────────
@@ -290,6 +328,13 @@ class HandFacts {
       && (x.origin ?? null) === (rec.origin ?? null) && !!x.reroute === !!rec.reroute;
     if (this.trees(key).some(same)) return;
     this.update(key, (d) => { d.trees = [...(d.trees ?? []), rec].slice(-TREES_MAX); });
+  }
+
+  // ── the collapses a 4+ way hand is answered on (KeptCollapses) ─────────────────────────────────────────────────
+  collapses(key: string): KeptCollapses | undefined { return this.get(key)?.collapses; }
+  setCollapses(key: string, rec: KeptCollapses): void { this.update(key, (d) => { d.collapses = rec; }); }
+  forgetCollapses(key: string): void {
+    if (this.get(key)?.collapses) this.update(key, (d) => { delete d.collapses; });
   }
 
   // ── the requests the hand cost ──────────────────────────────────────────────────────────────────────────────
@@ -304,6 +349,7 @@ class HandFacts {
 
   /** Forget a hand entirely — memory and disk (tests, and a replay that wants a cold hand). */
   forget(key: string): void {
+    if (key && !key.endsWith("#reroot")) this.forgetReroot(key);
     this.mem.delete(key);
     if (!isDurableKey(key)) return;
     try { this.open(); this.stmts?.del.run(key); } catch { /* nothing to forget */ }
