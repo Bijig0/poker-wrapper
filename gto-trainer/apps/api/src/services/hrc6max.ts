@@ -214,8 +214,9 @@ export function poolLimpChart(tokens: string[], hero: Seat6 | ""): PoolLimpPick 
  * preflop decision of his in the hand — his own node (fold / over-limp / iso) and the later ones (facing the limper's
  * limp-raise, a squeeze, an iso behind his over-limp), so the hand is read on one tree. Returns the limper's seat; the
  * picker adds the stack test (a deep limper: the tree locks him at the deep range). DEEP_LIMP_POOLH=off = no.
+ * Since 2026-10-13 also TWO other limps in front of hero (deepLimpTwoOn) — `limpers` names both, the picker wants both deep.
  */
-export function poolFreeChart(tokens: string[], hero: Seat6 | ""): (PoolLimpPick & { limper: Seat6 }) | null {
+export function poolFreeChart(tokens: string[], hero: Seat6 | ""): (PoolLimpPick & { limper: Seat6; limpers: Seat6[] }) | null {
   if (String(process.env.DEEP_LIMP_POOLH ?? "on").toLowerCase() === "off") return null;
   if (hero !== "HJ" && hero !== "CO" && hero !== "BTN") return null;
   const toks = tokens.map((t) => String(t ?? "").trim().toUpperCase());
@@ -223,11 +224,31 @@ export function poolFreeChart(tokens: string[], hero: Seat6 | ""): (PoolLimpPick
   const h = SEATS6.indexOf(hero);
   const others: number[] = [];
   for (let i = 0; i < Math.min(4, firstRaise < 0 ? toks.length : firstRaise); i++) if (i !== h && toks[i] === "C") others.push(i);
-  if (others.length !== 1 || others[0]! > h) return null;
+  if (!others.length || others.some((i) => i > h)) return null;
   const limper = SEATS6[others[0]!]!;
-  return { id: POOL_FREE_CHART, limper,
-    note: `hero-free pool limp tree (the ${limper}'s first-in limp at the pool's measured range, hero's own node solved — not GTO, our own read of the pool)` };
+  if (others.length === 1) {
+    return { id: POOL_FREE_CHART, limper, limpers: [limper],
+      note: `hero-free pool limp tree (the ${limper}'s first-in limp at the pool's measured range, hero's own node solved — not GTO, our own read of the pool)` };
+  }
+  // TWO LIMPERS IN FRONT OF HERO (see deepLimpTwoOn): the first one's limp locked, the second one's over-limp solved —
+  // never when hero over-limped too (three limps: the tree's C-C-C nodes are untrained; pool3 holds three limpers)
+  if (others.length !== 2 || !deepLimpTwoOn() || toks[h] === "C") return null;
+  const second = SEATS6[others[1]!]!;
+  return { id: POOL_FREE_CHART, limper, limpers: [limper, second],
+    note: `two deep limpers on the hero-free tree (the ${limper}'s first-in limp at the pool's measured range, the ${second}'s over-limp solved behind it, hero's own node solved — not GTO, our own read of the pool)` };
 }
+
+/**
+ * TWO DEEP LIMPERS IN FRONT OF HERO (2026-10-13, Brady: "add it … I trust the results"). Hero CO/BTN behind two deep
+ * non-blind limps read D100_olimp, whose two-limp nodes are untrained (reach 1 in 7-14k hands), so GTO Wizard answered
+ * on a tree that holds ONE non-SB limper ("LINE FITTED TO THE TREE": the first limper read as a fold) or an uneven tree
+ * dropped one ("CALLER CAP") — one limper deleted, the other a residue range. D100_olimp_poolh holds both: the first-in
+ * limp locked at limp_first_deep (3.08%), the second seat's over-limp SOLVED behind it (2.8-3.6% of his range; the pool's
+ * overlimp_deep is 7.08%, n=97), and those nodes are trained (C-C / F-C-C / C-F-C / C-C-F: reach ~9e-4, regret
+ * 0.010-0.013 against the 0.03 bound). DEEP_LIMP_POOLH_TWO=off = these decisions as before. Register entry
+ * approximations.ts "pool-free-limp-chart-two".
+ */
+export const deepLimpTwoOn = (): boolean => String(process.env.DEEP_LIMP_POOLH_TWO ?? "on").trim().toLowerCase() !== "off";
 
 /**
  * A SHORT SEAT STILL IN BEHIND A LONE DEEP LIMPER (2026-10-13, deep-limper gap #1; Brady: "sounds good"). NOT GTO — OUR
@@ -625,7 +646,7 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
     // the even hero-free tree first for hero in HJ/CO/BTN behind one DEEP limper (as dealt, so a limper who later folded
     // keeps the hand on it); a short one is the uneven trees' (and the pool limp lock's) — never the deep range
     const freePick = open === "limp" && depth >= DEEP6 ? poolFreeChart(tokens, me) : null;
-    const free = freePick && Number(byPos[freePick.limper] ?? NaN) > 85 ? freePick : null;
+    const free = freePick && freePick.limpers.every((p) => Number(byPos[p] ?? NaN) > 85) ? freePick : null;
     if (free) notes.push(free.note);
     else if (pool) notes.push(pool.note);
     const ladder = evenLadder(depth, open);
@@ -754,14 +775,16 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
     const mode = deepLimpShortMode();
     if (mode === "off" || rung !== DEEP6) return null;
     const freePick = poolFreeChart(tokens, me);
-    if (!freePick || !(Number(byPos[freePick.limper] ?? NaN) > 85)) return null;
+    if (!freePick || !freePick.limpers.every((p) => Number(byPos[p] ?? NaN) > 85)) return null;
     if (readableAgg && shorts.some(([p]) => p === readableAgg)) return null;
-    const live = shorts.filter(([p]) => p !== freePick.limper);
+    const live = shorts.filter(([p]) => !freePick.limpers.includes(p));
     if (!live.length) return null;
     // the short that gets modelled: the first still to act behind hero, else the shortest
     const seat = after.find((p) => live.some(([q]) => q === p)) ?? live.slice().sort((a, b) => a[1] - b[1])[0]![0];
     const bb = oppStack(seat)!;
-    const unevenFree = seat === "CO" || seat === "BTN";
+    // two limpers in front: the even tree only (its two-limp nodes are the trained ones checked; the uneven trees' are not)
+    const two = freePick.limpers.length === 2;
+    const unevenFree = !two && (seat === "CO" || seat === "BTN");
     if (!unevenFree && mode === "cobtn") return null;
     // what answered here before, behind it (its prose and gaps belong to that pick, not to this one); none = even()
     // already reads the hero-free tree
@@ -774,7 +797,8 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
       ? LIMP_SHORTS6.filter((r) => Math.abs(Math.log(r / bb)) < evenGap).sort((x, y) => Math.abs(Math.log(x / bb)) - Math.abs(Math.log(y / bb)))
       : [];
     const ids = [...rungs.map((r) => unevenLimpFreeChartId(r, seat)), POOL_FREE_CHART];
-    notes.push(rungs.length
+    notes.push(two ? `${freePick.note} — the ${seat}'s ${Math.round(bb)}bb short stack is not modelled`
+      : rungs.length
       ? `short seat behind a lone deep limper: the ${freePick.limper}'s limp at the pool's deep range and the ${seat}'s ${Math.round(bb)}bb on his hero-free uneven tree (${rungs[0]}bb), then the 100bb one — not GTO, our own read of the pool`
       : `short seat behind a lone deep limper: the ${freePick.limper}'s limp at the pool's deep range on the 100bb hero-free tree — the ${seat}'s ${Math.round(bb)}bb is not modelled (not GTO, our own read of the pool)`);
     const others = live.filter(([p]) => p !== seat);
