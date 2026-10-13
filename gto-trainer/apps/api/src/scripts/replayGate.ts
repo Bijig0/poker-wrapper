@@ -104,7 +104,7 @@ const WORKER = flag("worker");
 const KEEP_TEMP = flag("keep-temp") || flag("reuse-copy");
 if (!WORKER) {
   if (flag("reuse-copy") && !arg("work")) { console.error("--reuse-copy needs --work <dir>: the default work dir is a new one every run (replay-gate-<run id>)"); process.exit(64); }
-  const git =(...a: string[]) => { const r = spawnSync("git", a, { cwd: import.meta.dir, encoding: "utf8" }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
+  const git = (...a: string[]) => { const r = spawnSync("git", a, { cwd: import.meta.dir, encoding: "utf8" }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
   let top: string | null = null;        // the checkout's top (git worktrees need it; a run without --control does not)
   try { top = git("rev-parse", "--show-toplevel"); } catch { /* not a checkout: --control is refused below */ }
   const api = "gto-trainer/apps/api";
