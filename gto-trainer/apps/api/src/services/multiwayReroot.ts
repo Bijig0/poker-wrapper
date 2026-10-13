@@ -27,6 +27,7 @@ import { withRequestScope } from "./requestScope";
 import { contestedChips, effectiveStack, moneyEntering, moneyState, streetChips, streetFromTokens } from "../utils/tableMoney/tableMoney";
 import { planCollapses, pickCollapses, type Picked, type SeatTok } from "./multiwayCollapse";
 import { pickDeadMoney, planDeadMoney, replayKept, walkPlays } from "./deadMoneyCollapse";
+import { forgetRerootFact, keptReroot, keptRerootFact, rerootFactOf, rerootKeepOn, saveRerootFact } from "./multiwayRerootKeep";
 export { walkPlays };
 
 type SeatSpec = Pick<AiChainSpec, "oopPos" | "ipPos" | "oopRange" | "ipRange" | "midPos" | "midRange" | "heroSeat">;
@@ -55,6 +56,10 @@ export interface RerootArgs {
   /** the hand's key (the last resort's narrowing only): the walks checkpoint under `<key>#lr-narrow` — the next street
    *  of the hand starts from the earlier streets walked — and narrowForLastResort keeps its result per hand */
   memoKey?: string;
+  /** the hand's key (the re-root, 2026-10-14; ignored with REROOT_KEEP=off): the re-root is KEPT for the rest of the hand
+   *  (multiwayRerootKeep — a later decision runs the same chain, the streets since appended) and its narrowing walks
+   *  checkpoint under `<key>#reroot-narrow` (a concurrent decision joins them) */
+  handKey?: string;
   /** the re-root's NARROWING DEADLINE (epoch ms; fastSolve: the decision's start + REROOT_NARROW_MS): a walk that failed
    *  for a transient reason is retried once only while REROOT_RETRY_MIN_MS of it remain, and the retry is waited for
    *  until it at most. Absent = no retry (the walk's first verdict is final). */
@@ -81,7 +86,11 @@ export type RerootResult =
        *  walk that held them failed (those are also in `failedWalks[].lost`) */
       unnarrowed?: string[];
       /** narrowing walks that failed (after the retry, if one ran): the re-root carried on without them */
-      failedWalks?: WalkFailure[] }
+      failedWalks?: WalkFailure[];
+      /** the hand's re-root KEPT from an earlier decision (multiwayRerootKeep): the clause for the note */
+      kept?: string;
+      /** the hand had a kept re-root this decision could not use (re-rooted afresh): why */
+      notKept?: string }
   | { ok: false; why: string };
 
 /**
@@ -290,7 +299,7 @@ export function narrowingPlan(a: RerootArgs, first: number, m: ReturnType<typeof
 export async function narrowThroughEarlier(a: RerootArgs, first: number, m: ReturnType<typeof moneyThrough>, groups: string[][], takeover = false,
     /** tolerate: a walk that still fails (after its retry) does not fail the narrowing — it is listed in `failed` and the
      *  seats only it held get no range (the re-root's NOT-NARROWED fallback). Off = the first failure fails it all. */
-    opts: { tolerate?: boolean } = {}):
+    opts: { tolerate?: boolean; handKey?: string } = {}):
     Promise<{ ok: true; ranges: Record<string, number[]>; leftOut: Set<string>; walks: number; ms: number; failed: { group: string[]; why: string; retry: string }[] }
       | { ok: false; why: string; ms: number }> {
   const t0 = Date.now();
@@ -339,7 +348,9 @@ export async function narrowThroughEarlier(a: RerootArgs, first: number, m: Retu
       heroComboIdx: a.heroComboIdx, walkThrough: true,
       // the hand's memo (aiChain checkpoints, content-keyed, in this process only — never the hand's persistent facts,
       // review 3): a later street's walk of these streets starts past them
-      ...(a.memoKey ? { handKey: `${a.memoKey}#lr-narrow`, checkpointOnly: true } : {}),
+      ...(a.memoKey ? { handKey: `${a.memoKey}#lr-narrow`, checkpointOnly: true }
+        // the re-root's walks (2026-10-14): checkpointed the same way, under the re-root's own key
+        : opts.handKey ? { handKey: `${opts.handKey}#reroot-narrow`, checkpointOnly: true } : {}),
     };
     let r = await solveAiChain(spec);
     // RETRY ONCE (2026-10-07, Brady: "build it then, the retry + not narrowed fallback"): a transient failure (a stalled
@@ -382,12 +393,49 @@ export async function narrowThroughEarlier(a: RerootArgs, first: number, m: Retu
   return { ok: true, ranges, leftOut, walks: groups.length - failed.length, ms: Date.now() - t0, failed };
 }
 
+type Narrowed = Awaited<ReturnType<typeof narrowThroughEarlier>>;
+/** the re-root's narrowing walks in flight or done, per hand and input (RerootArgs.handKey): a concurrent decision
+ *  (the street's warm-up and hero's Solve) joins them; a narrowing with a failed walk is not remembered */
+const rerootNarrowMemo = new Map<string, Promise<Narrowed>>();
+const REROOT_NARROW_MEMO_MAX = 100;
+/** Drop the re-root's narrowing memo (tests). */
+export function forgetRerootNarrowing(): void { rerootNarrowMemo.clear(); }
+
+/**
+ * RE-ROOT A 4+ WAY DECISION (see the header). With RerootArgs.handKey (and REROOT_KEEP not off) a hand re-rooted on an
+ * earlier decision stays re-rooted where it was (multiwayRerootKeep.keptReroot): the same street, entering ranges, pot,
+ * stack and plans, the streets since appended — the earlier decision's chain checkpoints are this one's. Only when that
+ * cannot stand does the decision re-root afresh at its own street (the result's `notKept` says why), and a fresh
+ * re-root is then the hand's kept one.
+ */
 export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
+  const hand = a.handKey && rerootKeepOn() ? a.handKey : null;
+  let notKept: string | null = null;
+  if (hand) {
+    const fact = keptRerootFact(hand);
+    if (fact) {
+      const k = keptReroot(a, fact);
+      if (k.ok) { saveRerootFact(hand, k.fact); return k.result; }
+      notKept = k.why;
+    }
+  }
+  const fresh = await rerootFresh(a, hand);
+  if (hand) {
+    if (fresh.ok && fresh.fact) saveRerootFact(hand, fresh.fact);
+    else if (notKept) forgetRerootFact(hand);
+  }
+  const r = fresh.r;
+  if (!notKept) return r;
+  return r.ok ? { ...r, notKept } : { ok: false, why: `${r.why} (the hand's kept re-root could not be used: ${notKept})` };
+}
+
+async function rerootFresh(a: RerootArgs, hand: string | null): Promise<{ ok: boolean; r: RerootResult; fact?: ReturnType<typeof rerootFactOf> }> {
+  const out = (r: RerootResult): { ok: boolean; r: RerootResult } => ({ ok: r.ok, r });
   const first = a.streets.length - 1;
-  if (first < 1 || first > 2) return { ok: false, why: "nothing to re-root on the flop" };
+  if (first < 1 || first > 2) return out({ ok: false, why: "nothing to re-root on the flop" });
   const m = moneyThrough(a, first);
-  if (m.unpriced) return { ok: false, why: "a bet or raise on an earlier street has no amount on the capture — its money cannot be priced" };
-  if (m.stack <= 0.5) return { ok: false, why: "the earlier streets put everyone (near) all-in" };
+  if (m.unpriced) return out({ ok: false, why: "a bet or raise on an earlier street has no amount on the capture — its money cannot be priced" });
+  if (m.stack <= 0.5) return out({ ok: false, why: "the earlier streets put everyone (near) all-in" });
   const plan = narrowingPlan(a, first, m);
   const { allIn, live } = plan;
   let groups = plan.groups;
@@ -397,7 +445,7 @@ export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
     const capAt = (i: number) => { const b = moneyThrough(a, i).behind; return (p: string) => b[p]; };
     if (groups.some((g) => { const k = a.ordered.filter((p) => g.includes(p)); const lg = legacyStreets(a, first, m.folded, k); return walkPlays(a.ordered, k, lg.streets, lg.seats, capAt) != null; })) groups = null;
   }
-  if (!live.includes(a.heroPos)) return { ok: false, why: "hero folded earlier" };
+  if (!live.includes(a.heroPos)) return out({ ok: false, why: "hero folded earlier" });
 
   // ---- 2. narrow each live seat's range through the earlier streets
   // more earlier aggressors than one three-seat walk holds: the takeover groups (takeoverCover) instead; a villain no
@@ -434,18 +482,18 @@ export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
     return false;
   })();
   if (probeSeats.length > 3 && !pickCollapses(planCollapses(probeSeats, a.heroPos, curToks)) && !deadOf(probeSeats).plans.length) {
-    return { ok: false, why: `on the ${["flop", "turn", "river"][first]} itself every villain has put chips in too — nothing collapses (${deadOf(probeSeats).why})` };
+    return out({ ok: false, why: `on the ${["flop", "turn", "river"][first]} itself every villain has put chips in too — nothing collapses (${deadOf(probeSeats).why})` });
   }
-  if (probeSeats.length < 2) return { ok: false, why: "no villain is left in" };
+  if (probeSeats.length < 2) return out({ ok: false, why: "no villain is left in" });
   // three or fewer seats with a fold after chips on this street: only the dead-money collapse fits — ask before the
   // narrowing walks (review 2026-10-05: they ran even when it could not)
   if (probeSeats.length <= 3 && committedFold && !deadOf(probeSeats).plans.length) {
-    return { ok: false, why: `on the ${["flop", "turn", "river"][first]} the seats left cannot be walked (${deadOf(probeSeats).why})` };
+    return out({ ok: false, why: `on the ${["flop", "turn", "river"][first]} the seats left cannot be walked (${deadOf(probeSeats).why})` });
   }
   // REROOT_WALK_FALLBACK=off: a failed walk fails the re-root again (the refusal before 2026-10-07); the retry stays
-  const nr = groups.length ? await narrowThroughEarlier(a, first, m, groups, takeover, { tolerate: process.env.REROOT_WALK_FALLBACK !== "off" })
+  const nr = groups.length ? await narrowJoined(a, first, m, groups, takeover, hand)
     : { ok: true as const, ranges: {} as Record<string, number[]>, leftOut: new Set<string>(), walks: 0, ms: 0, failed: [] };
-  if (!nr.ok) return { ok: false, why: nr.why };
+  if (!nr.ok) return out({ ok: false, why: nr.why });
   const { ranges, leftOut } = nr;
   // review 2026-10-05: a seat that folded on this street, or that no takeover group held, takes his flop-arrival range
   for (const p of live) if (!ranges[p] && (curFolded.has(p) || unnarrowed.includes(p))) ranges[p] = a.arr(p);
@@ -461,12 +509,14 @@ export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
     unnarrowed = [...unnarrowed, ...lost.filter((p) => !unnarrowed.includes(p))];
     failedWalks.push({ ...f, lost });
   }
-  for (const p of live) if (!ranges[p]) return { ok: false, why: `no narrowing walk produced ${p}'s range` };
+  for (const p of live) if (!ranges[p]) return out({ ok: false, why: `no narrowing walk produced ${p}'s range` });
 
   // ---- 3. collapse the current street on its own
   const cur: SeatTok[][] = [a.streets[first]!.map((tok, j) => ({ tok, seat: a.streetSeats[first]![j]! }))];
   const cSeats = live.map((p) => ({ pos: p, range: ranges[p]! }));
   const covered = [...leftOut].filter((p) => live.includes(p));
+  /** the result, and with the hand's key the fact that keeps it for the hand's later decisions */
+  const kept = (r: Extract<RerootResult, { ok: true }>) => ({ ok: true, r, ...(hand ? { fact: rerootFactOf(a, r, live, ranges, m.behind, r.picked.why) } : {}) });
   const base = { first: first as 1 | 2, pot: m.pot, stack: m.stack, walks: nr.walks,
     left: covered.length ? covered.join(", ") : "none", allIn: [...allIn], ...(a.behind ? { behind: m.behind } : {}),
     ...(unnarrowed.length ? { unnarrowed } : {}), ...(failedWalks.length ? { failedWalks } : {}) };
@@ -481,14 +531,31 @@ export async function rerootCollapse(a: RerootArgs): Promise<RerootResult> {
       plans: [{ kind: allIn.size ? `all-in left out: ${[...allIn].join("+")}` : "re-rooted: the seats still in", seats: cSeats, heroIdx, streets: cur, steps: 0, ghostOnly: true }],
       mode: "single", why,
     };
-    return { ok: true, picked, ...base };
+    return kept({ ok: true, picked, ...base });
   }
   const picked = cSeats.length > 3 ? pickCollapses(planCollapses(cSeats, a.heroPos, cur)) : null;
-  if (picked) return { ok: true, picked, ...base };
+  if (picked) return kept({ ok: true, picked, ...base });
   const dm = deadOf(cSeats);
   const dp = pickDeadMoney(dm.plans);
-  if (!dp) return { ok: false, why: `on the ${["flop", "turn", "river"][first]} itself every villain has put chips in too — nothing collapses (${dm.why})` };
-  return { ok: true, picked: dp, ...base, dead: true };
+  if (!dp) return out({ ok: false, why: `on the ${["flop", "turn", "river"][first]} itself every villain has put chips in too — nothing collapses (${dm.why})` });
+  return kept({ ok: true, picked: dp, ...base, dead: true });
+}
+
+/** narrowThroughEarlier for the re-root: keyed by the hand (checkpointed walks), and a concurrent decision of the hand
+ *  with the same inputs joins the one in flight */
+function narrowJoined(a: RerootArgs, first: number, m: ReturnType<typeof moneyThrough>, groups: string[][], takeover: boolean, hand: string | null): Promise<Narrowed> {
+  const opts = { tolerate: process.env.REROOT_WALK_FALLBACK !== "off", ...(hand ? { handKey: hand } : {}) };
+  if (!hand) return narrowThroughEarlier(a, first, m, groups, takeover, opts);
+  const key = hashOf([hand, a.heroPos, first, groups, takeover, opts.tolerate, a.streets.slice(0, first), a.streetSeats.slice(0, first), a.amounts?.slice(0, first) ?? null,
+    a.flopPot, a.flopStack, a.behind ?? null, a.board.slice(0, 6 + 2 * first), a.rake ?? null, a.heroComboIdx, a.ordered.map((p) => [p, hashOf(a.arr(p))])]);
+  const hit = rerootNarrowMemo.get(key);
+  if (hit) return hit;
+  const p = narrowThroughEarlier(a, first, m, groups, takeover, opts);
+  rerootNarrowMemo.set(key, p);
+  while (rerootNarrowMemo.size > REROOT_NARROW_MEMO_MAX) { const f = rerootNarrowMemo.keys().next().value; if (f === undefined) break; rerootNarrowMemo.delete(f); }
+  const drop = () => { if (rerootNarrowMemo.get(key) === p) rerootNarrowMemo.delete(key); };
+  p.then((r) => { if (!r.ok || r.failed.length) drop(); }, drop);
+  return p;
 }
 
 /**

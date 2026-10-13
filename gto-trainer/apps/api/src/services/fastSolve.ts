@@ -2162,6 +2162,8 @@ async function solvePostflopViaChainOnce(
           // a narrowing walk that failed for a transient reason is retried once within this (2026-10-07): the decision's
           // start + REROOT_NARROW_MS (30 s since 2026-10-10, was 10 s — the re-rooted street's own tree takes ~3-5 s after it)
           deadline: tDecision + rerootNarrowMs(),
+          // the hand (2026-10-14): a hand re-rooted on an earlier decision stays re-rooted there (REROOT_KEEP=off: not)
+          handKey: String(hand.clientHandId ?? hand.handId ?? "") || undefined,
         });
         if (!rr.ok) {
           // the re-root could not collapse the current street either — fall through to the postflop last resort
@@ -2170,14 +2172,18 @@ async function solvePostflopViaChainOnce(
         const rp = rr.picked;
         picked = rp;
         reroot = { first: rr.first, pot: rr.pot, stack: rr.stack };
+        // a kept re-root's plans walk the streets from the one it was re-rooted at (multiwayRerootKeep)
         walkables = rp.plans.map((pl) => walkableOf(pl, rr.behind, rr.stack));
         deadMode = rp.plans.some((pl) => (pl as Partial<DeadMoneyPlan>).dead != null);
         blendWhy = rp.why;
-        if (rr.failedWalks?.length) rerootAlso.push(rerootWalkFailedReason(rr.failedWalks, cur));
+        /** the street the hand is re-rooted at: this one, or an earlier one kept from the hand's earlier decision */
+        const rrAt = (["flop", "turn", "river"] as const)[rr.first];
+        if (rr.failedWalks?.length) rerootAlso.push(rerootWalkFailedReason(rr.failedWalks, rrAt));
+        if (rr.notKept) rerootAlso.push(rerootNotKeptReason(rr.notKept, cur));
         const note =
-          `${flopSeats.length}-WAY, RE-ROOTED AT THE ${cur.toUpperCase()}: no collapse fits from the flop (every villain ` +
+          `${flopSeats.length}-WAY, RE-ROOTED AT THE ${rrAt.toUpperCase()}: no collapse fits from the flop (every villain ` +
           `put chips in earlier), so the earlier streets are pot (${rr.pot}bb, ${rr.stack}bb behind) and the ` +
-          `${cur} alone is collapsed: ${rp.plans.map((pl) => pl.kind).join(" | ")}. Entering ranges narrowed through ` +
+          `${rrAt === cur ? `${cur} alone is` : `${rrAt} and ${cur} are`} collapsed: ${rp.plans.map((pl) => pl.kind).join(" | ")}. Entering ranges narrowed through ` +
           `the earlier streets by ${rr.walks} three-seat walk(s) (${rr.left} left out of some) — approximate. ${rp.why}.` +
           ((un) => un.length ? ` NOT NARROWED: ${un.join(", ")} enter${un.length === 1 ? "s" : ""} with the flop-arrival range — no three-seat walk of the earlier streets could hold ${un.length === 1 ? "him" : "them"}.` : "")(
             (rr.unnarrowed ?? []).filter((p) => !(rr.failedWalks ?? []).some((f) => f.lost.includes(p)))) +
@@ -2791,6 +2797,13 @@ export function rerootWalkFailedNote(failed: WalkFailure[], heroPos: string, wal
   if (walks > 0) return head;
   return `${head} Every narrowing walk failed: every seat, hero (${heroPos}) too, enters with the flop-arrival range — the ` +
     `three-seat tree of this street is solved on the ranges as they reached the flop, not narrowed by the earlier streets.`;
+}
+
+/** The chain-path reason of a decision whose hand had a kept re-root it could not use (code postflop:reroot-not-kept,
+ *  2026-10-14): it re-rooted afresh at its own street, the earlier decision's chain abandoned — the hand page says why. */
+export function rerootNotKeptReason(why: string, street: string): PathReason {
+  return { v: "rebuilt", code: "postflop:reroot-not-kept",
+    text: `${street} re-rooted afresh — the hand's kept re-root could not be used: ${why}`.slice(0, 300) };
 }
 
 /** The chain-path reason of a re-root with a failed narrowing walk (code postflop:reroot-walk-failed). */
