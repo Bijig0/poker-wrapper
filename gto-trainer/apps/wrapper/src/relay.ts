@@ -77,6 +77,17 @@ export function currentNote(): string | null {
  * THE CHAIN LINE (2026-09-25): how the current answer was produced — its verdict (only while the answer is fresh) —
  * and the session's clean count (the share of hands that reached a postflop decision along the happy path).
  */
+/** AN UNSAFE ANSWER (2026-10-13, the API's services/unsafeAnswer): the fresh answer's reasons, whether auto-execute holds
+ *  it, and when the hold lets go — /state's panelUnsafe; null when the answer is not unsafe (or there is none). */
+export function currentUnsafe(): Record<string, any> | null {
+  const st = S.study;
+  if (!st.on || !st.unsafe) return null;
+  if (!st.text || (time() - st.at) * 1000 >= STUDY_ANSWER_TTL_MS) return null;
+  const held = st.autoHeld && st.unsafeHeldAt && st.autoHeld.key === st.unsafeHeldAt.key;
+  return { reasons: st.unsafe.reasons, hold: !!st.unsafe.hold, held: !!held, releasedFor: st.unsafeReleased ?? null,
+           releaseAtClockS: UNSAFE_RELEASE_CLOCK_S };
+}
+
 export function currentChain(): Record<string, any> | null {
   const st = S.study;
   if (!st.on) return null;
@@ -1213,6 +1224,39 @@ function autoRetryDue(key: string): boolean {
   return time() - last >= AUTO_RETRY_S;
 }
 
+/**
+ * THE UNSAFE-ANSWER HOLD (2026-10-13, Brady: bad solutions presented are the most dangerous output; hand 4923635257's QQ
+ * fold was pressed 0.4 s after an answer read against a 0.10% trap range). An answer the API marks unsafe (its own path
+ * says it is wrong for the spot — services/unsafeAnswer) is held, shown red, and the player can act; the SOLVED pick is
+ * pressed when hero's BASE clock is down to UNSAFE_RELEASE_CLOCK_S (6 s — above fold-on-no-answer's 4 s, so the press
+ * always comes first), never waiting into the time bank: an answer that arrives with the bank already running gets
+ * UNSAFE_BANK_GRACE_S, and one with no readable clock UNSAFE_MAX_HOLD_S. The pick is never changed.
+ */
+export const UNSAFE_RELEASE_CLOCK_S = 6;
+const UNSAFE_BANK_GRACE_S = 3;
+const UNSAFE_MAX_HOLD_S = 8;
+/** Why the unsafe hold still holds `key`, or null: not unsafe / not held / time to let go (and then it is recorded). */
+export function unsafeHoldWhy(key: string): string | null {
+  const st = S.study;
+  const un = st.unsafe;
+  if (!un || !un.hold || !un.reasons?.length || st.unsafeReleased === key) return null;
+  if (!st.unsafeHeldAt || st.unsafeHeldAt.key !== key) st.unsafeHeldAt = { key, at: time() };
+  const heldS = time() - st.unsafeHeldAt.at;
+  const left = heroTimeLeft();
+  const bankRunning = !!(S.bankSeen && S.bankSeen.started);
+  const release = left === null ? heldS >= UNSAFE_MAX_HOLD_S
+    : bankRunning ? heldS >= UNSAFE_BANK_GRACE_S
+      : left.clock <= UNSAFE_RELEASE_CLOCK_S;
+  if (release) {
+    st.unsafeReleased = key;
+    const at = left === null ? `after ${fmtFixed(heldS, 1)} s (no readable clock)` : bankRunning ? `after ${fmtFixed(heldS, 1)} s (the time bank was already running)` : `at ${left.clock} s on the base clock`;
+    feedAdd(`UNSAFE answer pressed as solved ${at} — nobody acted on it`);
+    if (S.session.id) S.sessions.event(S.session.id, "study-unsafe-released", { hand: S.handNo, key, heldS: pyRound(heldS, 1), at, reasons: un.reasons });
+    return null;
+  }
+  return `UNSAFE answer — ${un.reasons[0]}${un.reasons.length > 1 ? ` (+${un.reasons.length - 1} more)` : ""}`;
+}
+
 /** The auto mode, from the feed loop. A refused attempt is retried (autoRetryDue), then left alone. */
 export async function maybeAutoAct(): Promise<void> {
   const st = S.study;
@@ -1238,6 +1282,8 @@ export async function maybeAutoAct(): Promise<void> {
   if (!holdWhy && S.topupPrefold.active && time() < S.topupPrefold.deadline) {
     holdWhy = `pre-action top-up in progress (${S.topupPrefold.kind || "terminal"})`;
   }
+  // an answer the API marks UNSAFE: held for the player until the base clock's end (unsafeHoldWhy)
+  if (!holdWhy && !retry) holdWhy = unsafeHoldWhy(r.key);
   if (holdWhy) {
     const held = st.autoHeld || {};
     if (held.key !== r.key || held.why !== holdWhy) {

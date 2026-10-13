@@ -27,7 +27,7 @@ import { solveStore } from "./solveStore";
 import { pickWeightedAction, type WeightedPick } from "../utils/pickWeightedAction/pickWeightedAction";
 import { snapPreflopLine } from "../utils/snapPreflopLine/snapPreflopLine";
 import { SNAP_TAU, SNAP_MAX } from "../utils/snapToken/snapToken";
-import type { Walk3Repair } from "./hrc3max";
+import type { HrcNode, Walk3Repair } from "./hrc3max";
 import { walkFitted, foldSeatsOut, actorsWithAllins, emptiedGroups, groupText, type CallerGroup } from "../utils/fitLine/fitLine";
 import { reconstructFlopRanges, classWeightsToSpec, withRangeWalkCapture, replayRangeWalks, type RecordedRangeWalk } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
 import { buildRangeArray } from "../utils/buildRangeArray/buildRangeArray";
@@ -58,7 +58,7 @@ import { POSTFLOP_ORDER } from "../utils/aiStudyLine/aiStudyLine";
 import { menuPotMode, threeWaySizes } from "./gtowApi";
 import type { AiChainSpec } from "./aiChain";
 import { nodeTrust, arrivalTrust } from "./nodeTrust";
-import { solvePreflopGtowAi, solvePreflopPoolLocked, solvePreflopColdCallLocked, COLD_CALL_NOT_NEEDED, POOL_LOCK_SKIPPED, poolLockMs, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, HERO_OFF_TREE, heroSelfLockReasons, type AiPreflopOutcome, type AiPreflopShape, type PreflopVillainLine } from "./gtowAiPreflop";
+import { repostReason, solvePreflopGtowAi, solvePreflopPoolLocked, solvePreflopColdCallLocked, COLD_CALL_NOT_NEEDED, POOL_LOCK_SKIPPED, poolLockMs, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, HERO_OFF_TREE, heroSelfLockReasons, type AiPreflopOutcome, type AiPreflopShape, type PreflopVillainLine } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
 import { postInNote, deadPostsBb, freeOptionMix } from "../utils/foldPostIns/foldPostIns";
 import { rollBands } from "./answerIntegrity";
@@ -158,6 +158,8 @@ export type FastSolveResult =
       /** a GTO Wizard AI preflop answer read on a fitted line: the villain actions on it, against the tree's own play
        *  (check #3 — services/gtowAiPreflop.villainLinesOf) */
       villainLines?: PreflopVillainLine[];
+      /** why the villain lines were not scored (check #3 reads na with it) */
+      villainLinesNa?: string;
       approx?: boolean;
       warning?: string | null;
       /** HOW THIS ANSWER WAS PRODUCED (2026-09-25, services/chainPath): the flop ranges' provenance, every street's,
@@ -1171,6 +1173,9 @@ async function flopArrivalCompute(
       // rebuild above is the PLAIN tree, so the locked seat enters with the solver's range, not the pool's — said, not
       // silent (a flop floor below may still give him the pool's range; the note of that floor then says so)
       const lost = pinMiss && pin?.piece === "gtow-ai-preflop" ? ((pin as { poolLocks?: { pos: string; key: string }[] }).poolLocks ?? []) : [];
+      // recorded on the arrival too (2026-10-13): services/unsafeAnswer reads it — unsafe unless a floor below gave the
+      // seat a pool range after all (the arrival's poolSeats)
+      if (lost.length) prov = { ...prov, code: "arrival:pool-lock-lost", lockLost: lost.map((l) => ({ pos: l.pos.toUpperCase(), key: l.key })) };
       for (const l of lost) {
         const what = /^coldcall3b_/.test(l.key) ? "POOL COLD-CALL LOCK LOST AT THE FLOP:" : "POOL LIMP LOCK LOST AT THE FLOP:";
         sixNote = [sixNote, `${what} hero's preflop answer read the ${l.pos} at the pool's ${l.key}, but that locked tree could not be resumed (${String(pinMiss).slice(0, 160)}) — his flop range is the plain tree's`].filter(Boolean).join(" · ");
@@ -1666,7 +1671,7 @@ export function decisionChecks(hand: ParsedHand, value: FastSolveResult, origin:
     checkMix(value.actions ?? []),
     checkFresh({ answerStreet: value.street, handStreet: street, key }),
     ...(street === "preflop" ? [checkPreflopInRange({ notInRange: value.notInRange, heroClass: value.heroClass })] : []),
-    ...(street === "preflop" && value.villainLines ? [checkPreflopVillainLines(value.villainLines)] : []),
+    ...(street === "preflop" && (value.villainLines || value.villainLinesNa) ? [checkPreflopVillainLines(value.villainLines, value.villainLinesNa)] : []),
   ];
 }
 
@@ -3108,8 +3113,9 @@ async function solvePreflopCpRing(hand: ParsedHand, heroPos: string | null, rake
     depth: aiHeroDepth(r.shape, hand, heroPos),
     line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision,
     ...(r.villainLines ? { villainLines: r.villainLines } : {}),
+    ...(r.villainLinesNa ? { villainLinesNa: r.villainLinesNa } : {}),
     warning: note(r.note), approx: approx || !!rakeNote || !!r.heroSelfLock || undefined,
-    path: classifyPath({ street: "preflop", streets: [], preflop: pfPath, ...(r.heroSelfLock ? { preflopAlso: heroSelfLockReasons(r.heroSelfLock, r.heroClass) } : {}) }),
+    path: classifyPath({ street: "preflop", streets: [], preflop: pfPath, ...preflopAlsoOf(r) }),
   });
   const ai = await solvePreflopGtowAi(hand, heroPos, why);
   if (ai.ok) return asResult(ai, ai.shape.deadSb);
@@ -4615,7 +4621,7 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
   } else if (is6Handed(hand, heroPos)) {
     tstep("Reading the HRC chart");
     const six = await solvePreflop6max(hand, heroPos, opts.origin, opts.strategyId);
-    if (six && six.ok) { tstepEnd("done", "HRC chart answered"); return six; }
+    if (six && six.ok) { tstepEnd("done", "HRC chart answered"); return await withChartVillainLines(six, heroPos); }
     tstepEnd("failed", chartMissWords(six));
     why = six && !six.ok ? six.reason : "6-max charts unreachable (chart server :8777 down or the state's tree missing)";
     if (six && !six.ok && six.treeGap?.gate.route) gated = six.treeGap;
@@ -4709,8 +4715,9 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
     depth: aiHeroDepth(r.shape, hand, heroPos),
     line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision,
     ...(r.villainLines ? { villainLines: r.villainLines } : {}),
+    ...(r.villainLinesNa ? { villainLinesNa: r.villainLinesNa } : {}),
     warning: r.note, approx: approx || !!r.heroSelfLock || undefined,
-    path: classifyPath({ street: "preflop", streets: [], preflop: pfPath, ...(r.heroSelfLock ? { preflopAlso: heroSelfLockReasons(r.heroSelfLock, r.heroClass) } : {}) }),
+    path: classifyPath({ street: "preflop", streets: [], preflop: pfPath, ...preflopAlsoOf(r) }),
     ...(gated ? { treeGap: gated } : {}),
     ...(emptied ? { fitEmpties: emptied } : {}),
   });
@@ -4761,11 +4768,78 @@ function chartMissWords(six: FastSolveResult | null): string {
   return `HRC chart doesn't cover this spot — ${why}`;
 }
 
+/** combos a hand class stands for (AA 6, AKs 4, AKo 12) */
+const classCombos = (cls: string): number => (cls.length === 2 ? 6 : cls.endsWith("s") ? 4 : 12);
+/** how long a chart answer waits for its villain lines (the nodes are the walk's own, baked locally: milliseconds) */
+const CHART_LINES_MS = 3_000;
+/**
+ * CHECK #3 ON A CHART ANSWER (2026-10-13, the preflop audit: 12% of chart answers since 10-05 were read through a villain
+ * action under 1% of his range — a limp the chart all but never makes, a flat, or a raise the walk SNAPPED onto a size
+ * the chart's villain barely uses: hand 4923399329, the CO's 3-bet to 9.2 read at R9 = 0.14% of his range, AhTh served
+ * Fold 99.77% where his real 3-bet size R7.5 (8.18%) says All-in 99.13%). Chart answers never had check #3 at all.
+ * Each villain action on the line the chart was walked at, as a share of his range at that node (every seat acts on its
+ * whole range the first time, on what its earlier actions left after that; cells are percent per class).
+ */
+export async function chartVillainLines(chart: string, line: string | null | undefined, heroPos: string | null): Promise<{ lines: PreflopVillainLine[] } | { na: string }> {
+  return scoreChartLine(nodeGetter(chart), line, heroPos);
+}
+/** chartVillainLines over any node getter (tests hand theirs) */
+export async function scoreChartLine(get: (line: string) => Promise<HrcNode | null | "unreachable">, line: string | null | undefined,
+    heroPos: string | null): Promise<{ lines: PreflopVillainLine[] } | { na: string }> {
+  const tokens = (line ?? "").split("-").filter(Boolean);
+  if (!tokens.length) return { lines: [] };
+  const hero = (heroPos ?? "").toUpperCase();
+  const weights = new Map<string, Map<string, number>>();
+  const out: PreflopVillainLine[] = [];
+  for (let k = 0; k < tokens.length; k++) {
+    const at = tokens.slice(0, k).join("-");
+    const n = await get(at);
+    if (!n || n === "unreachable") return { na: `the chart's node '${at || "root"}' could not be read to score the villain lines` };
+    if (n.terminal) break;
+    const actor = (n.pos ?? "").toUpperCase();
+    const act = n.actions.find((a) => a.token === tokens[k]);
+    if (!act) return { na: `the chart's node '${at || "root"}' has no '${tokens[k]}' to score` };
+    const w = weights.get(actor);
+    let tot = 0, took = 0, maxHand = 0;
+    const next = new Map<string, number>();
+    for (const c of n.cells) {
+      const wc = w ? w.get(c.hand) ?? 0 : 1;
+      const f = (c.actions[act.action] ?? 0) / 100;
+      next.set(c.hand, wc * f);
+      if (!(wc > 0)) continue;
+      const comb = classCombos(c.hand) * wc;
+      tot += comb; took += comb * f;
+      if (f > maxHand) maxHand = f;
+    }
+    if (actor && actor !== hero && tokens[k] !== "F") out.push({ seat: actor, code: tokens[k]!, line: at, nodeFreq: tot > 0 ? took / tot : 0, maxHand, offTree: false });
+    weights.set(actor, next);
+  }
+  return { lines: out };
+}
+/** A chart answer with its check #3 inputs (villainLines, or villainLinesNa with the reason) — never slower than CHART_LINES_MS. */
+async function withChartVillainLines(r: FastSolveResult, heroPos: string | null): Promise<FastSolveResult> {
+  if (!r.ok || !r.gametype) return r;
+  const got = await Promise.race([
+    chartVillainLines(r.gametype, r.line ?? null, heroPos).catch((e): { na: string } => ({ na: `scoring threw: ${e instanceof Error ? e.message : e}` })),
+    new Promise<{ na: string }>((res) => setTimeout(() => res({ na: `the villain lines could not be scored inside ${CHART_LINES_MS / 1000} s` }), CHART_LINES_MS)),
+  ]);
+  return "lines" in got ? { ...r, villainLines: got.lines } : { ...r, villainLinesNa: got.na };
+}
+
+/** The extra preflop path reasons an AI preflop outcome carries: hero's self-lock, and a solve re-posted mid-read
+ *  (gtowAiPreflop.repostReason, 2026-10-13) — {} when there are none, so a path is built exactly as before. */
+function preflopAlsoOf(r: Extract<AiPreflopOutcome, { ok: true }>): { preflopAlso?: PathReason[] } {
+  const also = [...(r.heroSelfLock ? heroSelfLockReasons(r.heroSelfLock, r.heroClass) : []), ...[repostReason(r.solId)].filter((x): x is PathReason => !!x)];
+  return also.length ? { preflopAlso: also } : {};
+}
 /** A preflop reason beside the answer's own (chainPath.preflopAlso), the verdict re-classified. A result with no path is
  *  returned as it is. */
 function withPreflopAlso(r: FastSolveResult, reason: PathReason): FastSolveResult {
-  if (!r.path) return r;
-  const { v: _v, verdict: _verdict, reasons: _reasons, ...rest } = r.path;
+  // A CHART ANSWER HAS NO PATH YET (fastSolve gives it a plain one later): the reason used to be dropped with it — a pool
+  // limp lock that failed or was skipped beside a chart answer left no trace (2026-10-13). Now it gets its path here.
+  if (!r.ok) return r;
+  const base = r.path ?? classifyPath({ street: r.street ?? "preflop", streets: [] });
+  const { v: _v, verdict: _verdict, reasons: _reasons, ...rest } = base;
   return { ...r, path: classifyPath({ ...rest, preflopAlso: [...(rest.preflopAlso ?? []), reason] }) };
 }
 
@@ -4824,7 +4898,7 @@ async function poolLimpLockFirst(hand: ParsedHand, heroPos: string | null, opts:
     line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision, warning: r.note,
     approx: r.shape.deadSb || undefined,
     path: classifyPath({ street: "preflop", streets: [], preflop: { piece: "gtow-ai-preflop:pool-lock", how: "by-design", code: "preflop:pool-limp-lock",
-      why: `the ${t.target.pos} (${t.target.stack}bb) limped; no pool-locked chart covers him — his limp locked to ${t.target.key} on the exact tree`.slice(0, 200) } }),
+      why: `the ${t.target.pos} (${t.target.stack}bb) limped; no pool-locked chart covers him — his limp locked to ${t.target.key} on the exact tree`.slice(0, 200) }, ...preflopAlsoOf(r) }),
   };
 }
 
@@ -4868,7 +4942,7 @@ async function poolColdCallLockFirst(hand: ParsedHand, heroPos: string | null, d
     line: r.line, pos: r.pos, heroClass: r.heroClass, actions: r.actions, decision: r.decision, warning: r.note,
     approx: r.shape.deadSb || undefined,
     path: classifyPath({ street: "preflop", streets: [], preflop: { piece: "gtow-ai-preflop:coldcall-lock", how: "by-design", code: "preflop:pool-coldcall-lock",
-      why: `the ${t.target.pos} (${t.target.stack}bb) cold-called the 3-bet at ~0% on the exact tree — his call locked to ${t.target.key}`.slice(0, 200) } }),
+      why: `the ${t.target.pos} (${t.target.stack}bb) cold-called the 3-bet at ~0% on the exact tree — his call locked to ${t.target.key}`.slice(0, 200) }, ...preflopAlsoOf(r) }),
   };
 }
 
@@ -4969,8 +5043,14 @@ async function fastSolveInner(hand: ParsedHand, heroPos: string | null, opts: Fa
     const failed: string[] = [];
     for (const x of [locked, cc]) if (x && !x.ok) failed.push(x.reason);
     // a failed lock's reason rides on the answer, and on a refusal too (the miss queue must see the lock failed first)
-    const out = !failed.length ? r : r.ok ? { ...r, warning: [...failed, r.warning].filter(Boolean).join(" · ") }
+    let out = !failed.length ? r : r.ok ? { ...r, warning: [...failed, r.warning].filter(Boolean).join(" · ") }
       : { ...r, reason: `${r.reason} · ${failed.join(" · ")}` };
+    // A FAILED LOCK IS A FAILED REASON ON THE PATH, NOT ONLY WARNING TEXT (2026-10-13, hand 4923635257): the answer that
+    // follows was read against the solver's residue range the lock exists to replace — verdict "failed" (the panel's red
+    // banner) and services/unsafeAnswer marks it UNSAFE (auto-execute holds it). It used to be the yellow note alone;
+    // every check passed and QQ's fold was pressed 0.4 s after the answer.
+    if (locked && !locked.ok) out = withPreflopAlso(out, { v: "failed", code: "preflop:pool-limp-lock-failed", text: locked.reason.slice(0, 300) });
+    if (cc && !cc.ok) out = withPreflopAlso(out, { v: "failed", code: "preflop:pool-coldcall-lock-failed", text: cc.reason.slice(0, 300) });
     // the skipped lock's reason beside whatever answered (the plain AI tree or a chart)
     return lockSkip ? withPreflopAlso(out, lockSkip) : out;
   }

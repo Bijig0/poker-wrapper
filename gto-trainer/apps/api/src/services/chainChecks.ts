@@ -1,5 +1,5 @@
 import type { ArrivalPath, PathReason, RangeCheck } from "./chainPath";
-import { pctOf, type OffTreeLine } from "./offTree";
+import { OFF_TREE_NODE_FREQ, pctOf, type OffTreeLine } from "./offTree";
 
 /**
  * THE CHAIN'S INVARIANTS, CHECKED ON EVERY ANSWER (2026-09-27, Brady's "checker coverage list"). The postflop chain —
@@ -383,7 +383,29 @@ export function checkRangesSane(a: {
     heroTxt = `; hero's ${name} ${w.toFixed(3)}${a.heroBefore != null && a.heroBefore < w - 1e-9 ? ` (floored from ${a.heroBefore.toFixed(3)})` : ""}`;
   }
   if (problems.length) return fail(2, problems.join("; "));
+  // A VILLAIN WHO IS RESIDUE (2026-10-13, the checks audit: 147 answers / 59 hands in three weeks had a villain under one
+  // combo on the street, e.g. answer 16384 — a UTG limper at 0.09 combos, hero KK told to bet 97%, verdict clean). Under
+  // RESIDUE_COMBOS the solver models him as holding nothing; a pool floor that replaced his range would have him far
+  // above it. A flag marked RESIDUE (an UNSAFE answer, services/unsafeAnswer), never a fail: the walk itself is sound.
+  const thin = a.seats.map((s, i) => ({ s, i, live: liveCombos(s.range, boardIdx) })).filter((x) => x.i !== a.heroIdx && x.live < RESIDUE_COMBOS);
+  if (thin.length) {
+    return { id: 2, status: "flag", text: `RESIDUE: ${thin.map((x) => `${x.s.pos} holds ${x.live.toFixed(2)} combos`).join(", ")} on this street — ` +
+      `the solver has ${thin.length === 1 ? "him" : "them"} holding almost nothing (a line the tree all but never takes), so hero's answer is read against a range this player does not have` };
+  }
   return pass(2, `every seat holds weight once the board's cards are removed (${sizes.join(", ")} combos); no negative weight${heroTxt}`);
+}
+/** #2's residue bound: a villain range under one combo on the street */
+export const RESIDUE_COMBOS = 1;
+function liveCombos(range: number[], boardIdx: Set<number>): number {
+  let live = 0;
+  for (let c = 0; c < range.length; c++) {
+    const w = range[c];
+    if (w == null || !Number.isFinite(w) || !(w > 0)) continue;
+    const cc = COMBO_CARDS[c];
+    if (!cc || boardIdx.has(cc[0]) || boardIdx.has(cc[1])) continue;
+    live += w;
+  }
+  return live;
 }
 
 // ── #3 villain mistake lines ────────────────────────────────────────────────────────────────────────────────────
@@ -886,16 +908,23 @@ export function checkHeroCombo(a: { heroCombo: number | null; weight: number | n
 /** #3 for a GTO Wizard AI preflop answer (services/gtowAiPreflop.villainLinesOf) — one read on a FITTED line, or on an
  *  exact line the chart had no branch for (the fit rule, 2026-10-04): the villain actions on the line(s) hero's node
  *  was read at, each against the tree's own play. A flag, as postflop — never a verdict. */
-export function checkPreflopVillainLines(lines: { seat: string; code: string; line: string; nodeFreq: number; maxHand: number; offTree: boolean }[]): CheckResult {
-  const off = lines.filter((l) => l.offTree);
-  if (off.length) {
-    return { id: 3, status: "flag", text: off.map((l) =>
-      `${l.seat} ${l.code} at "${l.line || "root"}": ${pctOf(l.nodeFreq)} of his range, no hand above ${pctOf(l.maxHand)}`).join("; ") +
-      " — the tree all but never takes this action, so hero's node is off its path and the ranges behind it are the solver's model of a mistake" };
+export function checkPreflopVillainLines(lines: { seat: string; code: string; line: string; nodeFreq: number; maxHand: number; offTree: boolean }[] | null | undefined,
+    naWhy?: string | null): CheckResult {
+  if (!lines) return na(3, naWhy ?? "the villain actions on hero's line were not scored");
+  // RESIDUE BY NODE SHARE ALONE (2026-10-13, hand 4923635257): the preflop rule was isOffTree — under 1% of his range
+  // AND no hand above 2% — so a cold-call that is 0.10% of the SB's range, made of traps that each take it at well over
+  // 2%, PASSED with the text "none under 1% … (least: SB C 0.10%)". Postflop has used the share alone since 2026-10-06.
+  // A villain action under 1% of his range at the node is a residue range behind hero's node: flagged RESIDUE (an
+  // UNSAFE answer, services/unsafeAnswer), whatever its single hands do.
+  const residue = lines.filter((l) => l.nodeFreq < OFF_TREE_NODE_FREQ || l.offTree);
+  if (residue.length) {
+    return { id: 3, status: "flag", text: `RESIDUE: ` + residue.map((l) =>
+      `${l.seat} ${l.code} at "${l.line || "root"}" is ${pctOf(l.nodeFreq)} of his range on this tree (its most frequent hand ${pctOf(l.maxHand)})`).join("; ") +
+      " — the tree all but never takes this action, so the range hero's answer is read against is the solver's model of a mistake (a trap range), not what this player holds" };
   }
   if (!lines.length) return na(3, "no villain action on the line hero's node was read at");
   const least = lines.reduce((b, l) => (l.nodeFreq < b.nodeFreq ? l : b));
-  return pass(3, `${lines.length} villain action${lines.length === 1 ? "" : "s"} on the line${lines.length === 1 ? "" : "s"} hero's node was read at, none under 1% of his range at the node (least: ${least.seat} ${least.code} ${pctOf(least.nodeFreq)})`);
+  return pass(3, `${lines.length} villain action${lines.length === 1 ? "" : "s"} on the line${lines.length === 1 ? "" : "s"} hero's node was read at, all at 1% of his range or more (least: ${least.seat} ${least.code} ${pctOf(least.nodeFreq)})`);
 }
 export function checkPreflopInRange(a: { notInRange?: boolean | null; heroClass: string | null | undefined }): CheckResult {
   if (a.notInRange) return fail(17, `hero's ${a.heroClass ?? "hand"} is not in the chart's range at the node`);

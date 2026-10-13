@@ -62,6 +62,9 @@ export function freshStudy(): Record<string, any> {
     // THE CHAIN LINE (2026-09-25, the API's services/chainPath): this answer's verdict — clean / rebuilt / extra
     // requests / no answer — and the session's clean count, which outlives any one answer
     chain: null, chainSession: null,
+    // AN UNSAFE ANSWER (2026-10-13): the API's reasons + whether auto-execute holds it; the decision it was released for
+    unsafe: null as { reasons: string[]; hold: boolean } | null, unsafeHeldAt: null as { key: string; at: number } | null,
+    unsafeReleased: null as string | null,
     // LIVE STEPS (steps.ts, 2026-10-12): the decision the step trail is on, when hero's turn on it began, its milestones,
     // and the API's solve steps for it (POST /panel/steps)
     steps: null as Record<string, any> | null,
