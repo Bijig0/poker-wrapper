@@ -10,7 +10,7 @@
  *
  * NOT while a session is live. ~8-16 requests per board across two accounts; stops on any 429.
  *
- * RESULTS (2026-10-14 03:40 UTC, cap 1500 ms, origin hedgeLiveCheck, no 429):
+ * RESULTS (2026-10-14 03:40 +07 = 2026-10-13 20:40 UTC, cap 1500 ms, origin hedgeLiveCheck, no 429):
  *   7dJhAs  primary solve e2c5d4ee not served after 1.5 s → hedged on ultra-2 (48ffa70d); the hedge answered first and was
  *           adopted (tree:hung-hedge); 19.4 s in all (ultra-2 was carrying 367 requests/h from elsewhere at the time).
  *   9d4c8c  primary solve ece0b9b7 not served after 1.5 s → hedge routed "least-loaded (no solve of ours running on it);
