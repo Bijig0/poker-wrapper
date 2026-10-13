@@ -73,7 +73,9 @@ describe("chartFor6max", () => {
     expect(chartFor6max(t, "SB", ["F", "F", "C", "C"]).id).toBe("ign200_6max_D100_olimp_pool");
     expect(chartFor6max(t, "SB", ["F", "F", "F", "C"]).id).toBe("ign200_6max_D100_olimp_pool");
     expect(chartFor6max(t, "BTN", ["C", "C", "F"]).id).toBe("ign200_6max_D100_olimp");
-    expect(chartFor6max(t, "CO", ["C", "F"]).id).toBe("ign200_6max_D100_olimp");
+    // behind ONE limp: the even hero-free tree (2026-10-13), the equilibrium chart right behind it
+    expect(chartFor6max(t, "CO", ["C", "F"]).id).toBe("ign200_6max_D100_olimp_poolh");
+    expect(chartFor6max(t, "CO", ["C", "F"]).candidates[1]).toBe("ign200_6max_D100_olimp");
     // facing an iso after completing: the full pool tree (the BB's iso range is solved against the pool's completes)
     expect(chartFor6max(t, "SB", ["F", "F", "F", "C", "C", "R5"]).id).toBe("ign200_6max_D100_olimp_pool3");
     // the fallback ladder still holds only limp charts
@@ -146,11 +148,54 @@ describe("chartFor6max", () => {
     expect(c.candidates).toContain("ign200_6max_D100_olimp");
     expect(c.depth).toBe(125);
     expect(c.note).toContain("125bb limped pot");
-    // hero in a non-blind seat facing a limp (a pool-locked node): the equilibrium 100bb limp chart is first, not a phantom
+    // hero in a non-blind seat facing a limp (a pool-locked node): the even hero-free tree first (2026-10-13), then the
+    // equilibrium 100bb limp chart — never a phantom 125/150bb id
     const co = chartFor6max(deep as any, "CO", ["C", "F"]);
-    expect(co.id).toBe("ign200_6max_D100_olimp");
-    expect(co.candidates[0]).toBe("ign200_6max_D100_olimp");
-    expect(co.candidates.every((id) => /^ign200_6max_D(30|50|75|100)_olimp$/.test(id))).toBe(true);
+    expect(co.id).toBe("ign200_6max_D100_olimp_poolh");
+    expect(co.candidates[1]).toBe("ign200_6max_D100_olimp");
+    expect(co.candidates.slice(1).every((id) => /^ign200_6max_D(30|50|75|100)_olimp$/.test(id))).toBe(true);
+  });
+
+  // 2026-10-13 (bad-solution audit finding #5): behind a lone deep limper hero in HJ/CO/BTN read D100_olimp, whose
+  // first-in limp is residue. NOT GTO — our own read of the pool: the even hero-free tree (first-in limps locked, hero solved)
+  describe("the even hero-free limp tree (pool-free-limp-chart)", () => {
+    afterEach(() => { delete process.env.DEEP_LIMP_POOLH; });
+    const FREE = "ign200_6max_D100_olimp_poolh";
+
+    test("hero HJ / CO / BTN behind one deep limp reads it first, D100_olimp right behind (until it is baked)", () => {
+      for (const [hero, seat, line] of [["HJ", 2, ["C"]], ["CO", 3, ["C", "F"]], ["CO", 3, ["F", "C"]], ["BTN", 4, ["F", "F", "C"]], ["BTN", 4, ["C", "F", "F"]]] as const) {
+        const c = chartFor6max(table(seat) as any, hero, [...line]);
+        expect(c.id).toBe(FREE);
+        expect(c.candidates[1]).toBe("ign200_6max_D100_olimp");
+        expect(c.note).toContain("hero-free pool limp tree");
+      }
+    });
+
+    test("the rest of the hand stays on it: hero over-limped then faces an iso, hero isolated then faces the limp-raise", () => {
+      const overLimped = chartFor6max(table(4) as any, "BTN", ["F", "C", "F", "C", "F", "R5"]);
+      expect(overLimped.id).toBe(FREE);
+      expect(overLimped.candidates[1]).toBe("ign200_6max_D100_olimp_pool3");   // what answered there before
+      const isoed = chartFor6max(table(4) as any, "BTN", ["F", "F", "C", "R4", "F", "F", "R12"]);
+      expect(isoed.id).toBe(FREE);
+    });
+
+    test("not for: two other limpers, the blinds, a short limper, a limp behind hero, or DEEP_LIMP_POOLH=off", () => {
+      expect(chartFor6max(table(3) as any, "CO", ["C", "C"]).id).toBe("ign200_6max_D100_olimp");
+      expect(chartFor6max(table(6) as any, "BB", ["C", "F", "F", "F", "F"]).id).toBe("ign200_6max_D100_olimp_pool3");
+      expect(chartFor6max(table(5) as any, "SB", ["F", "C", "F", "F"]).id).toBe("ign200_6max_D100_olimp_pool");
+      // a 40bb UTG limper is the uneven trees' (they lock him at his own short range) — never the deep range
+      expect(chartFor6max(table(2, { 1: 40 }) as any, "HJ", ["C"]).id).not.toBe(FREE);
+      // an 80bb limper: the 60-85bb bucket, not the deep one
+      expect(chartFor6max(table(2, { 1: 80 }) as any, "HJ", ["C"]).candidates).not.toContain(FREE);
+      // hero over-limped first, the limp behind him is not "his limper"
+      expect(chartFor6max(table(2) as any, "HJ", ["F", "C", "C", "R5"]).id).not.toBe(FREE);
+      process.env.DEEP_LIMP_POOLH = "off";
+      expect(chartFor6max(table(3) as any, "CO", ["C", "F"]).id).toBe("ign200_6max_D100_olimp");
+    });
+
+    test("the id is nameable (the landing script bakes it, the picker can read it)", () => {
+      expect(unnameable6max(FREE)).toBeNull();
+    });
   });
 
   test("one short seat at a 100bb table takes the uneven chart for that seat", () => {

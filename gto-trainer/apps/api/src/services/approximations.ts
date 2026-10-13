@@ -676,6 +676,32 @@ export const APPROXIMATIONS: Approximation[] = [
     code: "services/hrc6max.ts poolLimpChart / shortLimperAlone / unevenLimp",
   },
   {
+    // NOT GTO — OUR OWN ANSWER (Brady 2026-10-13: "make a note ... this is a non gto 'own' type of answer that we are using here")
+    id: "pool-free-limp-chart",
+    kind: "pool-overlay",
+    lifecycle: "live",
+    trigger: "hero in the HJ, CO or BTN behind exactly ONE other non-blind limp before any raise, the limper deep (>85bb as dealt), a limped pot at the 100bb rung or deeper (125/150bb ride to it) — every preflop decision of hero's in that hand (his fold / over-limp / iso, and the later nodes after it)",
+    replaces: { gto: "the equilibrium limp chart D100_olimp, whose first-in limp is residue (UTG 0.57%, HJ 0.39%, CO 0.20%, BTN 0.09% of hands): hero reads his node against a limper who barely exists (KTo Fold 99.99%, hand 4923405522)", with: "ign200_6max_D100_olimp_poolh: the same tree with the four first-in limps (UTG/HJ/CO/BTN) LOCKED to the pool's measured deep limp range (3.1% of hands); everything else SOLVED against it — hero's fold, over-limp and every iso size, the blinds, and the limper's reply to the iso (left solved by Brady's choice: the pool folds ~23% to an iso, the tree ~51%; reopen if hands show it matters)" },
+    data: {
+      source: "poker analysis/pipeline/limp_study/locks_v2/locks_v2.json limp_first_deep, the COMMITTED table (the one every baked limp-v2 tree locks; the working copy's uncommitted rebuild was NOT used)",
+      sample: "667 first-in limps over 85bb of 21,647 chances, NL200 ring 5+6-handed (one cell for all four seats; BTN limps hold fewer premiums than UTG-CO). Live tables since 2026-10-05 are NL5, where deep limps run 8.4% with 4% premiums — NL200 answers by design (test-stake-as-nl200)",
+    },
+    offSwitch: { env: "DEEP_LIMP_POOLH", values: "off = these decisions read D100_olimp (and pool3 at later nodes) as before", where: "config/local.env" },
+    // the chart's own note (hrc6max poolFreeChart), lower case
+    warn: "hero-free pool limp tree",
+    badge: "POOL-LOCKED LIMPER (HERO FREE)",
+    owner: "Brady", since: "2026-10-13",
+    reviewBy: "2026-10-27",
+    diagnostic: "bun src/scripts/departuresReport.ts --id pool-free-limp-chart --since 2026-10-14 (the decisions it answered; compare their picks with D100_olimp's)",
+    source: "hrc-6max",
+    title: "Hero behind a lone deep limper reads the hero-free pool limp tree",
+    what: "the picker names ign200_6max_D100_olimp_poolh first for hero in HJ/CO/BTN behind one deep non-blind limper, and keeps the hand on it; until the tree is baked (or when a node is untrusted) the candidates behind it are exactly what answered before. A short limper (the uneven trees) or a short seat elsewhere at the table (unevenLimp) is unchanged. Chosen 2026-10-13 over a GTO Wizard deep-limp lock after five independent reviews (that tree has no over-limp and one 4bb iso, and leaves the limper's reply solved)",
+    why: "the equilibrium tree never limps first in at 100bb, so a real limper is read as a near-empty, trap-heavy range; pool3 / the pilot hold the pool's limper but lock hero's own over-limp (7.09%), so they cannot answer hero's node",
+    fix: "nothing — it is the design (an exploit of how the pool limps). Open: the limper's iso reply (solved, not the pool's); a short seat behind hero still reads the uneven equilibrium tree; two deep limpers stay on D100_olimp",
+    status: "by-design",
+    code: "services/hrc6max.ts poolFreeChart (used in chartFor6maxGrid's even()); poker-zenbook hrc-api solves/sixmax_grid/limp-v2-d100-herofree",
+  },
+  {
     id: "river-mes-shadow",
     kind: "pool-overlay",
     lifecycle: "experiment",
