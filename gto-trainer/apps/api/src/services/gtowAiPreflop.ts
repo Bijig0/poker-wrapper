@@ -771,12 +771,39 @@ const latest = (solId: string): string => {
   for (let hop = 0; hop < 64; hop++) { const next = moved.get(id); if (!next) break; id = next; }
   return id;
 };
+/** The accounts a solve's re-post CHAIN has already left (failover review 2026-10-13, finding 6): a re-post records every
+ *  account it was told to leave out plus the one it left, so a LATER read of the replacement — which starts with an empty
+ *  per-read list (readNode `shunned`) — does not post it back onto an account this chain already hung or walled on
+ *  (A on X hung → B on Y; a new read hangs on Y → not X again). relocateIfTime adds it to the read's own list; a 429's
+ *  `fallback` (walls only) is unchanged, so a wall can still move the solve back onto an account that only hung. */
+const avoidOf = new Map<string, Set<GtowSessionId>>();
+/** Every solve this process re-posted that `id` stands for — for the answer's note. */
+export function repostedFrom(id: string | null | undefined): { from: string; to: string } | null {
+  if (!id) return null;
+  const to = latest(id);
+  return to !== id ? { from: id, to } : null;
+}
+/**
+ * THE ANSWER SAYS ITS SOLVE WAS RE-POSTED (failover review 2026-10-13, finding 1): after a re-post, a hand can read the
+ * nodes before the move from the first solve and the rest from the second — two cloud solves of one tree, not guaranteed
+ * identical, so a prefix strategy from one and hero's node from the other. Never silent: the answer's path carries this
+ * reason (verdict "rebuilt" — the panel's amber banner), with both accounts. null when `solId` was never moved.
+ */
+export function repostReason(solId: string | null | undefined): PathReason | null {
+  const r = repostedFrom(solId);
+  if (!r) return null;
+  return { v: "rebuilt", code: "preflop:solve-reposted",
+    text: `the GTO Wizard solve hero's node was read on was re-posted on another account mid-read (${owners.get(r.from) ?? "?"} → ${owners.get(r.to) ?? "?"}): nodes read before the move came from the first solve, the rest from the second — two solves of one tree` };
+}
 /** A cold preflop tree's cost — tree + solution POSTs + the first node (live slow-answer lines: ~6 s median; 10 s here is
- *  conservative), plus ~3 s per lock in the chain (GTOW_PREFLOP_REPOST_MS). A hang with less than this left polls on. */
+ *  conservative) (GTOW_PREFLOP_REPOST_MS). A LOCKED chain is two solves back to back — the parent, then the child — so
+ *  it gets twice that, plus 2 s for each further lock (failover review 2026-10-13, finding 3: 3 s a lock was under what
+ *  live locks take; 5 of 6 cold-call locks were unfinished at 12 s). A hang with less than this left polls on. */
 const preflopRepostMs = (solId: string): number => {
   const v = Number(process.env.GTOW_PREFLOP_REPOST_MS);
   const base = v > 0 ? v : 10_000;
-  return base + 3_000 * (posted.get(solId)?.locks.length ?? 0);
+  const locks = posted.get(solId)?.locks.length ?? 0;
+  return locks ? 2 * base + 2_000 * (locks - 1) : base;
 };
 const timedOutErr = (e: unknown) => /timed? ?out|abort/i.test(e instanceof Error ? `${e.name} ${e.message}` : String(e));
 
@@ -811,6 +838,11 @@ function relocate(solId: string, from: GtowSessionId | null, avoid: ReadonlySet<
       return made;
     }
     moved.set(solId, made.solId); bound(moved);
+    // the chain's left accounts, for the replacement's later reads (`avoidOf`): what this re-post left out, what the
+    // chain had left before, the account it left now — never the one it landed on (a 429's fallback can land back there)
+    const left = new Set<GtowSessionId>([...skip, ...(avoidOf.get(solId) ?? [])]);
+    left.delete(owners.get(made.solId) as GtowSessionId);
+    avoidOf.set(made.solId, left); bound(avoidOf);
     const key = preKeys.get(solId);
     if (key) notePreKey(made.solId, key);
     console.log(`[gtow-preflop-repost] solution ${solId.slice(0, 8)} on ${from ?? "?"}: ${why} — re-posted as ${made.solId.slice(0, 8)} on ${owners.get(made.solId) ?? "?"}` +
@@ -859,13 +891,16 @@ async function relocateIfTime(solId: string, from: GtowSessionId | null, avoid: 
     return null;
   }
   const rec = posted.get(solId);
-  let skip = avoid;
-  if (!joining && rec && !preflopCandidates(rec.need, avoid).length) {
+  // …and every account this solve's re-post chain already left, on earlier reads (`avoidOf`)
+  const chainLeft = avoidOf.get(solId);
+  const shun: ReadonlySet<GtowSessionId> = chainLeft?.size ? new Set([...avoid, ...chainLeft]) : avoid;
+  let skip = shun;
+  if (!joining && rec && !preflopCandidates(rec.need, shun).length) {
     if (fallback && preflopCandidates(rec.need, fallback).length) {
-      console.log(`${head} — every account that could take it has hung or walled on this read (${[...avoid].join(", ")}); a wall does not lift, so the re-post goes to one that only hung`);
+      console.log(`${head} — every account that could take it has hung or walled on this read or this solve's chain (${[...shun].join(", ")}); a wall does not lift, so the re-post goes to one that only hung`);
       skip = fallback;
     } else {
-      console.log(`${head} — every account that could take it has hung or walled on this read (${[...avoid].join(", ")}): polling on`);
+      console.log(`${head} — every account that could take it has hung or walled on this read or this solve's chain (${[...shun].join(", ")}): polling on`);
       tmark("GTO Wizard poll hung", `${why} — no other account left, polling on`);
       tstepDetail("poll hung — re-asking");
       return null;
@@ -1174,7 +1209,9 @@ export async function lockedSolution(parentSolId: string, body: unknown, locks: 
     }
     owners.set(solId, owner);
     const seats = Array.isArray((body as any)?.players) ? (body as any).players.length : 2;
-    posted.set(solId, { body, need: { multiway: seats > 2, preflop: true }, locks }); bound(posted);
+    // the chain as posted: a parent that was itself locked keeps its locks first (failover review 2026-10-13 — a re-post of
+    // the child would otherwise build a less-locked tree under the child's id)
+    posted.set(solId, { body, need: { multiway: seats > 2, preflop: true }, locks: [...(posted.get(parent)?.locks ?? []), ...locks] }); bound(posted);
     lockedOfKey.set(ck.key, solId); bound(lockedOfKey);
     if (solveCache.enabled) { solveCache.noteTree(ck.key, "pre", ck.body); notePreKey(solId, ck.key); }
     return { solId };
@@ -1239,7 +1276,7 @@ export function setPreflopSolveCache(c: GtowSolveCache | null): void {
 export function resetAiPreflopMemory(): void {
   solutions.clear(); nodes.clear(); owners.clear(); terminals.clear(); lockedSolutions.clear();
   preKeys.clear(); preRealOf.clear(); preMat.clear();
-  posted.clear(); moved.clear(); relocating.clear(); solOfKey.clear(); lockedOfKey.clear();
+  posted.clear(); moved.clear(); relocating.clear(); solOfKey.clear(); lockedOfKey.clear(); avoidOf.clear();
 }
 
 /**
@@ -1403,7 +1440,8 @@ async function readNode(solId: string, k: string, line: string, addr: string, ck
         const left = limit - (Date.now() - t0);
         const via = await relocateIfTime(real, owner, shunned, left, `poll of [${line || "root"}] hung ${(hangMs / 1000).toFixed(1)} s, ${(Math.max(0, left) / 1000).toFixed(1)} s left on the read`);
         if (via === "late") break;   // the read's clock ran out on the re-post: it ends as a read polled to its end does
-        if (via) { real = via.solId; owner = via.owner; continue; }
+        // another account: its own auth round (failover review 2026-10-13 — the old account's round blocked the new one's refresh)
+        if (via) { real = via.solId; owner = via.owner; authRound = null; continue; }
       }
       if (once) return { error: lastFail };
       await pause();
@@ -1457,7 +1495,7 @@ async function readNode(solId: string, k: string, line: string, addr: string, ck
         // the clock ran out on the re-post: it ends as a read polled to its end does, the memo KEPT — the re-post lands
         // for the next ask (forgetting it would post a third tree beside the one landing)
         if (via === "late") break;
-        if (via) { real = via.solId; owner = via.owner; continue; }
+        if (via) { real = via.solId; owner = via.owner; authRound = null; continue; }
         forgetSolution(real, solId);
         return { error: lastFail };
       }

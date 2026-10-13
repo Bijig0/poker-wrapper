@@ -1614,6 +1614,7 @@ export const NOT_DEPARTURES: {
     "arrival:pin-unusable": "recovery: the preflop pin does not fit the line; the flop ranges are derived again",
     "arrival:pin-cap": "routing: the pinned GTO Wizard AI tree holds one caller behind an open and one limper (three to the flop), so a 4-way line is read from fitted lines on that tree — the design, counted clean (2026-10-07)",
     "arrival:first-rebuilt": "recovery (the memo's first computation was rebuilt)",
+    "preflop:solve-reposted": "recovery: the GTO Wizard solve hero's preflop node was read on was re-posted on another account mid-read (a hung poll / a wall) — the same tree and locks; nodes before the move may come from the first solve (verdict rebuilt, the panel's amber banner)",
     "preflop:pool-limp-lock-skipped": "NOT a departure — the opposite: the trigger rule (services/poolTrigger, 2026-10-09) found the solver's own limp share real (not residue, not under half the pool's rate with a different hand mix), so the pool limp lock did NOT fire and base GTO's answer stands; the reason carries the solver's and the pool's shares for the dashboard",
   },
   codePrefixes: {
