@@ -16,6 +16,8 @@ import {
   type ParsedHand,
   type SeatRoster,
   type SeatRosterStatus,
+  type StartStackSource,
+  START_STACK_SOURCES,
   type Street,
 } from "../parsePanelFeed/parsePanelFeed";
 import { foldPostIns } from "../../utils/foldPostIns/foldPostIns";
@@ -164,6 +166,15 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
       if (Number.isInteger(id) && v != null && Number.isFinite(x) && x >= 0) (startStacks ??= {})[id] = x;
     }
   }
+  // WHERE EACH START STACK CAME FROM (optional; see ParsedHand.startStacksSource, 2026-10-14): only the known words, only
+  // for seats startStacks holds — anything else is dropped alone, and a seat without a word reads as the seat's own frame
+  let startStacksSource: Record<number, StartStackSource> | undefined;
+  if (startStacks && isRecord(input.startStacksSource)) {
+    for (const [k, v] of Object.entries(input.startStacksSource)) {
+      const id = Number(k);
+      if (Number.isInteger(id) && startStacks[id] != null && (START_STACK_SOURCES as readonly string[]).includes(String(v))) (startStacksSource ??= {})[id] = v as StartStackSource;
+    }
+  }
 
   // THE TABLE'S OWN CHIP COUNTS PER SEAT (optional; see ParsedHand.wsStack): same forgiving rule as startStacks — a
   // malformed entry is dropped, a map with a non-seat key is dropped whole, and absent stays absent (never zero).
@@ -242,6 +253,7 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
     positions,
     ...(stacks ? { stacks } : {}),
     ...(startStacks ? { startStacks } : {}),
+    ...(startStacksSource ? { startStacksSource } : {}),
     ...(wsStack ? { wsStack } : {}),
     ...(wsInFront ? { wsInFront } : {}),
     ...(wsDead ? { wsDead } : {}),

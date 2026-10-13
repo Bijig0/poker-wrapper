@@ -86,8 +86,13 @@ export const Hand = obj({
   street: z.string(), actions: z.array(ActionRec), liveSeats: z.array(z.number()),
   committed: z.record(z.string(), z.number().nullable()), positions: z.record(z.string(), z.string()),
   stacks: z.record(z.string(), z.number().nullable()).nullable(), currentNode: CurrentNode,
-  /** each dealt seat's stack as dealt (bb), from the table's own account — present once the seat has acted */
+  /** each dealt seat's stack as dealt (bb): from the table's own account on the seat's first frame, and until then
+   *  the figure carried from the table's last word on the seat (the previous hand's result, a buy, a seat word) —
+   *  every dealt seat once the socket has read a hand's end (ws.ts dealtCents, 2026-10-14) */
   startStacks: z.record(z.string(), z.number()).optional(),
+  /** per seat of startStacks, where the figure came from: "frame" (the seat's own frame — exact) or carried:
+   *  "result" (the previous hand's CO_RESULT_INFO), "buy" (PLAY_ACCOUNT_CASH_RES type 2), "seat" (PLAY_SEAT_INFO) */
+  startStacksSource: z.record(z.string(), z.enum(["frame", "result", "buy", "seat"])).optional(),
   /** each dealt seat's chips behind NOW (bb, 4 dp), from the WebSocket's own account — once the WS has reported the
    *  hand; a seat whose money the DOM filed ahead of any frame is left out until its next frame (round 3) */
   wsStack: z.record(z.string(), z.number()).optional(),

@@ -40,6 +40,7 @@ import { handFacts, type DealtFact, type KeptCollapses } from "./handFacts";
 import { withRequestScope } from "./requestScope";
 import { asLive } from "./livePriority";
 import { classifyPath, faultPath, type ArrivalPath, type DecisionPath, type PathReason, type StreetPath } from "./chainPath";
+import { stackNotConfirmedReason } from "./stackSource";
 import { allInSizeToTreeOn, dropNote, dropShortAllIns, pressReasons, shortAllInPress, streetMoneyAt, treeAllInTo, withPressNote, type PressEntry, type StreetMoney, type TreeAllIn } from "./allInPress";
 import { heroAbsentAnswer } from "./heroAbsent";
 import {
@@ -4267,7 +4268,7 @@ export async function solvePreflop6max(
       : null,
   ].filter(Boolean) as string[];
 
-  return {
+  const out: FastSolveResult = {
     ok: true,
     source: "hrc-6max-preflop",
     tier: "chart-6max",
@@ -4293,6 +4294,9 @@ export async function solvePreflop6max(
     treeGap: gap,
     ...(fitEmpties ? { fitEmpties } : {}),
   };
+  // a stack the table did not confirm (services/stackSource): the note is in `notes` already; the path says it too
+  const stackReason = stackNotConfirmedReason(choice.unconfirmed ?? []);
+  return stackReason ? withPreflopAlso(out, stackReason) : out;
 }
 
 /**
@@ -5056,7 +5060,8 @@ async function withChartVillainLines(r: FastSolveResult, heroPos: string | null)
 /** The extra preflop path reasons an AI preflop outcome carries: hero's self-lock, and a solve re-posted mid-read
  *  (gtowAiPreflop.repostReason, 2026-10-13) — {} when there are none, so a path is built exactly as before. */
 function preflopAlsoOf(r: Extract<AiPreflopOutcome, { ok: true }>): { preflopAlso?: PathReason[] } {
-  const also = [...(r.heroSelfLock ? heroSelfLockReasons(r.heroSelfLock, r.heroClass) : []), ...[repostReason(r.solId)].filter((x): x is PathReason => !!x)];
+  const also = [...(r.heroSelfLock ? heroSelfLockReasons(r.heroSelfLock, r.heroClass) : []),
+    ...[repostReason(r.solId), stackNotConfirmedReason(r.shape.unconfirmed ?? [])].filter((x): x is PathReason => !!x)];
   return also.length ? { preflopAlso: also } : {};
 }
 /** A preflop reason beside the answer's own (chainPath.preflopAlso), the verdict re-classified. A result with no path is

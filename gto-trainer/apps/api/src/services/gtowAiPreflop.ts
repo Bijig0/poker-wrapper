@@ -44,6 +44,7 @@ import { allInCalls, buildPreflopTokens } from "../feed/buildSolutionUrl/buildSo
 import { bbAmount, pollHangMs, TREE_SETTINGS, TREE_SETTINGS_TAG } from "./gtowApi";
 import { dealtSeats, dealtCount } from "../utils/dealtSeats/dealtSeats";
 import type { ParsedHand, ParsedAction } from "../feed/parsePanelFeed/parsePanelFeed";
+import { stackNotConfirmedNote, unconfirmedStacks, type UnconfirmedStack } from "./stackSource";
 import { gtowSessions, logRoute, type GtowNeed, type GtowSessionId } from "./gtowSessions";
 import { tmark } from "./answerTrace";
 import { tstep, tstepEnd, tstepDetail, USUAL } from "./liveSteps";
@@ -129,6 +130,11 @@ export interface AiPreflopShape {
   /** THE 250BB CAP (2026-10-03, PREFLOP_STACK_CAP_BB): present only when two seats were deeper than GTO Wizard's preflop
    *  limit and every stack was clamped to it. `real`: the stacks the clamped seats really had (API position → bb). */
   stackCap?: { cap: number; real: Record<string, number> };
+  /** THE STACKS THE TABLE DID NOT CONFIRM (services/stackSource, 2026-10-14): seats built from the screen's reading or the
+   *  100bb default because `startStacks` does not cover them (the first hand on a socket, a seat the table's result had at
+   *  0) — present only when there are any, and never on a rebuild from a logged tree (`dealt` given). The stacks above are
+   *  used as they are; the note and the path say so (preflop:stack-not-confirmed). */
+  unconfirmed?: UnconfirmedStack[];
 }
 
 /**
@@ -469,6 +475,7 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, ra
   const stacks: Record<string, number> = {};
   const seatOf: Record<string, number> = {};
   const putIn = preflopPutIn(hand);
+  const used: { pos: string; seat: number; bb: number | null }[] = [];   // every seat's figure, for stackSource
   for (const p of ordered) {
     const seat = byPos.get(p)!;
     seatOf[apiOf[p]!] = seat;
@@ -477,6 +484,7 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, ra
     const cur = dealt ? dealt[seat] : hand.stacks?.[seat];
     const committed = dealt ? 0 : (hand.committed?.[seat] ?? 0);
     const exact = cur != null ? cur + committed : 100;
+    used.push({ pos: apiOf[p]!, seat, bb: cur != null ? Math.round(exact * 100) / 100 : null });
     // A SEAT ALL IN HAS EXACTLY ITS STACK (2026-09-30, hand 4921657513). Stacks round to the half-blind so tables a
     // few chips apart share one tree — but the CO's 12.2bb shove became a 12bb tree stack, whose only raise is the
     // all-in R12, while the line built from the table says R12.2: more than his tree stack. GTO Wizard's validator
@@ -510,8 +518,11 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, ra
   const siteRake = siteRakeOf(hand, dealtN);
   // a largest post under 1 cannot be expressed: GTO Wizard rescales the posts to it and not the stacks (sizeTo)
   if (Math.max(sb, bb) < 1) return { error: `the largest post is ${Math.max(sb, bb)}bb — GTO Wizard rescales a largest post under 1bb and not the stacks, so the tree cannot be written` };
+  // a rebuild from a logged tree (`dealt`) carries that tree's stacks — nothing to confirm; live, the seats the table has
+  // not reported this hand are named on the shape (the figures stand; the note and the path say so)
+  const unconfirmed = dealt ? [] : unconfirmedStacks(hand, used);
   return { n, apiOf, seatOf, positions: set, stacks, sb, bb, straddle: null, rakeCapBb, deadSb, deadBb: Math.max(0, Math.round(deadBb * 100) / 100), heroApiPos: hp ? (apiOf[hp] ?? null) : null,
-    ...(anteBb ? { anteBb } : {}), ...(siteRake ? { siteRake } : {}), ...(stackCap ? { stackCap } : {}) };
+    ...(anteBb ? { anteBb } : {}), ...(siteRake ? { siteRake } : {}), ...(stackCap ? { stackCap } : {}), ...(unconfirmed.length ? { unconfirmed } : {}) };
 }
 
 /**
@@ -2082,7 +2093,8 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
       `GTO Wizard AI preflop (Ultra) answered because the 6-max charts could not: ${why}. Tree built from the table — ${shapeText}; solved in ${secs.toFixed(1)} s${stored ? " (from the GTO Wizard solve cache — no request)" : ansNode.cached ? " (cached)" : ""}.`
       + (snapped.length ? ` Sizes snapped to the tree's own: ${snapped.join(", ")}.` : "")
       + (fitReads.length ? ` ${fitNote(fitReads, villainLines)}` : villainLines.length ? ` ${exactLineNote(villainLines)}` : "")
-      + (shape.stackCap ? ` ${stackCapNote(shape)}.` : ""),
+      + (shape.stackCap ? ` ${stackCapNote(shape)}.` : "")
+      + (shape.unconfirmed?.length ? ` ${stackNotConfirmedNote(shape.unconfirmed)}.` : ""),
   };
 }
 
