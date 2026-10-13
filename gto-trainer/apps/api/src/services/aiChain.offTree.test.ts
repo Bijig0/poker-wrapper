@@ -46,7 +46,7 @@ function script(nodes: Record<string, ReturnType<typeof node>>) {
   return { trees, locks, restore: () => { api.ensureCustomSolution = saved.ensure; api.customNode = saved.node; api.lockedCustomSolution = saved.lock; } };
 }
 
-const ENV = ["OFFTREE_RANGE", "OFFTREE_RANGE_T", "OFFTREE_LOCK"] as const;
+const ENV = ["OFFTREE_RANGE", "OFFTREE_RANGE_T", "OFFTREE_LOCK", "OFFTREE_BLEND_W"] as const;
 const savedEnv = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
 let restore: (() => void) | null = null;
 afterEach(() => {
@@ -67,8 +67,27 @@ const toTurn = {
 };
 
 describe("the soft range after an off-tree villain action", () => {
-  it("soft (the default): the turn tree is asked with range x exp(-dEV / (0.20 x pot)), and the node says what was carried", async () => {
-    delete process.env.OFFTREE_RANGE;
+  it("blend (the default since 2026-10-13): the turn tree is asked with half QRE's shape + half the soft range's, scaled to a top of 1", async () => {
+    delete process.env.OFFTREE_RANGE; delete process.env.OFFTREE_BLEND_W;
+    const s = script({ ...toTurn, "sol-FLOP-locked|R5": node("BTN", heroFacing) }); restore = s.restore;
+    const r = await solveAiChain({ ...base, streets: [["R5", "C"], ["X"]] });
+    expect(r.ok).toBe(true);
+    const turnIn = s.trees.find((t) => t.startingStreet === "TURN")!.oopRange as number[];
+    // QRE is the same sliver for every hand (normalised: 1/N each); the soft range e^(-gap/2) normalised by its sum
+    let S = 0; for (let i = 0; i < N; i++) S += Math.exp(-gap(i) / 2);
+    const mix = (i: number) => 0.5 / N + 0.5 * Math.exp(-gap(i) / 2) / S;
+    expect(turnIn[0]).toBeCloseTo(1, 9);                                   // the bet is this hand's best action: top weight
+    expect(turnIn[100]).toBeCloseTo(mix(100) / mix(0), 9);
+    const soft = r.trace!.nodes.find((n) => n.street === "FLOP" && n.codes.length === 0)!.offTree!.soft!;
+    expect([soft.mode, soft.applied, soft.w]).toEqual(["blend", true, 0.5]);
+    // the lock (on by default) gave his bet the blend's factor; hero's call was read on the locked child
+    expect(s.locks).toHaveLength(1);
+    expect(s.locks[0].lock.strategy[1].strategy[100]).toBeCloseTo(mix(100) / mix(0), 9);
+    expect(soft.lock).toEqual({ ok: true, solId: "sol-FLOP-locked" });
+  });
+
+  it("soft (OFFTREE_RANGE=soft): the turn tree is asked with range x exp(-dEV / (0.20 x pot)), and the node says what was carried", async () => {
+    process.env.OFFTREE_RANGE = "soft"; process.env.OFFTREE_LOCK = "off";
     const s = script(toTurn); restore = s.restore;
     const r = await solveAiChain({ ...base, streets: [["R5", "C"], ["X"]] });
     expect(r.ok).toBe(true);
@@ -81,7 +100,7 @@ describe("the soft range after an off-tree villain action", () => {
     expect(flopNode.offTree!.soft!.softCombos!).toBeGreaterThan(50);
   });
 
-  it("log: computed and recorded, the QRE sliver carried", async () => {
+  it("log: computed and recorded (the blend), the QRE sliver carried, no lock", async () => {
     process.env.OFFTREE_RANGE = "log";
     const s = script(toTurn); restore = s.restore;
     const r = await solveAiChain({ ...base, streets: [["R5", "C"], ["X"]] });
@@ -89,7 +108,8 @@ describe("the soft range after an off-tree villain action", () => {
     const turnIn = s.trees.find((t) => t.startingStreet === "TURN")!.oopRange as number[];
     expect(turnIn[100]).toBeCloseTo(0.001, 9);
     const soft = r.trace!.nodes.find((n) => n.street === "FLOP" && n.codes.length === 0)!.offTree!.soft!;
-    expect([soft.mode, soft.applied, soft.softCombos! > 50]).toEqual(["log", false, true]);
+    expect([soft.mode, soft.applied, soft.softCombos! > 1, soft.w]).toEqual(["log", false, true, 0.5]);
+    expect(s.locks).toHaveLength(0);
   });
 
   it("off: the narrowing of before (no soft record)", async () => {
@@ -101,8 +121,8 @@ describe("the soft range after an off-tree villain action", () => {
     expect(r.trace!.nodes.find((n) => n.street === "FLOP" && n.codes.length === 0)!.offTree?.soft).toBeUndefined();
   });
 
-  it("OFFTREE_LOCK=on: hero answers on the same street — villain's node is locked and hero's node read on the child", async () => {
-    process.env.OFFTREE_LOCK = "on";
+  it("OFFTREE_LOCK=on (soft): hero answers on the same street — villain's node is locked and hero's node read on the child", async () => {
+    process.env.OFFTREE_LOCK = "on"; process.env.OFFTREE_RANGE = "soft";
     const s = script({ ...toTurn, "sol-FLOP-locked|R5": node("BTN", heroFacing) }); restore = s.restore;
     const r = await solveAiChain({ ...base, streets: [["R5"]] });
     expect(r.ok).toBe(true);
@@ -115,7 +135,8 @@ describe("the soft range after an off-tree villain action", () => {
     expect(r.trace!.nodes.find((n) => n.codes.length === 0)!.offTree!.soft!.lock).toEqual({ ok: true, solId: "sol-FLOP-locked" });
   });
 
-  it("OFFTREE_LOCK unset: no lock, hero's node read on the street's own tree", async () => {
+  it("OFFTREE_LOCK=off: no lock, hero's node read on the street's own tree", async () => {
+    process.env.OFFTREE_LOCK = "off";
     const s = script(toTurn); restore = s.restore;
     const r = await solveAiChain({ ...base, streets: [["R5"]] });
     expect(r.ok).toBe(true);

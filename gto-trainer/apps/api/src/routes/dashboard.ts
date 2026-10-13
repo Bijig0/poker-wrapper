@@ -1,4 +1,5 @@
 import { pressedAnswerPath } from "../services/chainChecks";
+import { carriedOffTreeRange } from "../services/offTree";
 import { replayChecks, replayText } from "../services/replayCheck";
 import { launchReplay } from "../services/replayScheduler";
 import { offTreeLog } from "../services/offTreeLog";
@@ -2126,7 +2127,9 @@ function expandTrace(trace: any) {
     let rangesOut: ReturnType<typeof keyedRanges> | null = null;
     if (n.taken != null) {
       const strat = strategies[n.taken] ?? [];
-      r.ranges[n.actor] = actorRange.map((w, ci) => w * (strat[ci] ?? 0));
+      // an OFF-TREE action carried the rule's range (services/offTree: the blend since 2026-10-13), not range x QRE
+      r.ranges[n.actor] = carriedOffTreeRange(actorRange, (n.actions ?? []) as any[], n.taken, n.offTree?.soft)
+        ?? actorRange.map((w, ci) => w * (strat[ci] ?? 0));
       rangesOut = keyedRanges(r.players, r.ranges, n.board);
     }
     return {
@@ -2394,7 +2397,9 @@ app.get("/solve-compare", (c) => {
       out[`${n.street}|${n.codes.join("-")}`] = Object.fromEntries(r.ranges.map((x, i) => [seatLabel(i, r.players.length), x.slice()]));
       if (n.taken != null) {
         const strat = n.actions?.[n.taken]?.strategy ?? [];
-        r.ranges[n.actor] = (r.ranges[n.actor] ?? []).map((w: number, ci: number) => w * (strat[ci] ?? 0));
+        const before = r.ranges[n.actor] ?? [];
+        r.ranges[n.actor] = carriedOffTreeRange(before, (n.actions ?? []) as any[], n.taken, n.offTree?.soft)
+          ?? before.map((w: number, ci: number) => w * (strat[ci] ?? 0));
       }
     }
     return out;

@@ -9,6 +9,7 @@
  *     the strategy of the action taken (dashboard.ts expandTrace's replay), board-blocked combos left out.
  */
 import { COMBOS } from "../../utils/comboIndex/comboIndex";
+import { carriedOffTreeRange } from "../../services/offTree";
 
 export const CLASSES: string[] = (() => {
   const R = "AKQJT98765432";
@@ -300,7 +301,9 @@ export function traceToViews(trace: any, src: string): NodeView[] {
     });
     if (n.taken != null) {
       const s = strategies[n.taken] ?? [];
-      r.ranges[n.actor] = actorRange.map((w, i) => w * (s[i] ?? 0));
+      // an OFF-TREE action carried the rule's range (services/offTree: the blend since 2026-10-13), not range x QRE
+      r.ranges[n.actor] = carriedOffTreeRange(actorRange, (n.actions ?? []) as any[], n.taken, n.offTree?.soft)
+        ?? actorRange.map((w, i) => w * (s[i] ?? 0));
     }
   }
   return out;

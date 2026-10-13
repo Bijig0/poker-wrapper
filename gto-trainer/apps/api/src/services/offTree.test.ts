@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { OFF_TREE_DUST, isOffTree, isOffTreePostflop, offTreeMaxHand, offTreeFamily, offTreeLock, offTreeRangeMode, offTreeSoftT, offTreeStats, offTreeText, softOffTreeRange } from "./offTree";
+import { OFF_TREE_DUST, blendOffTreeRange, carriedOffTreeRange, isOffTree, isOffTreePostflop, offTreeBlendW, offTreeLockOn, offTreeMaxHand, offTreeFamily, offTreeLock, offTreeRangeMode, offTreeSoftT, offTreeStats, offTreeText, softOffTreeRange } from "./offTree";
 import { OffTreeLog } from "./offTreeLog";
 
 const N = 1326;
@@ -107,11 +107,13 @@ describe("the soft range after an off-tree action (option 3, 2026-10-06)", () =>
     expect("why" in softOffTreeRange(range(), sols, 1, 0, 0.1)).toBe(true);
   });
 
-  it("the switches: OFFTREE_RANGE soft by default, log, off; OFFTREE_RANGE_T sane or 0.20", () => {
+  it("the switches: OFFTREE_RANGE blend by default (2026-10-13), soft, log, off; OFFTREE_RANGE_T sane or 0.20", () => {
     const keep = { r: process.env.OFFTREE_RANGE, t: process.env.OFFTREE_RANGE_T };
     try {
       delete process.env.OFFTREE_RANGE; delete process.env.OFFTREE_RANGE_T;
-      expect(offTreeRangeMode()).toBe("soft");
+      expect(offTreeRangeMode()).toBe("blend");
+      process.env.OFFTREE_RANGE = "soft"; expect(offTreeRangeMode()).toBe("soft");
+      process.env.OFFTREE_RANGE = "blend"; expect(offTreeRangeMode()).toBe("blend");
       expect(offTreeSoftT()).toBe(0.2);
       process.env.OFFTREE_RANGE = "log"; expect(offTreeRangeMode()).toBe("log");
       process.env.OFFTREE_RANGE = "OFF"; expect(offTreeRangeMode()).toBe("off");
@@ -121,6 +123,76 @@ describe("the soft range after an off-tree action (option 3, 2026-10-06)", () =>
       if (keep.r == null) delete process.env.OFFTREE_RANGE; else process.env.OFFTREE_RANGE = keep.r;
       if (keep.t == null) delete process.env.OFFTREE_RANGE_T; else process.env.OFFTREE_RANGE_T = keep.t;
     }
+  });
+
+  it("OFFTREE_BLEND_W: 0.5 unless a number in [0, 1]; OFFTREE_LOCK on unless set off (2026-10-13)", () => {
+    const keep = { w: process.env.OFFTREE_BLEND_W, l: process.env.OFFTREE_LOCK };
+    try {
+      delete process.env.OFFTREE_BLEND_W; expect(offTreeBlendW()).toBe(0.5);
+      process.env.OFFTREE_BLEND_W = "0.3"; expect(offTreeBlendW()).toBe(0.3);
+      process.env.OFFTREE_BLEND_W = "0"; expect(offTreeBlendW()).toBe(0);
+      for (const bad of ["1.5", "-0.1", "abc", ""]) { process.env.OFFTREE_BLEND_W = bad; expect(offTreeBlendW()).toBe(0.5); }
+      delete process.env.OFFTREE_LOCK; expect(offTreeLockOn()).toBe(true);
+      for (const off of ["off", "OFF", "0", "false", "no"]) { process.env.OFFTREE_LOCK = off; expect(offTreeLockOn()).toBe(false); }
+      process.env.OFFTREE_LOCK = "on"; expect(offTreeLockOn()).toBe(true);
+    } finally {
+      if (keep.w == null) delete process.env.OFFTREE_BLEND_W; else process.env.OFFTREE_BLEND_W = keep.w;
+      if (keep.l == null) delete process.env.OFFTREE_LOCK; else process.env.OFFTREE_LOCK = keep.l;
+    }
+  });
+
+  describe("the blend (2026-10-13)", () => {
+    // 300 hands in range; the bet is a sliver for every hand but hands 0-9 bet it 50x as often (QRE's strength signal),
+    // and it costs hand i (i % 30) x 0.1bb (the soft range's cost)
+    const bet = (i: number) => (i < 10 ? 0.05 : 0.001);
+    const sols = node(bet, () => 1, (i) => 1 - (i % 30) * 0.1);
+    const R = range();
+    const qre = R.map((w, i) => w * bet(i));
+    const norm = (a: number[]) => { const t = a.reduce((x, y) => x + y, 0); return a.map((x) => x / t); };
+    it("w = 0.5: half QRE's shape, half the soft range's, each normalised; the most likely hand keeps weight 1; never above his range", () => {
+      const soft = softOffTreeRange(R, sols, 1, 10, 0.2);
+      const b = blendOffTreeRange(R, sols, 1, 10, 0.2, 0.5);
+      if ("why" in soft || "why" in b) throw new Error("not computable");
+      const qn = norm(qre), sn = norm(soft.range);
+      const mix = qn.map((q, i) => 0.5 * q + 0.5 * sn[i]!);
+      const top = Math.max(...mix.map((m, i) => (R[i]! > 0 ? m / R[i]! : 0)));
+      for (const i of [0, 5, 10, 29, 150, 299]) expect(b.range[i]).toBeCloseTo(mix[i]! / top, 9);
+      expect(Math.max(...b.factor)).toBeCloseTo(1, 12);
+      expect(b.range.every((x, i) => x <= R[i]! + 1e-12)).toBe(true);
+      expect(b.combos).toBeCloseTo(b.range.reduce((x, y) => x + y, 0), 9);
+      expect(b.range[400]).toBe(0);                              // not in his range: stays out
+      // the strength signal is kept: hand 0 (QRE's favourite) outweighs hand 30 (same cost, QRE's sliver) by far
+      expect(b.range[0]! / b.range[30]!).toBeGreaterThan(5);
+    });
+    it("w = 0 is the soft range's shape, w = 1 QRE's (both scaled to a top of 1)", () => {
+      const soft = softOffTreeRange(R, sols, 1, 10, 0.2);
+      const b0 = blendOffTreeRange(R, sols, 1, 10, 0.2, 0);
+      const b1 = blendOffTreeRange(R, sols, 1, 10, 0.2, 1);
+      if ("why" in soft || "why" in b0 || "why" in b1) throw new Error("not computable");
+      const sTop = Math.max(...soft.range);
+      for (const i of [0, 7, 29, 299]) expect(b0.range[i]).toBeCloseTo(soft.range[i]! / sTop, 9);
+      const qTop = Math.max(...qre);
+      for (const i of [0, 7, 29, 299]) expect(b1.range[i]).toBeCloseTo(qre[i]! / qTop, 9);
+    });
+    it("an empty QRE narrowing falls back to the soft range's shape; a node with no EVs is not computable", () => {
+      const none = node(() => 0, () => 1, (i) => 1 - (i % 30) * 0.1);
+      const soft = softOffTreeRange(R, none, 1, 10, 0.2);
+      const b = blendOffTreeRange(R, none, 1, 10, 0.2, 0.5);
+      if ("why" in soft || "why" in b) throw new Error("not computable");
+      const sTop = Math.max(...soft.range);
+      expect(b.range[29]).toBeCloseTo(soft.range[29]! / sTop, 9);
+      expect(blendOffTreeRange(R, [{ strategy: R }, { strategy: R }], 1, 10, 0.2, 0.5)).toEqual({ why: "the node carries no per-combo EVs" });
+    });
+    it("carriedOffTreeRange: the pages rebuild exactly the carried range from the trace's record; null when nothing was applied", () => {
+      const b = blendOffTreeRange(R, sols, 1, 10, 0.2, 0.5);
+      const soft = softOffTreeRange(R, sols, 1, 10, 0.2);
+      if ("why" in b || "why" in soft) throw new Error("not computable");
+      const rec = (mode: "blend" | "soft" | "log", applied: boolean) => ({ mode, w: mode === "soft" ? undefined : 0.5, t: 0.2, pot: 10, qreCombos: 0, softCombos: 1, applied });
+      expect(carriedOffTreeRange(R, sols, 1, rec("blend", true))).toEqual(b.range);
+      expect(carriedOffTreeRange(R, sols, 1, rec("soft", true))).toEqual(soft.range);
+      expect(carriedOffTreeRange(R, sols, 1, rec("log", false))).toBeNull();
+      expect(carriedOffTreeRange(R, sols, 1, undefined)).toBeNull();
+    });
   });
 
   it("the node lock: one history line per street from preflop, the taken action = the soft factor scaled to 1, each hand sums to 1", () => {

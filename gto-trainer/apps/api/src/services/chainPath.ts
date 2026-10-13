@@ -150,7 +150,7 @@ export function reasonsOf(p: Pick<DecisionPath, "arrival" | "preflop" | "streets
       if (!l.soft?.applied) continue;
       const at = `${s.street}${s.plan ? ` (${s.plan})` : ""}: ${l.seat} ${l.action}${l.betsize != null ? ` ${l.betsize}` : ""}`;
       out.push({ v: "by-design", code: "postflop:offtree-soft", text: `${at} off-tree — ${softText(l.soft)}` });
-      if (l.soft.lock?.ok) out.push({ v: "by-design", code: "postflop:offtree-lock", text: `${at}: the rest of the street node-locked to his soft range` });
+      if (l.soft.lock?.ok) out.push({ v: "by-design", code: "postflop:offtree-lock", text: `${at}: the rest of the street node-locked to his ${l.soft.mode === "soft" ? "soft" : "blended"} range` });
     }
     // a street that did not start from the previous street's solved output broke the chain itself
     if (s.check?.ok === false && s.how !== "hit") {
