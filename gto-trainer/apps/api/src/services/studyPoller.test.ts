@@ -355,6 +355,29 @@ describe("studyPoller", () => {
     expect(studyPoller.getStatus().lastNavFailure?.current).toBe(false);
   });
 
+  // 2026-10-13 (the unsafe-answer guard): an answer whose own path says it is wrong for the spot is pushed with its
+  // reasons and the hold flag; a sound one pushes no `unsafe` key (the body is as before)
+  it("an unsafe answer is pushed with its reasons and the hold; a sound one is not", async () => {
+    ingestResponse = { ok: true, studyAnswersOn: true, hero: { toAct: true, cards: ["Qd", "Qc"] },
+      hand: { street: "preflop", board: [], node: { toCall: 7.6 }, actions: [1, 2, 3, 4, 5, 6, 7, 8] } };
+    const path = { v: 1, street: "preflop", streets: [], verdict: "failed",
+      reasons: [{ v: "failed", code: "preflop:pool-coldcall-lock-failed", text: "COLD-CALL LOCK FAILED: the SB (51.6bb) …" }], checks: {} };
+    fastSolveResponse = { ok: true, hand: { street: "preflop" },
+      solution: { ok: true, decision: { action: "Fold", frequency: 77 }, actions: [{ action: "Fold", frequency: 77 }, { action: "Raise 23.5", frequency: 23 }], path } };
+    studyPoller.start({ intervalMs: 100_000 });
+    await wait(20);
+    const body = pushCalls().at(-1)!.body as { pick: string; unsafe?: { reasons: string[]; hold: boolean } };
+    expect(body.unsafe?.hold).toBe(true);
+    expect(body.unsafe?.reasons[0]).toContain("cold-call lock failed");
+    await studyPoller.stop();
+    calls = [];
+    fastSolveResponse = { ok: true, hand: { street: "preflop" },
+      solution: { ok: true, decision: { action: "Fold", frequency: 77 }, actions: [{ action: "Fold", frequency: 77 }], path: { ...path, verdict: "clean", reasons: [] } } };
+    studyPoller.start({ intervalMs: 100_000 });
+    await wait(20);
+    expect("unsafe" in (pushCalls().at(-1)!.body as object)).toBe(false);
+  });
+
   it("also answers a preflop decision through the fast path", async () => {
     ingestResponse = {
       ok: true,

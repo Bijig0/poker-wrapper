@@ -192,6 +192,8 @@ export interface AiPreflopResult {
    *  this tree — check #3's material (an action the tree all but never takes leaves hero's node off its path). On a
    *  FITTED answer always; on an exact line when the caller asked (opts.villainLines: the chart's fit rule) */
   villainLines?: PreflopVillainLine[];
+  /** why the villain lines could not be scored (check #3 reads "not checked" with this — never silent, 2026-10-13) */
+  villainLinesNa?: string;
   /** a LAST RESORT answer: the one line fastSolve's path carries about how it was played */
   lastResort?: { how: string };
   /** HERO'S OWN OFF-TREE ACTION LOCKED (2026-10-07): his hand read 0 at his node until his earlier action was locked */
@@ -1847,7 +1849,7 @@ export function fitNote(fits: AiFitRead[], villainLines: PreflopVillainLine[]): 
 }
 
 /** how long an answer waits for check #3's node reads on an exact line (they are the walk's own, normally cached) */
-const VILLAIN_LINES_MS = 1000;
+const VILLAIN_LINES_MS = 3000;
 /** The answer's note for the villain actions on an EXACT line (no fit): how often this tree's own villain takes each. */
 export function exactLineNote(villainLines: PreflopVillainLine[]): string {
   const say = (l: PreflopVillainLine) => `${l.seat}'s ${l.code} at "${l.line || "root"}" is ${pctOf(l.nodeFreq)} of his range`;
@@ -1997,11 +1999,18 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   // tree holds it — but it is an equilibrium solve too, and how often ITS villain takes that action says how much of
   // a model the ranges behind hero's node are (a 30bb UTG limp is rare here as well). Best effort: the prefix nodes
   // are the walk's own (cached, or in flight and joined), and the answer never waits more than VILLAIN_LINES_MS.
-  if (opts.villainLines && !fitReads.length && usedLine) {
-    villainLines = await Promise.race([
-      villainLinesOf(usedSol, usedLine.split("-"), shape).catch((): PreflopVillainLine[] => []),
-      new Promise<PreflopVillainLine[]>((res) => setTimeout(() => res([]), VILLAIN_LINES_MS)),
+  // ON EVERY EXACT LINE SINCE 2026-10-13 (the checks audit: #3 ran on 51 of 5,509 preflop answers — QQ's fold on hand
+  // 4923635257 was read through a 0.10% SB cold-call no check looked at). A timeout or a failed read is `na` with the
+  // reason, never an absent check.
+  let villainLinesNa: string | null = null;
+  if (!fitReads.length && usedLine) {
+    const scored = await Promise.race([
+      villainLinesOf(usedSol, usedLine.split("-"), shape).catch((e): PreflopVillainLine[] | string => `scoring threw: ${e instanceof Error ? e.message : e}`),
+      new Promise<null>((res) => setTimeout(() => res(null), VILLAIN_LINES_MS)),
     ]);
+    if (scored === null) villainLinesNa = `the villain actions on hero's line could not be scored inside ${VILLAIN_LINES_MS / 1000} s`;
+    else if (typeof scored === "string") villainLinesNa = scored;
+    else villainLines = scored;
   }
   // the node's per-combo strategy is a 0-1 fraction; our chart mixes are PERCENT (Q8o: {Fold: 99.97}), and
   // the panel text / hand card format them as such — so the fallback speaks percent too
@@ -2067,7 +2076,7 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
     ok: true, actions, decision, line, pos: shape.heroApiPos, heroClass: heroClass(hand.heroCards), treeKey: selfLock ? `${key}|hero-self-lock:${selfLock.line}` : key,
     solId: ansSol, usedLine, solveSecs: secs, cached: ansNode.cached, ...(stored ? { stored: true } : {}), shape,
     ...(fitReads.length ? { fits: fitReads.map(({ data: _data, ...f }) => ({ ...f, actions: pctMix(f.actions) })), villainLines }
-      : villainLines.length ? { villainLines } : {}),
+      : villainLinesNa ? { villainLinesNa } : { villainLines }),
     ...(selfLock ? { heroSelfLock: selfLock } : {}),
     note: (selfLock ? `${heroSelfLockNote(selfLock, heroClass(hand.heroCards))} ` : "") +
       `GTO Wizard AI preflop (Ultra) answered because the 6-max charts could not: ${why}. Tree built from the table — ${shapeText}; solved in ${secs.toFixed(1)} s${stored ? " (from the GTO Wizard solve cache — no request)" : ansNode.cached ? " (cached)" : ""}.`

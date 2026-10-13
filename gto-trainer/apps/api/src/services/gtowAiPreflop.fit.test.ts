@@ -153,7 +153,8 @@ describe("AI preflop: a line the tree cannot hold is read on every fit and blend
     expect(c.text).toContain("UTG R2");
   });
 
-  it("a line the tree holds as it stands carries no fit and no villain lines", async () => {
+  // since 2026-10-13 every exact line carries its villain lines (check #3 on every AI preflop answer, the unsafe-answer guard)
+  it("a line the tree holds as it stands carries no fit, and its villain lines scored", async () => {
     const nodes = tree(0.045, [0.6, 0.1, 0.3], [0.2, 0.7, 0.1]);
     fakeGtow(nodes);
     const h = hand4410("fit-none");
@@ -163,7 +164,7 @@ describe("AI preflop: a line the tree cannot hold is read on every fit and blend
     if (!r.ok) throw new Error(r.reason);
     expect(r.usedLine).toBe("R2-F-F-F-C");
     expect(r.fits).toBeUndefined();
-    expect(r.villainLines).toBeUndefined();
+    expect(r.villainLines?.map((l) => `${l.seat} ${l.code}`)).toEqual(["UTG R2", "SB C"]);
     expect(r.note).not.toContain("LINE FITTED");
   });
 });

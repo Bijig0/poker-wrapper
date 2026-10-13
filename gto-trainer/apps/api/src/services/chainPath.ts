@@ -50,6 +50,9 @@ export interface ArrivalPath {
   /** EVERY seat a pool floor / overlay gave the pool's range at the flop, with that floor's code (2026-10-10: `code` keeps
    *  only the last floor's, and a rebuilt source none — the hand page labelled 61 of 143 such seats "GTO range") */
   poolSeats?: { pos: string; code: string }[];
+  /** the pool locks hero's preflop answer was read with that the flop could not resume (2026-10-13): the seat enters
+   *  with the plain tree's range unless a floor gave him a pool range (poolSeats) — services/unsafeAnswer */
+  lockLost?: { pos: string; key: string }[];
 }
 
 /**

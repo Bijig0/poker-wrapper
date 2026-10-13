@@ -19,6 +19,12 @@
   #sa-chain.warn { display: block; background: #3a2f16; color: #ffce56; border: 1px solid #5c4a1f; }
   #sa-chain.bad { display: block; background: #3a1a1a; color: #ff8a80; border: 1px solid #5c2626; }
   #sa-chain b { font-weight: 700; letter-spacing: .02em; }
+  /* AN UNSAFE ANSWER (2026-10-13, the API's services/unsafeAnswer): wrong for the spot by its own path — red, loud, first */
+  #sa-unsafe { display: none; margin: 6px 0; padding: 8px 10px; border-radius: 8px; font-size: 13px; line-height: 1.4;
+               background: #4a1212; color: #ffd0cc; border: 2px solid #ff5252; }
+  #sa-unsafe.on { display: block; }
+  #sa-unsafe b { color: #fff; font-weight: 800; letter-spacing: .03em; }
+  #sa-unsafe ul { margin: 4px 0 0 18px; padding: 0; }
   #sa-chainrate { color: #8fa1b3; font-size: 12px; margin-top: 4px; }
   /* RANGES AT THIS NODE (2026-09-30): the dashboard's own grid renderer draws here (the study API's /study/grid169.js +
      .css, loaded on first use); these are the theme names it reads, in the panel's colours */
@@ -408,6 +414,7 @@
     <div id="sa-answer" class="big">— answers off for this session —</div>
     <div id="sa-step"><span class="st-text"></span><span class="st-el"></span><div class="st-det"></div></div>
     <div id="sa-trail"></div>
+    <div id="sa-unsafe"></div>
     <div id="sa-note" class="sub" style="display:none;color:#ffce56"></div>
     <div id="sa-chain"></div>
     <div id="sa-chainrate" style="display:none"></div>
@@ -1171,6 +1178,22 @@
     if (spoken && spoken !== saLastSpoken) { saLastSpoken = spoken; speak(spoken); }
     if (!spoken) saLastSpoken = "";
     renderChain(st?.panelChain || null, !!answer);
+    renderUnsafe(answer ? st?.panelUnsafe || null : null);
+  }
+  /* AN UNSAFE ANSWER (2026-10-13): the API says this answer is wrong for the spot (a pool lock failed, a villain range
+     the model has as residue, an input check failed). While auto-execute holds it the player has until the base clock's
+     end (the wrapper then presses the SOLVED pick); spoken once per decision. */
+  let saUnsafeSpoken = "";
+  function renderUnsafe(u) {
+    const box = $("sa-unsafe");
+    if (!u || !(u.reasons || []).length) { box.className = ""; box.innerHTML = ""; return; }
+    const how = u.hold && u.releasedFor == null
+      ? `HELD for you — pressed as solved when your base clock reaches ${u.releaseAtClockS ?? 6} s unless you act`
+      : u.hold ? "released — pressed as solved" : "auto-execute does not hold (UNSAFE_HOLD off)";
+    box.className = "on";
+    box.innerHTML = `<b>⚠ UNSAFE ANSWER</b> — ${esc(how)}<ul>${u.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`;
+    const key = u.reasons.join("|");
+    if (key !== saUnsafeSpoken) { saUnsafeSpoken = key; speak("unsafe answer"); }
   }
 
   // LIVE STEPS (2026-10-12, Brady: "live feedback on what is happening … while waiting for a GTO Wizard answer, say the
