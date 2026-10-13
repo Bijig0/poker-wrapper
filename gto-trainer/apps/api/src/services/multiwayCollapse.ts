@@ -63,6 +63,15 @@ export interface CollapsePlan {
   steps: number;
   /** true when every primitive was a GHOST (what the blend was measured on) */
   ghostOnly: boolean;
+  /** the folds and primitives that made it, in order — replayable on a later decision of the hand (replayPlan); absent
+   *  on a plan not built by planCollapses (a re-root's, a dead-money one) */
+  recipe?: PlanRecipe;
+}
+
+/** A collapse as the steps that built it: the seats that left as folds, then each GHOST / MERGE by table seat. */
+export interface PlanRecipe {
+  folds: string[];
+  ops: ({ ghost: string } | { merge: [string, string] })[];
 }
 
 const COMMITS = (tok: string) => tok !== "X" && tok !== "F";
@@ -74,6 +83,7 @@ interface State {
   streets: SeatTok[][];
   kinds: string[];
   ghostOnly: boolean;
+  ops: PlanRecipe["ops"];
 }
 
 /** GHOST: villain `v` leaves. Legal only while he has committed nothing on any walked street. */
@@ -89,6 +99,7 @@ function ghost(st: State, v: number): State | null {
     streets: st.streets.map((street) => street.filter((t) => t.seat !== seat.pos)),
     kinds: [...st.kinds, `ghost:${seat.pos}`],
     ghostOnly: st.ghostOnly,
+    ops: [...st.ops, { ghost: seat.pos }],
   };
 }
 
@@ -159,6 +170,7 @@ function merge(st: State, a: number): State | null {
     streets,
     kinds: [...st.kinds, `merge:${x.pos}+${y.pos}${carrier && carrier !== x.pos ? ` (${carrier}'s action)` : ""}`],
     ghostOnly: false,
+    ops: [...st.ops, { merge: [x.pos, y.pos] }],
   };
 }
 
@@ -174,6 +186,23 @@ const hasFolded = (pos: string, streets: SeatTok[][]): boolean => {
   }
   return folded;
 };
+
+/** The villains who folded on the walked streets without ever putting chips in (planCollapses' folds). */
+export const foldedSeats = (seats: { pos: string }[], heroPos: string, streets: SeatTok[][]): string[] =>
+  seats.filter((s) => s.pos !== heroPos && hasFolded(s.pos, streets)).map((s) => s.pos);
+
+const labelOf = (folds: string[], kinds: string[]): string => [...folds.map((p) => `fold:${p}`), ...kinds].join(" + ");
+
+/** A finished state as a plan, or null when it is not a tree (hero gone, alone, or more than three seats). */
+function planOf(st: State, folds: string[]): CollapsePlan | null {
+  if (st.seats.length > 3) return null;
+  const heroIdx = st.seats.findIndex((s) => s.pos === st.heroPos);
+  if (heroIdx < 0 || st.seats.length < 2) return null;   // hero gone, or alone: nothing to solve
+  return {
+    kind: labelOf(folds, st.kinds), seats: st.seats, heroIdx, streets: st.streets,
+    steps: st.kinds.length, ghostOnly: st.ghostOnly, recipe: { folds: folds.slice(), ops: st.ops.slice() },
+  };
+}
 
 /**
  * Every distinct way to bring `seats` down to three, cheapest primitive first. Returns [] when the field
@@ -195,21 +224,15 @@ export function planCollapses(
   heroPos: string,
   streets: SeatTok[][]
 ): CollapsePlan[] {
-  const folds = seats.filter((s) => s.pos !== heroPos && hasFolded(s.pos, streets)).map((s) => s.pos);
-  const gone = new Set(folds);
-  const start: State = {
-    seats: seats.filter((s) => !gone.has(s.pos)), heroPos,
-    streets: streets.map((street) => street.filter((t) => !gone.has(t.seat))),
-    kinds: [], ghostOnly: true,
-  };
-  const label = (kinds: string[]) => [...folds.map((p) => `fold:${p}`), ...kinds].join(" + ");
+  const folds = foldedSeats(seats, heroPos, streets);
+  const start = startState(seats, heroPos, streets, folds);
   const out: CollapsePlan[] = [];
   const seen = new Set<string>();
 
   const walk = (st: State): void => {
     if (st.seats.length <= 3) {
-      const heroIdx = st.seats.findIndex((s) => s.pos === st.heroPos);
-      if (heroIdx < 0 || st.seats.length < 2) return;   // hero gone, or alone: nothing to solve
+      const plan = planOf(st, folds);
+      if (!plan) return;
       // The RANGES are part of the identity, not just the shape: ghosting a villain who only checked and
       // merging him into his neighbour leave the same seats and the same tokens, but the merged seat carries
       // both ranges. Keying on shape alone silently threw the merge away as a duplicate.
@@ -217,10 +240,7 @@ export function planCollapses(
         st.streets.map((x) => x.map((t) => `${t.seat}${t.tok}`).join(",")).join(";");
       if (seen.has(key)) return;
       seen.add(key);
-      out.push({
-        kind: label(st.kinds), seats: st.seats, heroIdx, streets: st.streets,
-        steps: st.kinds.length, ghostOnly: st.ghostOnly,
-      });
+      out.push(plan);
       return;
     }
     for (let i = 0; i < st.seats.length; i++) {
@@ -236,6 +256,50 @@ export function planCollapses(
   // ghost-only plans first (what the blend was calibrated on), then fewest primitives
   out.sort((a, b) => Number(b.ghostOnly) - Number(a.ghostOnly) || a.steps - b.steps || a.kind.localeCompare(b.kind));
   return out;
+}
+
+/** The walk's start: the folded seats and their tokens gone, nothing collapsed yet. */
+function startState(seats: CollapseSeat[], heroPos: string, streets: SeatTok[][], folds: string[]): State {
+  const gone = new Set(folds);
+  return {
+    seats: seats.filter((s) => !gone.has(s.pos)), heroPos,
+    streets: streets.map((street) => street.filter((t) => !gone.has(t.seat))),
+    kinds: [], ghostOnly: true, ops: [],
+  };
+}
+
+/**
+ * THE SAME COLLAPSE ON A LATER DECISION OF THE HAND (2026-10-14, hand 4924401943). Rebuilds the plan `recipe` describes
+ * from the seats and the streets as they read NOW, or null when it no longer holds: one of its folds is not a fold
+ * (it cannot be — a fold is final — but the capture can change), a ghosted seat has since put chips in, a merge has
+ * since committed twice on a street, or a member of a merged pair has since FOLDED (the composite would go on carrying
+ * the folded seat's range — planCollapses' own rule drops a folded seat before any merge).
+ *
+ * A villain who folded AFTER the recipe was made is not removed here: he folds inside the trees that kept him, at the
+ * street close, as any fold does — the trees and every range the hand's earlier decisions walked stay as they were.
+ * planCollapses instead takes him out from the flop (a fold is "not a collapse"), which builds different trees from
+ * the root: on the river of hand 4924401943 (5-way to the turn, three folded to hero's raise) that was a heads-up
+ * flop + turn walked again from nothing, the off-tree lock solved again and a hung poll — 26 s for an answer whose
+ * ranges came from a hand that was never heads-up on the flop.
+ */
+export function replayPlan(seats: CollapseSeat[], heroPos: string, streets: SeatTok[][], recipe: PlanRecipe): CollapsePlan | null {
+  if (recipe.folds.some((f) => f === heroPos || !hasFolded(f, streets) || !seats.some((s) => s.pos === f))) return null;
+  let st: State | null = startState(seats, heroPos, streets, recipe.folds);
+  for (const op of recipe.ops) {
+    if (!st) return null;
+    if ("ghost" in op) {
+      const i: number = st.seats.findIndex((s) => s.pos === op.ghost);
+      st = i < 0 ? null : ghost(st, i);
+    } else {
+      const [a, b] = op.merge;
+      const i: number = st.seats.findIndex((s) => s.pos === a);
+      if (i < 0 || st.seats[i + 1]?.pos !== b) return null;
+      const members = [...(st.seats[i]!.members ?? [a]), ...(st.seats[i + 1]!.members ?? [b])];
+      if (members.some((m) => hasFolded(m, streets))) return null;
+      st = merge(st, i);
+    }
+  }
+  return st ? planOf(st, recipe.folds) : null;
 }
 
 export interface Picked {

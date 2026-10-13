@@ -12,7 +12,7 @@ import { sbFlatTableMode } from "./poolSbFlat";
 import { seatHistoryFor } from "./seatStats";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
-import { alignedAt, blendEvs, collapseRefusal, pickCollapses, planCollapses, type CollapseSeat, type SeatTok } from "./multiwayCollapse";
+import { alignedAt, blendEvs, collapseRefusal, foldedSeats, pickCollapses, planCollapses, replayPlan, type CollapseSeat, type Picked, type PlanRecipe, type SeatTok } from "./multiwayCollapse";
 import { heroPreloadAtNode, pickDeadMoney, planDeadMoney, tableTotalActions, treeAllInAmounts, type DeadMoneyPlan } from "./deadMoneyCollapse";
 import { blendWalks, recordServed, servedMixOf, servedTraceField } from "./servedStrategy";
 import { narrowForLastResort, rerootCollapse, moneyThrough, type WalkFailure } from "./multiwayReroot";
@@ -1328,6 +1328,42 @@ function sbFlatLogLine(hand: ParsedHand, key: string, u: SbFlatUse, was: number,
 }
 
 /** hand → its flop arrival, by the preflop inputs it was computed from (derived: dropping it costs a recompute). */
+/**
+ * THE HAND KEEPS ITS COLLAPSES (2026-10-14, Brady: "the river heads up spot not using the saved ranges right"). The
+ * collapses a 4+ way hand was answered on, by hand + hero: a later decision of the same hand walks the SAME trees when
+ * every one of them still holds (multiwayCollapse.replayPlan), so a villain who folds after hero's decision folds inside
+ * them and every street already walked comes from the hand's checkpoints. Picked afresh, a seat that folded without
+ * chips leaves from the flop — new trees from the root, nothing reusable (hand 4924401943's river: 26 s, flop + turn
+ * walked again heads-up, the off-tree lock solved again). COLLAPSE_KEEP=off picks afresh at every decision.
+ */
+const keptCollapses = new Map<string, { heroPos: string; recipes: PlanRecipe[]; mode: Picked["mode"]; why: string }>();
+const KEPT_COLLAPSES_MAX = 300;
+const collapseKeepOn = (): boolean => process.env.COLLAPSE_KEEP !== "off";
+/** The hand's kept collapses rebuilt on this decision's streets, or null (none kept, switched off, or one no longer holds). */
+export function keptCollapsePick(handKey: string, heroPos: string, seats: CollapseSeat[], toks: SeatTok[][]): Picked | null {
+  const kept = handKey && collapseKeepOn() ? keptCollapses.get(handKey) : undefined;
+  if (!kept || kept.heroPos !== heroPos) return null;
+  const plans = kept.recipes.map((r) => replayPlan(seats, heroPos, toks, r));
+  // one no longer holds (a ghosted seat put chips in since): the hand's collapses are picked afresh from here on
+  if (!plans.length || plans.some((p) => !p)) { keptCollapses.delete(handKey); return null; }
+  const since = foldedSeats(seats, heroPos, toks).filter((f) => !kept.recipes[0]!.folds.includes(f));
+  return {
+    plans: plans as NonNullable<(typeof plans)[number]>[], mode: kept.mode,
+    why: kept.why + (since.length
+      ? `; the hand's collapses kept from its earlier decision — ${since.join(", ")} folded since, inside the trees that hold ${since.length === 1 ? "him" : "them"}, so the streets already walked are reused`
+      : ""),
+  };
+}
+/** Remember the collapses this decision was answered on (the from-the-flop ones; a re-root or dead-money pick is not kept). */
+export function keepCollapses(handKey: string, heroPos: string, picked: Picked): void {
+  if (!handKey || picked.plans.some((p) => !p.recipe)) return;
+  keptCollapses.delete(handKey);
+  keptCollapses.set(handKey, { heroPos, recipes: picked.plans.map((p) => p.recipe!), mode: picked.mode, why: picked.why });
+  while (keptCollapses.size > KEPT_COLLAPSES_MAX) keptCollapses.delete(keptCollapses.keys().next().value!);
+}
+/** Forget every hand's kept collapses (tests). */
+export function forgetKeptCollapses(): void { keptCollapses.clear(); }
+
 const arrivalMemo = new Map<string, FlopArrival & { at: number; walks: RecordedRangeWalk[] }>();
 const ARRIVAL_MEMO_MAX = 400;
 /** the one compute per arrival key in flight — the warm-up at the flop deal and hero's Solve a moment later share it */
@@ -2107,7 +2143,10 @@ async function solvePostflopViaChainOnce(
       const toks: SeatTok[][] = streets.map((st, i) => st.map((tok, j) => ({ tok, seat: streetSeats[i]![j]! })));
       const cSeats = ordered.map((p) => ({ pos: p, range: arr(p) }));
       const plans = planCollapses(cSeats, ordered[heroAt]!, toks);
-      let picked = pickCollapses(plans);
+      const collapseHandKey = String(hand.clientHandId ?? hand.handId ?? "");
+      const keptPick = keptCollapsePick(collapseHandKey, ordered[heroAt]!, cSeats, toks);
+      let picked = keptPick ?? pickCollapses(plans);
+      if (picked && !keptPick) keepCollapses(collapseHandKey, ordered[heroAt]!, picked);
       let rerootWhy: string | null = null;
       if (!picked && cur !== "flop") {
         // NO COLLAPSE FROM THE FLOP (every villain put chips in on an earlier street, none adjacent) — RE-ROOT at
