@@ -113,6 +113,11 @@ export function freshStackReset() {
     busy: false,
     armedHand: 0, stackBb: null as number | null,
     ticks: 0, clicked: false, needTick: false, lastTick: null as Record<string, any> | null, bbHands: [] as number[],
+    /** the hand the last press went out in (the later of its start and end): a big blind posted in that hand was posted
+     *  before the press could take, and is no sign it did not (2026-10-14); `earlyBb` = such a hand, said once */
+    pressHand: 0, earlyBb: null as number | null,
+    /** the box's markup was logged once this session (the shared-row read, 2026-10-14) */
+    htmlLogged: false,
     /** reads that pressed nothing (stackReset.ts tickBox): no tick spent, the next read no sooner than `retryAt` */
     misses: 0, retryAt: 0.0, lastMissWhy: null as string | null,
     leftAt: 0.0, notBefore: 0.0, oldRid: null as string | null, oldTag: null as string | null,
