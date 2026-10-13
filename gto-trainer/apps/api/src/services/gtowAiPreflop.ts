@@ -798,8 +798,9 @@ function relocate(solId: string, from: GtowSessionId | null, avoid: ReadonlySet<
   const t0 = Date.now();
   const p = (async (): Promise<{ solId: string } | { error: string }> => {
     tstep("GTO Wizard account busy → re-posting to another account");
-    // a throw (a reply that is not JSON) is this re-post's failure, said as one: the read may have ended already
-    // (relocateIfTime), and its own failure would otherwise leave no line at all
+    // a throw is this re-post's failure, said as one: the read may have ended already (relocateIfTime), and its own
+    // failure would otherwise leave no line at all (a reply that is not JSON no longer throws — the next account is
+    // tried, postPreflopSolution — but whatever else might)
     const made = await postPreflopSolution(rec.body, rec.need, { actions: "", board: "" }, rec.locks, { avoid: [...skip] })
       .catch((e: unknown): { error: string } => ({ error: `the re-post threw: ${e instanceof Error ? e.message : e}` }));
     const secs = ((Date.now() - t0) / 1000).toFixed(1);
@@ -884,12 +885,21 @@ async function relocateIfTime(solId: string, from: GtowSessionId | null, avoid: 
   return { solId: r.solId, owner: owners.get(r.solId) ?? null };
 }
 
-/** Forget the memos that hand out these solves (a walled account's): the next ask posts the tree afresh, elsewhere. */
+/**
+ * Forget the memos that hand out these solves (a walled account's): the next ask posts the tree afresh, elsewhere.
+ *
+ * A STORED TREE (independent review 2026-10-13): its readers hold `gc:<key>`, and preRealOf maps that to the FIRST solve
+ * minted for it — after a re-post, not the one that walled. Matching the value alone kept the entry, and the next miss
+ * went gc → R1 → (moved) R2, the walled replacement, again. The entry now goes when its KEY is forgotten too (readNode
+ * passes the id its reader holds: the gc: one). The gc: memo in `solutions` is kept: the store serves the nodes it holds
+ * without a request, and a node it lacks mints the tree afresh (materialisePre) — through routing, which leaves the
+ * walled account out.
+ */
 function forgetSolution(...ids: string[]): void {
   const gone = new Set(ids);
   for (const [k, v] of solOfKey) if (gone.has(v)) { solOfKey.delete(k); solutions.delete(k); }
   for (const [k, v] of lockedOfKey) if (gone.has(v)) { lockedOfKey.delete(k); lockedSolutions.delete(k); }
-  for (const [g, v] of preRealOf) if (gone.has(v)) preRealOf.delete(g);
+  for (const [g, v] of preRealOf) if (gone.has(g) || gone.has(v)) preRealOf.delete(g);
 }
 
 /**
@@ -968,6 +978,23 @@ function preflopCandidates(need: GtowNeed, avoid: ReadonlySet<GtowSessionId>): G
   return ids.length ? ids : gtowSessions.routeIgnoringBlocks(need).filter((id) => !avoid.has(id));
 }
 
+/**
+ * The id a tree / solution POST's 2xx reply carries — or why there is none: the body is not JSON (a gateway's HTML page
+ * with a 201), carries no id, or could not be read (the request's 20 s bound runs through the body). Independent review
+ * 2026-10-13: `await res.json()` threw out of the solve on any of these ("GTO Wizard AI preflop threw" — a solver-error)
+ * where a failed request moves on to the next account; it is the same thing, this account's failure, not the tree's.
+ * The id is handed back as GTO Wizard sent it (the solution POST carries the tree's id unchanged, as it always has).
+ */
+async function replyId(res: Response): Promise<{ id: string | number } | { bad: string }> {
+  let text: string;
+  try { text = await res.text(); }
+  catch (e) { return { bad: `could not be read (${e instanceof Error ? e.message : e})` }; }
+  let j: any;
+  try { j = JSON.parse(text); }
+  catch { return { bad: `was not JSON (${res.status}: ${text.slice(0, 120)})` }; }
+  return j?.id != null && j.id !== "" ? { id: j.id } : { bad: `carried no id (${res.status}: ${text.slice(0, 120)})` };
+}
+
 /** POST a preflop tree and its solution on the first account routing allows (the network half of ensureSolution, and
  *  what materialising a stored tree sends — the body exactly as stored). Records the owner. */
 async function postPreflopSolution(body: any, need: GtowNeed, solution: { actions: string; board: string }, locks: readonly any[] = [],
@@ -1019,7 +1046,13 @@ async function postPreflopSolution(body: any, need: GtowNeed, solution: { action
       skipped.push(`${id}: tree ${tr.status}`);
       continue; // a refusal here is this ACCOUNT's, not the tree's — try the next
     }
-    const tree = await tr.json();
+    const tree = await replyId(tr);
+    if ("bad" in tree) {
+      last = `custom-trees reply on ${id} ${tree.bad}`;
+      skipped.push(`${id}: tree reply unusable`);
+      console.log(`[gtow-route] ${id}: the preflop tree reply ${tree.bad} — the next account is tried`);
+      continue;
+    }
     let s: Awaited<ReturnType<typeof sendWithAuthRetry>>;
     try {
       s = await sendWithAuthRetry(id, "solution", t.token, (tok, retry) =>
@@ -1044,7 +1077,13 @@ async function postPreflopSolution(body: any, need: GtowNeed, solution: { action
       skipped.push(`${id}: solution ${so.status}`);
       continue;
     }
-    const sol = await so.json();
+    const sol = await replyId(so);
+    if ("bad" in sol) {
+      last = `custom-solutions reply on ${id} ${sol.bad}`;
+      skipped.push(`${id}: solution reply unusable`);
+      console.log(`[gtow-route] ${id}: the preflop solution reply ${sol.bad} — the next account is tried`);
+      continue;
+    }
     let solId = String(sol.id);
     // A LOCKED SOLVE IS A CHAIN (services/gtowSolveCache PostedTree.locks): each lock forks the solution before it, on
     // the same account. A lock refused is a fact about the lock, not the account: no other account is tried.
