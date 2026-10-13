@@ -57,11 +57,40 @@
   // the tick state: the box tied to the label (<label for>), else the nearest box walking up from the label - but
   // ONLY a container that holds exactly one box and not the OTHER label too (a shared row would answer for the other
   // box: `shared`). Anything else is unknown (null), never "unticked".
-  let checked = null, via = null, box = null, shared = false, c = lab;
+  let checked = null, via = null, box = null, shared = false, c = lab, row = null;
   const ctl = lab.control;
   if (ctl && ctl.type === 'checkbox') { box = ctl; checked = !!ctl.checked; via = 'label-for'; }
+  // A SHARED ROW (2026-10-14, session_20261013_223500: every press read `shared`, so the state was never known and a
+  // second press unticked the first): the row's two boxes, each paired with the label nearest it on screen - ours only
+  // when it sits nearer our label than the other one (the labels are 20 px apart). Boxes that do not measure stay unknown.
+  const pairShared = row => {
+    const mid = r => r.y + r.height / 2;
+    const others = holders(t => t === OTHER).filter(shown);
+    if (!others.length) return null;
+    const ly = mid(rectOf(lab)), oy = mid(rectOf(others[0]));
+    const inputs = [...row.querySelectorAll('input[type=checkbox]')];
+    const cands = inputs.length ? inputs : [...row.querySelectorAll('[aria-checked]')];
+    if (cands.length !== 2) return null;
+    let best = null, bestD = Infinity;
+    for (const b of cands) {
+      const r = rectOf(b);
+      if (!sized(r)) return null;
+      const d = Math.abs(mid(r) - ly);
+      if (d < bestD && d < Math.abs(mid(r) - oy)) { best = b; bestD = d; }
+    }
+    return best;
+  };
   for (let i = 0; !box && i < 5 && c && c !== doc.body; i++) {
-    if (norm(c.textContent).includes(OTHER)) { shared = true; c = null; break; }
+    if (norm(c.textContent).includes(OTHER)) {
+      shared = true;
+      const b = pairShared(c);
+      if (b) {
+        box = b;
+        if (b.tagName === 'INPUT') { checked = !!b.checked; via = 'shared-nearest input'; }
+        else { checked = b.getAttribute('aria-checked') === 'true'; via = 'shared-nearest aria'; }
+      }
+      row = c; c = null; break;
+    }
     const boxes = [...c.querySelectorAll('input[type=checkbox]')];
     if (boxes.length > 1) break;
     if (boxes.length === 1) { box = boxes[0]; checked = !!box.checked; via = 'input'; break; }
@@ -80,7 +109,7 @@
                 on: pt === br && pt ? 'box' : pt ? 'label' : null,
                 w: Math.round(lr.width || 0), h: Math.round(lr.height || 0),
                 x: pt ? fb.x + pt.x + pt.width / 2 : null, y: pt ? fb.y + pt.y + pt.height / 2 : null,
-                html: ((c || lab.parentElement || lab).outerHTML || '').slice(0, 600) };
+                html: ((c || row || lab.parentElement || lab).outerHTML || '').slice(0, 600) };
   if (CLICK) {
     const target = box || lab;
     try { target.click(); out.domClicked = String(target.tagName || '').toLowerCase() + (box ? ' (the box)' : ' (the label)'); }

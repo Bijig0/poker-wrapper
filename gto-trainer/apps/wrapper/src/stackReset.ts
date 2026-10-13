@@ -42,6 +42,15 @@
  * after the arming STACK_RESET_TICKS times (whatever was or was not pressed in between). /state `stackReset` carries
  * the machine (stackResetBrief).
  *
+ * A BIG BLIND POSTED BEFORE THE PRESS IS NO MISS (2026-10-14, session_20261013_223500 table 1). Armed at 171.4 bb as
+ * hand 43 ended; hero was the big blind of hand 44 and the client had posted it before the first press went out
+ * (23:03:29.8, hand 44). The machine read that blind as "the tick did not take", forgot the press and pressed again
+ * 0.9 s later - and the box's state is unreadable there (both labels share a row), so the second press UNTICKED it: the
+ * blind of hand 50 was posted too, the third press ticked it back, hero sat out at hand 56, an orbit late at 170-190 bb.
+ * Now each press notes its hand (`pressHand`, the later of where it started and ended); only a big blind in a hand
+ * after the last press says the press did not take. The read also pairs a box to its label by position in a shared row
+ * (sitout.READ_JS_TMPL.js), and the first unreadable press logs the box's markup once a session.
+ *
  * THE PANEL SAYS IT (2026-10-09, Brady): the feed line scrolled away, so /state `stackReset.banner` (stackResetBanner)
  * words the step for the table's panel — "Max deep stack (150 bb) reached at 180 bb — reseating: sitting out at the
  * next big blind" … "a fresh seat in 42 s" … "Reseated at a fresh table (105 s)" — and GET /tables carries its phase
@@ -154,7 +163,7 @@ export async function maybeStackReset(): Promise<void> {
       const st = heroStackBb();
       if (st === null || st < R.bb) return;
       Object.assign(R, { armedHand: S.handNo, stackBb: st, ticks: 0, clicked: false, needTick: true, lastTick: null, bbHands: [],
-                         misses: 0, retryAt: 0.0, lastMissWhy: null, outcome: null });
+                         misses: 0, retryAt: 0.0, lastMissWhy: null, outcome: null, pressHand: 0, earlyBb: null });
       setState("armed");
       feedAdd(`DEEP STACK: ${st} bb ≥ ${R.bb} bb — sitting out at the next big blind, then a fresh table of this format`);
       log(`[stack-reset] armed at ${st} bb (hand ${S.handNo})`);
@@ -177,7 +186,7 @@ export async function maybeStackReset(): Promise<void> {
         const tag = S.frame.tag, rid = S.tapBound;
         setState("idle");
         Object.assign(R, { armedHand: 0, stackBb: null, ticks: 0, clicked: false, needTick: false, bbHands: [], oldRid: null, oldTag: null,
-                           misses: 0, retryAt: 0.0, lastMissWhy: null });
+                           misses: 0, retryAt: 0.0, lastMissWhy: null, pressHand: 0, earlyBb: null });
         R.outcome = { kind: "done", at: now, hand: S.handNo, why: null, phase: "reseating", waitedS: waited, sitBack: null };
         feedAdd(`Deep stack: seated at a fresh table (${waited} s after leaving the old one)`);
         log(`[stack-reset] done: frame ${pyStr(tag)}, socket ${pyStr(rid)} (${waited} s after the leave)`);
@@ -210,8 +219,16 @@ export async function maybeStackReset(): Promise<void> {
     });
     return;
   }
+  // a big blind posted in the hand of the last press (or before it) was posted before the press could take: the box
+  // takes at the next one - no miss, and no second press (an unreadable box pressed twice is unticked again)
+  if (R.ticks > 0 && S.handNo <= R.pressHand && heroPostedBb()) {
+    if (R.earlyBb !== S.handNo) {
+      R.earlyBb = S.handNo;
+      log(`[stack-reset] hero's big blind in hand ${S.handNo} was posted before the press took — it sits out at the next one`);
+    }
+  }
   // a hand after the arming in which hero still posted the big blind: the tick did not take (or none went out yet)
-  if (S.handNo > R.armedHand && heroPostedBb() && !R.bbHands.includes(S.handNo)) {
+  else if (S.handNo > R.armedHand && heroPostedBb() && !R.bbHands.includes(S.handNo)) {
     R.bbHands.push(S.handNo);
     if (R.ticks >= STACK_RESET_TICKS || R.bbHands.length >= STACK_RESET_TICKS) {
       await abort(R.ticks >= STACK_RESET_TICKS
@@ -249,11 +266,18 @@ function background(f: () => Promise<unknown>): void {
 function tickBox(): void {
   const R = S.stackReset;
   R.needTick = false;
+  const startHand = S.handNo;
   background(async () => {
     const res = await stackResetSeams.tick(R.clicked);
     const pressed = !!(res.pressed || res.clicked);
     R.clicked = R.clicked || pressed;
-    const { html: _h, ...result } = res;
+    if (pressed) R.pressHand = Math.max(startHand, S.handNo);
+    const { html, ...result } = res;
+    // the box's state could not be read: its markup once a session, so the read can be taught it (2026-10-14)
+    if (pressed && html && !R.htmlLogged) {
+      R.htmlLogged = true;
+      log(`[stack-reset] the box's markup (state ${pyStr(res.state ?? null)}, shared ${!!res.shared}): ${String(html).slice(0, 600)}`);
+    }
     R.lastTick = { at: nowMs(), ...result };
     if (!res.ok && !pressed) {
       R.misses += 1;
@@ -369,7 +393,7 @@ export function stackResetBrief(): Record<string, any> {
   return {
     state: R.state, bb: R.bb, waitS: R.waitS, since: R.since || null, forS: R.since ? pyRound(time() - R.since, 1) : null,
     busy: R.busy, armedHand: R.state === "idle" ? null : R.armedHand, stackBb: R.stackBb,
-    ticks: R.ticks, maxTicks: STACK_RESET_TICKS, clicked: R.clicked, misses: R.misses,
+    ticks: R.ticks, maxTicks: STACK_RESET_TICKS, clicked: R.clicked, misses: R.misses, pressHand: R.pressHand || null,
     retryInS: R.state === "armed" && R.needTick && R.retryAt > time() ? pyRound(R.retryAt - time(), 1) : null,
     bbHands: [...R.bbHands],
     lastTick: lt ? { at: lt.at ?? null, ok: !!lt.ok, why: lt.why ?? null, state: lt.state ?? null, method: lt.method ?? null,
