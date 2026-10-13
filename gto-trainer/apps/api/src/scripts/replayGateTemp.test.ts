@@ -8,7 +8,8 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DAY_MS, isControlWorktreeName, isGateTempName, refusalFor, removeGateTemp, sizeOf, sweepGateTemp } from "./replayGateTemp";
+import { claimGateDirs, DAY_MS, gateHolder, type GateHolder, gateRunDirs, gateRunId, isControlWorktreeName, isGateReport, isGateTempName, LOCK_FILE, pidAlive,
+  refusalFor, releaseGateDirs, removeGateTemp, sizeOf, sweepGateTemp } from "./replayGateTemp";
 
 let roots: string[] = [];
 afterEach(() => { for (const r of roots) rmSync(r, { recursive: true, force: true }); roots = []; });
@@ -44,6 +45,16 @@ describe("removeGateTemp", () => {
     expect(r.kept.sort()).toEqual(["replay-gate-session_1.json", "replay-gate-session_1.vs-baseline.json"]);
     expect(r.bytes).toBe(5000 + 3000 + 50);
     expect(readdirSync(d).sort()).toEqual(["replay-gate-session_1.json", "replay-gate-session_1.vs-baseline.json"]);
+  });
+  it("the run keeps its reports only — not the copied configs (gtow-accounts.json holds the GTO Wizard accounts)", () => {
+    const root = scratch();
+    const d = workDir(root, "replay-gate-r1-candidate");
+    file(join(d, "replay-gate-session_1.vs-baseline.json"), 20);
+    file(join(d, "gtow-accounts.json"), 30);
+    for (const n of ["replay-gate-session_1.json", "replay-gate-session_1.vs-baseline.json", "replay-gate-2026-10-03T00_00_2026-10-04T00_00.json"]) expect(isGateReport(n)).toBe(true);
+    for (const n of ["gtow-accounts.json", "profiles.json", "replay-gate-x.json.copying", "poker.sqlite"]) expect(isGateReport(n)).toBe(false);
+    expect(removeGateTemp(d, { keep: isGateReport }).kept.sort()).toEqual(["replay-gate-session_1.json", "replay-gate-session_1.vs-baseline.json"]);
+    expect(existsSync(join(d, "gtow-accounts.json"))).toBe(false);
   });
   it("removes the whole dir when nothing is kept, and is quiet about a dir that is not there", () => {
     const root = scratch();
@@ -116,5 +127,90 @@ describe("sweepGateTemp", () => {
   });
   it("a root that does not exist sweeps nothing", () => {
     expect(sweepGateTemp(join(scratch(), "nope"))).toEqual({ removed: [], kept: [], skipped: [] });
+  });
+  it("the per-run names (2026-10-13) age out like the old ones; only the control worktree is pruned from git", () => {
+    const root = scratch();
+    const d = gateRunDirs({ tmp: root, runId: "20261012-090000-111", commit: "a9638ca" });
+    const old = [d.controlWork!, d.candidateWork!, d.controlWorktree!].map((p) => workDir(root, p.split("/").pop()!, 2 * DAY_MS));
+    const live = gateRunDirs({ tmp: root, runId: "20261013-135800-222", commit: "a9638ca" });
+    const young = [live.controlWork!, live.candidateWork!, live.controlWorktree!].map((p) => workDir(root, p.split("/").pop()!));
+    const s = sweepGateTemp(root);
+    expect(s.removed.map((r) => r.path).sort()).toEqual(old.sort());
+    expect(s.kept.sort()).toEqual(young.sort());
+    expect(s.removed.filter((r) => isControlWorktreeName(r.path)).map((r) => r.path)).toEqual([join(root, d.controlWorktree!.split("/").pop()!)]);
+  });
+});
+
+describe("a run's own dirs (2026-10-13: two gates at once shared them)", () => {
+  it("the run id is the local start time and the pid", () => {
+    expect(gateRunId(new Date(2026, 9, 13, 13, 58, 7), 4242)).toBe("20261013-135807-4242");
+  });
+  it("two runs against the same commit share no dir; the control's copies are never the worktree", () => {
+    const tmp = "C:/Users/x/AppData/Local/Temp";
+    const a = gateRunDirs({ tmp, runId: "20261013-135800-111", commit: "a9638ca" });
+    const b = gateRunDirs({ tmp, runId: "20261013-135800-222", commit: "a9638ca" });
+    const all = [a, b].flatMap((d) => [d.work, d.controlWorktree!, d.controlWork!, d.candidateWork!]);
+    expect(new Set(all).size).toBe(all.length);
+    expect(a).toEqual({ work: `${tmp}/replay-gate-20261013-135800-111`, controlWorktree: `${tmp}/replay-gate-control-a9638ca-20261013-135800-111`,
+      controlWork: `${tmp}/replay-gate-20261013-135800-111-control-a9638ca`, candidateWork: `${tmp}/replay-gate-20261013-135800-111-candidate` });
+    for (const p of all) expect(isGateTempName(p.split("/").pop()!)).toBe(true);           // the sweep still finds them
+    expect(all.filter(isControlWorktreeName)).toEqual([a.controlWorktree!, b.controlWorktree!]);
+  });
+  it("an explicit --work is the person's: the copies sit beside it, the worktree still carries the run id", () => {
+    const d = gateRunDirs({ tmp: "C:\\T", runId: "r1", work: "C:\\T\\replay-gate-d468ad", commit: "a9638ca" });
+    expect(d.work).toBe("C:/T/replay-gate-d468ad");
+    expect(d.controlWork).toBe("C:/T/replay-gate-d468ad-control-a9638ca");
+    expect(d.candidateWork).toBe("C:/T/replay-gate-d468ad-candidate");
+    expect(d.controlWorktree).toBe("C:/T/replay-gate-control-a9638ca-r1");
+    expect(gateRunDirs({ tmp: "C:/T", runId: "r1" })).toEqual({ work: "C:/T/replay-gate-r1", controlWorktree: null, controlWork: null, candidateWork: null });
+  });
+});
+
+describe("claimGateDirs", () => {
+  const holder = (pid: number, startedMs = Date.now()): GateHolder => ({ pid, started: "2026-10-13 13:58:00", startedMs, cwd: "C:/x", argv: ["replayGate.ts", "--session", "s1"] });
+  const alive = (pids: number[]) => (pid: number) => pids.includes(pid);
+  it("claims fresh dirs (made when missing) and releases them", () => {
+    const root = scratch();
+    const dirs = [join(root, "replay-gate-r1-control-abc"), join(root, "replay-gate-r1-candidate")];
+    expect(claimGateDirs(dirs, holder(111), { alive: alive([111]) })).toBeNull();
+    for (const d of dirs) expect(gateHolder(d, { alive: alive([111]) })?.pid).toBe(111);
+    releaseGateDirs(dirs, 111);
+    for (const d of dirs) { expect(existsSync(d)).toBe(true); expect(existsSync(join(d, LOCK_FILE))).toBe(false); }
+  });
+  it("refuses a dir another live run holds, naming it — and undoes what it claimed, touching nothing of the holder's", () => {
+    const root = scratch();
+    const held = workDir(root, "replay-gate-d468ad-candidate");
+    expect(claimGateDirs([held], holder(222), { alive: alive([222]) })).toBeNull();
+    const mine = join(root, "replay-gate-d468ad-control-abc");                              // claimed first, then undone
+    const refusal = claimGateDirs([mine, held], holder(111), { alive: alive([111, 222]) });
+    expect(refusal).toMatch(/in use by another replay gate — pid 222, started 2026-10-13 13:58:00, in C:\/x: replayGate\.ts --session s1/);
+    expect(refusal).toContain(held);
+    expect(existsSync(mine)).toBe(false);
+    expect(gateHolder(held, { alive: alive([111, 222]) })?.pid).toBe(222);
+    expect(existsSync(join(held, "poker.sqlite"))).toBe(true);
+    releaseGateDirs([held], 111);                                                           // not 111's: left alone
+    expect(gateHolder(held, { alive: alive([222]) })?.pid).toBe(222);
+  });
+  it("takes over a stale lock: a dead pid, or one older than a day (a pid reused by another program)", () => {
+    const root = scratch();
+    const d = join(root, "replay-gate-x");
+    expect(claimGateDirs([d], holder(222), { alive: alive([222]) })).toBeNull();
+    expect(claimGateDirs([d], holder(111), { alive: alive([111]) })).toBeNull();             // 222 is dead
+    expect(gateHolder(d, { alive: alive([111]) })?.pid).toBe(111);
+    const e = join(root, "replay-gate-y");
+    expect(claimGateDirs([e], holder(222, Date.now() - DAY_MS - 1000), { alive: alive([222]) })).toBeNull();
+    expect(claimGateDirs([e], holder(111), { alive: alive([111, 222]) })).toBeNull();
+    expect(gateHolder(e, { alive: alive([111, 222]) })?.pid).toBe(111);
+  });
+  it("the run's cleanup removes the lock with the copies (the reports stay)", () => {
+    const root = scratch();
+    const d = workDir(root, "replay-gate-r1");
+    expect(claimGateDirs([d], holder(process.pid))).toBeNull();
+    expect(removeGateTemp(d, { keep: (n) => /\.json$/.test(n) }).kept).toEqual(["replay-gate-session_1.json"]);
+    expect(readdirSync(d)).toEqual(["replay-gate-session_1.json"]);
+  });
+  it("pidAlive: this process is, a pid past the range is not", () => {
+    expect(pidAlive(process.pid)).toBe(true);
+    expect(pidAlive(4194300)).toBe(false);
   });
 });
