@@ -5,7 +5,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
 import { hrc6maxDb, trustAuditLine } from "./hrc6maxDb";
-import { arrivalTrust, nodeTrust, resetNodeTrustForTests, setTrustMap } from "./nodeTrust";
+import { arrivalTrust, isPoolLockedChart, nodeTrust, resetNodeTrustForTests, setTrustMap } from "./nodeTrust";
+
+describe("isPoolLockedChart — which trees carry the pool's limps by construction", () => {
+  it("pool3, the pilot, widex, the hero-free trees (uneven and even) and poolx; not the equilibrium or raise charts", () => {
+    for (const id of ["ign200_6max_D100_olimp_pool3", "ign200_6max_D100_olimp_pool", "ign200_6max_D100_olimp_widex",
+      "ign200_6max_D100_s30_HJ_olimp_poolh", "ign200_6max_D100_olimp_poolh", "ign200_6max_D100_olimp_poolx", "ign200_6max_D100_olimp_poolx3"]) {
+      expect(isPoolLockedChart(id)).toBe(true);
+    }
+    for (const id of ["ign200_6max_D100_olimp", "ign200_6max_D100_o2_5", "ign200_6max_D100_s30_HJ_olimp", "ign200_6max_D50_o2_5"]) {
+      expect(isPoolLockedChart(id)).toBe(false);
+    }
+  });
+});
 
 // THE TRUST SCORE IS BAKED WITH THE CHART (2026-10-03, audit finding 6). Before it, a chart missing from
 // limp_node_trust.json answered every node unguarded with no log line at all (70 of 1,092 live chart answers).

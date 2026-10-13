@@ -94,6 +94,12 @@ export const guardApplies = (chartId: string): boolean => process.env.TRUST_GUAR
 const isLimpTree = (chartId: string): boolean => /olimp/.test(chartId);
 
 /** The trust verdict for one chart node; `known:false` when nothing scores the node (no verdict). */
+/** Is this a pool-locked limp tree (judged by reach, regret only past TRUST_REGRET_CATASTROPHIC)? The hero-free trees
+ *  (`_olimp_poolh`, uneven and the even D100 one) and the `_poolx*` trees lock limps too (2026-10-13: their locked limp
+ *  nodes read regret 0.09-0.15 by construction, so under the strict 0.03 bound every flop-range walk off them failed
+ *  arrivalTrust at the limper's node). */
+export const isPoolLockedChart = (chartId: string): boolean => /_pool(?:\d*|h|x\d*)$|_widex$/.test(chartId);
+
 export function nodeTrust(chartId: string, line: string): NodeTrust {
   if (!guardApplies(chartId)) return { known: false, reach: null, regret: null, starved: false, why: null, from: null };
   const baked = injected ? undefined : hrc6maxDb.trust(chartId, line);
@@ -137,7 +143,7 @@ export function nodeTrust(chartId: string, line: string): NodeTrust {
   // behind two limps and a complete: 0.06, every option +EV, against 1.64 with a check at −7.8bb in the
   // equilibrium tree). The locks are what train those nodes — reach 1 in 3,400 there against 1 in 147,000 —
   // so reach is the test, with only a catastrophic regret still refusing.
-  const pooled = /_pool\d*$|_widex$/.test(chartId);
+  const pooled = isPoolLockedChart(chartId);
   const highRegret = regret > (pooled ? TRUST_REGRET_CATASTROPHIC : TRUST_REGRET_MAX);
   if (!lowReach && !highRegret) return { known: true, reach, regret, starved: false, why: null, from };
   const reachTxt = reach != null ? (reach > 0 ? `1 in ${Math.round(1 / reach).toLocaleString()} hands` : "never") : "unknown";
