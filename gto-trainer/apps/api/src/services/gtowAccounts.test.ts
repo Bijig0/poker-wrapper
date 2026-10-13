@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cdpHostTakenBy, cdpPort, defaultAccounts, desktopAppCandidates, desktopAppPath, launchPlan, loadAccounts, removeAccount, slugOf, upsertAccount } from "./gtowAccounts";
+import { cdpHostTakenBy, cdpPort, defaultAccounts, launchPlan, loadAccounts, removeAccount, slugOf, upsertAccount } from "./gtowAccounts";
 import { GtowRequestLog } from "./gtowRequestLog";
 import { ensureEventTables } from "../../../../packages/data-root/eventTables";
 
@@ -20,31 +20,41 @@ afterEach(() => {
 });
 
 describe("registry", () => {
-  test("seeds Brady's two accounts by name, keeping the pool's old slot ids, and does not write under test", () => {
+  test("seeds the primary by name, keeping the pool's old slot id, and does not write under test", () => {
     const f = loadAccounts();
-    expect(f.accounts.map((a) => [a.id, a.name, a.tier, a.multiway])).toEqual([["secondary", "Elite 1", "elite", false], ["primary", "Ultra", "ultra", true]]);
+    expect(f.accounts.map((a) => [a.id, a.name, a.tier, a.multiway])).toEqual([["primary", "Ultra", "ultra", true]]);
     expect(existsSync(process.env.GTOW_ACCOUNTS_PATH!)).toBe(false);
-    expect(defaultAccounts({ GTOW_PREFER: "primary" } as any).find((a) => a.id === "primary")!.order).toBe(1);
+    expect(defaultAccounts({} as NodeJS.ProcessEnv).map((a) => a.id)).not.toContain("secondary");   // the desktop-app account is gone
   });
 
   test("upsert edits a row by id, adds a new one by name (slug id), and remove forgets it", () => {
-    const edited = upsertAccount({ id: "secondary", name: "Elite 1", priceMonthly: 169, notes: "renews 2 Oct" });
-    expect(edited).toMatchObject({ id: "secondary", name: "Elite 1", priceMonthly: 169, notes: "renews 2 Oct", enabled: true, multiway: false });
+    const edited = upsertAccount({ id: "primary", name: "Ultra", priceMonthly: 169, notes: "renews 2 Oct" });
+    expect(edited).toMatchObject({ id: "primary", name: "Ultra", priceMonthly: 169, notes: "renews 2 Oct", enabled: true, multiway: true });
     const added = upsertAccount({ name: "Elite 2", tier: "elite", cdpHost: "127.0.0.1:9224", launchHint: "" });
     expect(added.id).toBe("elite-2");
     expect(slugOf("Elite 2")).toBe("elite-2");
     const onDisk = JSON.parse(readFileSync(process.env.GTOW_ACCOUNTS_PATH!, "utf8"));
-    expect(onDisk.accounts.map((a: any) => a.id)).toEqual(["secondary", "primary", "elite-2"]);
+    expect(onDisk.accounts.map((a: any) => a.id)).toEqual(["primary", "elite-2"]);
     expect(loadAccounts().accounts.find((a) => a.id === "elite-2")).toMatchObject({ name: "Elite 2", tier: "elite", multiway: false, order: 9, enabled: true });
     expect(removeAccount("elite-2")).toBe(true);
     expect(removeAccount("elite-2")).toBe(false);
-    expect(loadAccounts().accounts.map((a) => a.id)).toEqual(["secondary", "primary"]);
+    expect(loadAccounts().accounts.map((a) => a.id)).toEqual(["primary"]);
   });
 
   test("a partial edit keeps every field it did not name", () => {
     upsertAccount({ id: "primary", enabled: false });
     const p = loadAccounts().accounts.find((a) => a.id === "primary")!;
     expect(p).toMatchObject({ name: "Ultra", tier: "ultra", multiway: true, enabled: false, cdpHost: "127.0.0.1:9222" });
+  });
+
+  test("a stored row for the removed desktop-app client is dropped on load, the Chrome rows are kept", () => {
+    const { writeFileSync } = require("node:fs");
+    writeFileSync(process.env.GTOW_ACCOUNTS_PATH!, JSON.stringify({ version: 1, accounts: [
+      { id: "secondary", name: "Elite 1", tier: "elite", cdpHost: "127.0.0.1:9223", launchHint: "scripts/start_gtow_secondary.ps1", client: "electron" },
+      { id: "primary", name: "Ultra", tier: "ultra", cdpHost: "127.0.0.1:9222", client: "chrome" },
+      { id: "ultra-2", name: "Ultra 2", tier: "ultra", cdpHost: "127.0.0.1:9224", client: "chrome" },
+    ] }));
+    expect(loadAccounts().accounts.map((a) => a.id)).toEqual(["primary", "ultra-2"]);
   });
 });
 
@@ -104,55 +114,36 @@ describe("ledger meters", () => {
   });
 });
 
-describe("how each account's client is run (2026-09-29, a dynamic number of accounts)", () => {
-  test("the seeded rows: the primary a Chrome profile (a desktop build only when GTOW_CLIENT_PATH pins one), the secondary a desktop build", () => {
-    const [sec, pri] = defaultAccounts({} as NodeJS.ProcessEnv);
-    expect([pri!.client, pri!.exe, pri!.profileDir]).toEqual(["chrome", null, null]);
-    expect([sec!.client, sec!.exe]).toEqual(["electron", null]);
-    expect(defaultAccounts({ GTOW_CLIENT_PATH: "C:\\x\\GTO Wizard.exe" } as NodeJS.ProcessEnv)[1]!.client).toBe("electron");
+describe("how each account's client is run (Chrome profiles only; the desktop app was removed 2026-10-13)", () => {
+  test("the seeded row is a Chrome profile", () => {
+    const [pri] = defaultAccounts({} as NodeJS.ProcessEnv);
+    expect([pri!.client, pri!.profileDir]).toEqual(["chrome", null]);
   });
-  test("launchPlan: a launcher script wins; else the desktop build; else a Chrome profile of the account's own, on the account's port", () => {
+  test("launchPlan: a launcher script wins; else a Chrome profile of the account's own, on the account's port", () => {
     const repo = mkdtempSync(join(tmpdir(), "gtow-plan-"));
-    const base = defaultAccounts({} as NodeJS.ProcessEnv)[1]!;
+    const base = defaultAccounts({} as NodeJS.ProcessEnv)[0]!;
     const chrome = launchPlan({ ...base, id: "elite-2", cdpHost: "127.0.0.1:9224", launchHint: "" }, repo, "C:\\lad");
     expect([chrome.kind, chrome.port, chrome.profileDir, chrome.env.GTOW_CDP_PORT]).toEqual(["chrome", 9224, join("C:\\lad", "gtow-cdp-profile-elite-2"), "9224"]);
     expect(launchPlan({ ...base, launchHint: "" }, repo, "C:\\lad").profileDir).toBe(join("C:\\lad", "gtow-cdp-profile"));   // the primary keeps its folder
-    const exe = launchPlan({ ...base, id: "d", cdpHost: "127.0.0.1:9230", launchHint: "", client: "electron", exe: "C:\\d\\GTO Wizard.exe" }, repo);
-    expect([exe.kind, exe.exe, exe.env.GTOW_CLIENT_PATH]).toEqual(["electron", "C:\\d\\GTO Wizard.exe", "C:\\d\\GTO Wizard.exe"]);
-    // a script named but missing from the repo does not count; present, it wins even over a desktop build
-    expect(launchPlan({ ...base, id: "s", launchHint: "scripts/nope.ps1", client: "electron", exe: "C:\\d\\x.exe" }, repo).kind).toBe("electron");
+    // a script named but missing from the repo does not count; present, it wins
+    expect(launchPlan({ ...base, id: "s", launchHint: "scripts/nope.ps1" }, repo).kind).toBe("chrome");
     const { mkdirSync, writeFileSync } = require("node:fs");
     mkdirSync(join(repo, "scripts"), { recursive: true }); writeFileSync(join(repo, "scripts", "mine.ps1"), "");
-    expect(launchPlan({ ...base, id: "s", launchHint: "scripts/mine.ps1", client: "electron", exe: "C:\\d\\x.exe" }, repo).kind).toBe("script");
+    expect(launchPlan({ ...base, id: "s", launchHint: "scripts/mine.ps1" }, repo).kind).toBe("script");
     rmSync(repo, { recursive: true, force: true });
   });
   test("cdpHostTakenBy: one DevTools port per account", () => {
     const rows = defaultAccounts({} as NodeJS.ProcessEnv);
-    expect(cdpHostTakenBy("127.0.0.1:9223", "new", rows)?.id).toBe("secondary");
-    expect(cdpHostTakenBy("localhost:9223", "secondary", rows)).toBeNull();     // its own port
+    expect(cdpHostTakenBy("127.0.0.1:9222", "new", rows)?.id).toBe("primary");
+    expect(cdpHostTakenBy("localhost:9222", "primary", rows)).toBeNull();     // its own port
     expect(cdpHostTakenBy("127.0.0.1:9224", "new", rows)).toBeNull();
     expect(cdpPort("nonsense")).toBeNull();
   });
-  test("normalize keeps the client fields, and a new row is a Chrome profile", () => {
+  test("a new row is a Chrome profile, and an edit never turns it into anything else", () => {
     const a = upsertAccount({ name: "Elite 2", cdpHost: "127.0.0.1:9224" });
-    expect([a.client, a.exe, a.profileDir]).toEqual(["chrome", null, null]);
-    const b = upsertAccount({ id: a.id, client: "electron", exe: " C:\\e\\GTO Wizard.exe ", profileDir: "" });
-    expect([b.client, b.exe, b.profileDir]).toEqual(["electron", "C:\\e\\GTO Wizard.exe", null]);
-    expect(upsertAccount({ id: a.id, name: "Elite two" }).client).toBe("electron");   // a partial edit keeps them
-  });
-});
-
-describe("the desktop app, when installed, is the primary's client at seed time (2026-09-29)", () => {
-  const env = { USERPROFILE: "C:/Users/p", LOCALAPPDATA: "C:/Users/p/AppData/Local" } as NodeJS.ProcessEnv;
-  test("the official per-user install is found; nothing installed = the Chrome window; GTOW_CLIENT=chrome keeps Chrome; GTOW_CLIENT_PATH pins", () => {
-    const has = (p: string) => p === join("C:/Users/p", "GTO Wizard", "GTO Wizard.exe");
-    expect(desktopAppPath(env, has)).toBe(join("C:/Users/p", "GTO Wizard", "GTO Wizard.exe"));
-    expect(defaultAccounts(env, has)[1]!.client).toBe("electron");
-    expect(defaultAccounts(env, has)[1]!.exe).toBe(join("C:/Users/p", "GTO Wizard", "GTO Wizard.exe"));
-    expect(defaultAccounts(env, () => false)[1]!.client).toBe("chrome");
-    expect(desktopAppPath({ ...env, GTOW_CLIENT: "chrome" }, has)).toBeNull();
-    expect(desktopAppPath({ ...env, GTOW_CLIENT_PATH: "D:/b/GTO Wizard.exe" }, () => false)).toBe("D:/b/GTO Wizard.exe");
-    // an empty USERPROFILE never turns "GTO Wizard\GTO Wizard.exe" into a relative hit
-    expect(desktopAppPath({} as NodeJS.ProcessEnv, () => true)).toBe(desktopAppCandidates({} as NodeJS.ProcessEnv)[2]);
+    expect([a.client, a.profileDir]).toEqual(["chrome", null]);
+    const b = upsertAccount({ id: a.id, client: "electron" as any, profileDir: " C:\\p " });
+    expect([b.client, b.profileDir]).toEqual(["chrome", "C:\\p"]);
+    expect(upsertAccount({ id: a.id, name: "Elite two" }).client).toBe("chrome");
   });
 });

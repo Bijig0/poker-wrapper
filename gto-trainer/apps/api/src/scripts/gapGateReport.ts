@@ -15,6 +15,9 @@
  *   - under PREFLOP_GAP_GATE=log, the decisions it WOULD have sent (nothing is routed in that mode).
  * REPLAY re-answers every logged hero preflop decision from the charts with the gate in log mode — the share the rule
  * moves, with no session needed. Reads only; spends no GTO Wizard requests.
+ * THE RESIDUE GATE (services/residueGate, 2026-10-13) rides on the same record ($.treeGap.residue): both modes print
+ * its section — the decisions it fires on (a size its own player barely uses), the Fold >= 99% exemptions, and under
+ * live the routed ones (path code preflop:residue-gate / -ai-failed).
  *
  * WHAT TO LOOK FOR: routed share near the replay's; "chart after all" rare (a high rate = the time box or the token);
  * routed latency inside the clock; and the answers actually differing — a gate whose two answers always agree is
@@ -33,12 +36,26 @@ const pct = (k: number, d: number) => (d ? `${((100 * k) / d).toFixed(1)}%` : "�
 const q = (xs: number[], p: number) => { const s = xs.slice().sort((a, b) => a - b); return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))]! : NaN; };
 const lv = (n: number) => (n <= 1 ? "open" : n === 2 ? "3-bet" : "4-bet+");
 const STACK_WHY: Record<string, string> = { allin: "facing an all-in", reraise: "facing a re-raise", first: "first decision vs a short stack", hero: "hero's own stack" };
-const cell = (r: GapReason) => (r.rule === "size" ? `size · ${lv(r.level)}` : `stack · ${STACK_WHY[r.why ?? (r.level >= 2 ? "reraise" : "allin")]}`);
+const cell = (r: GapReason) => (r.rule === "residue" ? `residue${r.why === "sticky" ? " · sticky" : ""}` : r.rule === "size" ? `size · ${lv(r.level)}` : `stack · ${STACK_WHY[r.why ?? (r.level >= 2 ? "reraise" : "allin")]}`);
+/** the residue gate's section over decisions that carry its verdict */
+function residueSection(xs: { key: string; g: TreeGap; hero?: string | null }[], of: number): void {
+  const withR = xs.filter((x) => x.g.residue && (x.g.residue.hits.length || x.g.residue.sticky));
+  const fire = withR.filter((x) => x.g.residue!.fire), exempt = withR.filter((x) => x.g.residue!.exempt);
+  console.log(`\nTHE RESIDUE GATE (PREFLOP_RESIDUE_GATE; a size its own player barely uses): fires on ${withR.length} of ${of} chart decisions — ` +
+    `${fire.length} it routes (${pct(fire.length, of)}), ${exempt.length} exempt (hero's chart answer folds >= 99%)`);
+  const p2 = (v: number) => `${(100 * v).toFixed(2)}%`;
+  for (const x of withR.slice(0, LIST)) {
+    const r = x.g.residue!;
+    console.log(`    ${x.key}${x.hero ? ` ${x.hero}` : ""}  on ${x.g.chart.replace(/^ign200_6max_/, "")}${r.exempt ? " [exempt]" : ""}: ` +
+      [...r.hits.map((h) => `${h.hero ? "hero " : ""}${h.seat} ${h.label} at "${h.line || "root"}" s ${p2(h.s)} a ${p2(h.a)}`), ...(r.sticky ? [`sticky (${r.sticky.seat} ${r.sticky.code})`] : [])].join("; "));
+  }
+}
 const tally = (rows: GapReason[][]) => { const c = new Map<string, number>(); for (const rs of rows) for (const k of new Set(rs.map(cell))) c.set(k, (c.get(k) ?? 0) + 1); return [...c].sort((a, b) => b[1] - a[1]); };
 
 if (REPLAY) {
   // every logged hero preflop decision, answered by the charts with the gate recording its verdict only
   process.env.PREFLOP_GAP_GATE = "log";
+  process.env.PREFLOP_RESIDUE_GATE = "log";
   const { normalizeHand } = await import("../feed/normalizeHand/normalizeHand");
   const { truncateAt } = await import("../utils/archivedHand/archivedHand");
   const { repairDeadSmallBlind } = await import("../utils/repairPostflopRotation/repairPostflopRotation");
@@ -49,6 +66,7 @@ if (REPLAY) {
   const hq = hdb.query<{ data: string }, [string]>(`SELECT data FROM hands WHERE client_hand_id = ? AND status <> 'live' ORDER BY rowid DESC LIMIT 1`);
   let decisions = 0, chart = 0, refused = 0;
   const routed: { key: string; g: TreeGap }[] = [];
+  const measured: { key: string; g: TreeGap; hero: string | null }[] = [];
   for (const cid of cids) {
     const row = hq.get(cid);
     if (!row) continue;
@@ -69,6 +87,7 @@ if (REPLAY) {
       try { six = await solvePreflop6max(cut, heroPos, "audit", SIX_MAX_STRATEGY_ID); } catch { /* counted as refused */ }
       if (!six || !six.ok) { refused++; continue; }
       chart++;
+      if (six.treeGap) measured.push({ key: `${cid}@${i}`, g: six.treeGap, hero: hand.heroCards.join("") });
       if (six.treeGap?.gate.route) routed.push({ key: `${cid}@${i}`, g: six.treeGap });
     }
   }
@@ -80,6 +99,7 @@ if (REPLAY) {
   console.log(`\n  the sizes it fires on most:  ${[...top].sort((a, b) => b[1] - a[1]).slice(0, 14).map(([k, n]) => `${k} ×${n}`).join("   ")}`);
   console.log(`\n  examples:`);
   for (const r of routed.slice(0, LIST)) console.log(`    ${r.key}  on ${r.g.chart.replace(/^ign200_6max_/, "")}: ${r.g.gate.reasons.map((x) => `${cell(x)} ${x.what} ${x.ratio}x > ${x.tau}x`).join("; ")}`);
+  residueSection(measured, chart);
   process.exit(0);
 }
 
@@ -144,5 +164,6 @@ if (sent.length) {
     }
   }
 }
+residueSection(withGap.map((x) => ({ key: `${x.r.client_hand_id}#${x.r.id}`, g: x.g, hero: x.r.hero_cards })), withGap.length);
 console.log(`\nNOT ROUTED: ${inside.length}. Their largest size snaps (inside the bounds): ` +
   [1, 2, 3].map((l) => { const xs = inside.filter((x) => x.g.size?.level === l).map((x) => x.g.size!.ratio); return `${lv(l)} n ${xs.length}${xs.length ? ` max ${Math.max(...xs)}x` : ""}`; }).join(" · "));

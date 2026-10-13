@@ -179,18 +179,13 @@ app.post("/:id/connect", async (c) => {
   const t0 = Date.now();
   let launch: Record<string, unknown>;
   const entry = loadAccounts().accounts.find((a) => a.id === id);
-  if (id === "primary" && entry?.client !== "chrome" && !entry?.exe) {
-    // the primary's built-in launcher (its own client detection) — only while the row names no build of its own
-    launch = await gtowCdp.launchApp();
-  } else if (entry) {
-    // the same rule the watchdog follows (services/gtowAccounts.ts launchPlan): a launcher script, else the desktop build,
-    // else a Chrome profile of the account's own
+  if (entry) {
+    // the same rule the watchdog follows (services/gtowAccounts.ts launchPlan): a launcher script, else a Chrome
+    // profile of the account's own
     const plan = launchPlan(entry, REPO);
     const env = { ...process.env, ...plan.env };
-    const script = plan.kind === "script" ? join(REPO, plan.script!) : plan.kind === "chrome" ? join(REPO, "scripts", "start_gtow_chrome.ps1") : null;
-    const cmd = script
-      ? ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Force"]
-      : ["powershell", "-NoProfile", "-Command", `Start-Process -FilePath '${plan.exe!.replace(/'/g, "''")}' -ArgumentList '--remote-debugging-port=${plan.port}' -WindowStyle Minimized`];
+    const script = plan.kind === "script" ? join(REPO, plan.script!) : join(REPO, "scripts", "start_gtow_chrome.ps1");
+    const cmd = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Force"];
     const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe", env });
     const code = await proc.exited;
     launch = { ok: code === 0, code, needsHuman: code === 3, kind: plan.kind, port: plan.port, out: (await new Response(proc.stdout).text()).trim().slice(-400) };

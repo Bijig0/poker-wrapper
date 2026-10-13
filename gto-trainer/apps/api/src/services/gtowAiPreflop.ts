@@ -2088,6 +2088,26 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
 
 /** Pre-build the tree + solution for a hand's shape (no node fetched) — called from the poller's tick so
  *  hero's turn only pays the node fetch. Silent on failure. */
+/**
+ * IS THE EXACT TREE FOR THIS HAND ALREADY BUILT? (the residue gate's flop, 2026-10-13: fastSolve's arrival takes the
+ * flop-entering ranges from it only when it is — never a new tree). True when this process created the tree (its
+ * solution id is known) or the GTO Wizard solve cache holds it; no request either way.
+ */
+export function aiPreflopTreeBuilt(hand: ParsedHand, heroPos: string | null, dealt?: Record<number, number>): boolean {
+  try {
+    const shape = shapeOf(hand, heroPos, 0, undefined, dealt);
+    if ("error" in shape) return false;
+    const { levels, iso } = lineOf(hand, shape);
+    const m = menus(levels, shape.n, iso);
+    const key = treeKeyOf(shape, m);
+    // made by this process and still held (a held key whose tree is not made yet is a build in flight: not "built")
+    if (solOfKey.has(key) && solutions.has(key)) return true;
+    if (!solveCache.enabled) return false;
+    const ck = cacheKeyOf("pre", treeBody(shape, m), { actions: "", board: "" });
+    return !!ck && solveCache.hasTree(ck.key);
+  } catch { return false; }
+}
+
 export function warmPreflopGtowAi(hand: ParsedHand, heroPos: string | null): void {
   try {
     // ONLY WHILE HERO CAN STILL BE ASKED (PF-16, 2026-09-23). The postflop warm stops when hero folded or the hand
@@ -3861,6 +3881,8 @@ export interface LiveNodeView {
   hero: { pos: string; stack: number | null; actions: string[]; strategy: Record<string, { w: number; acts: number[] }> | null;
           range: Record<string, { w: number }> } | null;
   opponents: LiveNodeSeat[];
+  /** the seats that folded before hero's node, each with his action chart where he folded (the panel's hand trail) */
+  folded?: LiveNodeSeat[];
   note: string | null;
 }
 
@@ -3915,6 +3937,7 @@ export async function livePreflopNodeView(
       const a = lastAction.get(p);
       return a ? { ...seat(p), action: a } : seat(p);
     }),
+    folded: shape.positions.filter((p) => p !== actor && folded.has(p) && lastAction.has(p)).map((p) => ({ ...seat(p), action: lastAction.get(p)! })),
     note: pin.lastResort ? `a locked last-resort tree: ${pin.lastResort} — hero's range at the node is every hand`
       : pin.reduced?.droppedPos.length ? `a last-resort tree: ${pin.reduced.droppedPos.join(", ")} folded out${pin.shape.deadBb ? " as dead money" : ", none of their chips in it"}` : null,
   };

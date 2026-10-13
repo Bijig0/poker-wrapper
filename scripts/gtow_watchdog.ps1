@@ -8,7 +8,7 @@
 #
 # WHICH ACCOUNTS (2026-09-29): the account registry — gtow-accounts.json in the data root, the dashboard's GTO Wizard
 # tab edits it — one row per account: its DevTools port (cdpHost) and how its client is run (client chrome = a Chrome
-# profile of its own, electron = a desktop build `exe`, or a launcher script `launchHint` under scripts/). The rule is
+# profile of its own, or a launcher script `launchHint` under scripts/; the desktop-app client was removed 2026-10-13). The rule is
 # services/gtowAccounts.ts launchPlan, the same one the tab's Connect button follows; this script mirrors it. The
 # registry is RE-READ EVERY MINUTE: an account added on the tab is watched within a minute, one removed or disabled is
 # dropped, and no restart of this task is needed. Accounts are watched independently: one being down must never restart
@@ -112,9 +112,6 @@ function Test-NeedsHuman([int]$port) {
 $registryPath = if ($env:GTOW_ACCOUNTS_PATH) { $env:GTOW_ACCOUNTS_PATH }
                 elseif ($env:POKER_DATA_DIR) { Join-Path $env:POKER_DATA_DIR 'gtow-accounts.json' }
                 else { Join-Path $root 'data\gtow-accounts.json' }
-$SECONDARY_BUILDS = @("$env:USERPROFILE\Secondary GTO Wizard\Secondary GTO Wizard.exe",
-                      'C:\Program Files\Secondary GTO Wizard\Secondary GTO Wizard.exe',
-                      'C:\Program Files\Chinese GTO Wizard\Chinese GTO Wizard.exe')
 
 function Read-Accounts {
     $rows = $null
@@ -123,7 +120,7 @@ function Read-Accounts {
     }
     if ($null -eq $rows) {
         # no registry yet: the first install's shape — the primary alone, a Chrome profile on this install's port (9222 + PORT_OFFSET)
-        $rows = @([pscustomobject]@{ id = 'primary'; name = 'Ultra'; cdpHost = "127.0.0.1:$(if ($env:GTOW_CDP_PORT) { $env:GTOW_CDP_PORT } else { 9222 })"; launchHint = 'scripts/start_gtow_chrome.ps1'; client = 'chrome'; exe = $null; profileDir = $null; enabled = $true })
+        $rows = @([pscustomobject]@{ id = 'primary'; name = 'Ultra'; cdpHost = "127.0.0.1:$(if ($env:GTOW_CDP_PORT) { $env:GTOW_CDP_PORT } else { 9222 })"; launchHint = 'scripts/start_gtow_chrome.ps1'; client = 'chrome'; profileDir = $null; enabled = $true })
     }
     $out = @()
     foreach ($a in $rows) {
@@ -133,20 +130,16 @@ function Read-Accounts {
         if (-not $m.Success) { Say "[$($a.id)] no port in cdpHost '$($a.cdpHost)' - not watched"; continue }
         $port = [int]$m.Groups[1].Value
         $profile = if ($a.profileDir) { [string]$a.profileDir } elseif ($a.id -eq 'primary') { "$env:LOCALAPPDATA\gtow-cdp-profile" } else { "$env:LOCALAPPDATA\gtow-cdp-profile-$($a.id)" }
-        $exe = if ($a.exe) { [string]$a.exe } else { $null }
-        # the secondary's desktop build is found the way its launcher finds it, so its update dialog can be dismissed
-        if (-not $exe -and $a.launchHint -match 'start_gtow_secondary\.ps1$') { foreach ($c in $SECONDARY_BUILDS) { if (Test-Path -LiteralPath $c) { $exe = $c; break } } }
         $script = if ($a.launchHint -and $a.launchHint -match '\.ps1$' -and (Test-Path -LiteralPath (Join-Path $root $a.launchHint))) { Join-Path $root $a.launchHint } else { $null }
-        $kind = if ($script) { 'script' } elseif ($a.client -eq 'electron' -and $exe) { 'electron' } else { 'chrome' }
-        $label = switch ($kind) { 'script' { "$($a.launchHint)$(if ($exe) { " ($exe)" })" } 'electron' { $exe } default { "chrome profile $profile" } }
-        $out += [pscustomobject]@{ Id = [string]$a.id; Name = [string]$a.name; Port = $port; Kind = $kind; Script = $script; Exe = $exe; Profile = $profile; Label = $label }
+        $kind = if ($script) { 'script' } else { 'chrome' }
+        $label = if ($kind -eq 'script') { [string]$a.launchHint } else { "chrome profile $profile" }
+        $out += [pscustomobject]@{ Id = [string]$a.id; Name = [string]$a.name; Port = $port; Kind = $kind; Script = $script; Profile = $profile; Label = $label }
     }
     return $out
 }
 
-# the client's processes (for dismissing the updater's modal): a desktop build by its path, a Chrome profile by its folder
+# the client's processes (for dismissing the updater's modal): a Chrome profile by its folder
 function Get-Procs($s) {
-    if ($s.Exe) { $name = [IO.Path]::GetFileNameWithoutExtension($s.Exe); return @(Get-Process -Name $name -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $s.Exe }) }
     if ($s.Kind -eq 'chrome') {
         $ids = Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine -like "*--user-data-dir=$($s.Profile)*" } | ForEach-Object { $_.ProcessId }
         return @($ids | ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue })
@@ -157,16 +150,9 @@ function Get-Procs($s) {
 # bring the client up with the CDP flag — the launchers read the port (and the profile) from the environment, so one
 # script serves every account
 function Start-Client($s) {
-    $env:GTOW_CDP_PORT = "$($s.Port)"; $env:GTOW_SECONDARY_CDP_PORT = "$($s.Port)"; $env:GTOW_CHROME_PROFILE = $s.Profile
-    if ($s.Exe) { $env:GTOW_CLIENT_PATH = $s.Exe; $env:GTOW_SECONDARY_PATH = $s.Exe } else { Remove-Item env:GTOW_CLIENT_PATH, env:GTOW_SECONDARY_PATH -ErrorAction SilentlyContinue }
+    $env:GTOW_CDP_PORT = "$($s.Port)"; $env:GTOW_CHROME_PROFILE = $s.Profile
     switch ($s.Kind) {
         'script'   { & $s.Script -Force | Out-Null }
-        'electron' {
-            # the updater's relaunch has no debug port, and Windows will not apply new args to a live process: quit it first
-            Get-Procs $s | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
-            Start-Sleep -Seconds 3
-            Start-Process -FilePath $s.Exe -ArgumentList "--remote-debugging-port=$($s.Port)" -WindowStyle Minimized
-        }
         default    { & (Join-Path $scriptDir 'start_gtow_chrome.ps1') -Force | Out-Null }
     }
 }

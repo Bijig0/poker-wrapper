@@ -39,8 +39,9 @@ export interface PathReason { v: Exclude<Verdict, "clean">; code: string; text: 
 export interface ArrivalPath {
   /** hit = the hand's arrival memo (computed on an earlier decision); pin = resumed from the preflop pin (the happy
    *  path's first computation); designed = the strategy's own single source (the HU chart, a 3-max chart);
-   *  by-design / rebuilt = see Verdict */
-  how: "hit" | "pin" | "designed" | "by-design" | "rebuilt";
+   *  by-design / rebuilt = see Verdict; failed = a correctness step the ranges needed did not happen (the residue gate's
+   *  exact tree was not there by the flop, 2026-10-13) — the verdict "failed" */
+  how: "hit" | "pin" | "designed" | "by-design" | "rebuilt" | "failed";
   /** the piece that produced them: pin-chart6max, pin-gtow-ai-preflop, recon6max, ai-arrival, hu-chart, … */
   producer: string;
   code?: string;
@@ -106,7 +107,7 @@ export interface DecisionPath {
   arrival?: ArrivalPath;
   streets: StreetPath[];
   /** preflop: which piece answered, and why when it was not the first choice */
-  preflop?: { piece: string; how: "designed" | "by-design" | "rebuilt"; code?: string; why?: string | null };
+  preflop?: { piece: string; how: "designed" | "by-design" | "rebuilt" | "failed"; code?: string; why?: string | null };
   /** preflop reasons a piece reports BESIDE its own code (2026-10-07: the hero self-lock, and the HERO OFF-ANSWER flag,
    *  under whatever routed the decision to GTO Wizard AI — the gap gate, the fit rule, the charts' limits). Kept on the
    *  path so a re-classification (withChecks) keeps them. */
@@ -132,12 +133,12 @@ export interface DecisionPath {
 export function reasonsOf(p: Pick<DecisionPath, "arrival" | "preflop" | "streets" | "checks"> & Partial<Pick<DecisionPath, "preflopAlso" | "postflopAlso">>): PathReason[] {
   const out: PathReason[] = [];
   const a = p.arrival;
-  if (a && (a.how === "by-design" || a.how === "rebuilt")) {
-    out.push({ v: a.how, code: a.code ?? `arrival:${a.producer}`, text: `flop ranges ${a.how === "rebuilt" ? "rebuilt" : "by design"}: ${a.why ?? a.producer}` });
+  if (a && (a.how === "by-design" || a.how === "rebuilt" || a.how === "failed")) {
+    out.push({ v: a.how, code: a.code ?? `arrival:${a.producer}`, text: `flop ranges ${a.how === "rebuilt" ? "rebuilt" : a.how === "failed" ? "FAILED" : "by design"}: ${a.why ?? a.producer}` });
   }
   const pf = p.preflop;
-  if (pf && (pf.how === "by-design" || pf.how === "rebuilt")) {
-    out.push({ v: pf.how, code: pf.code ?? `preflop:${pf.piece}`, text: `preflop ${pf.how === "rebuilt" ? "fallback" : "by design"}: ${pf.why ?? pf.piece}` });
+  if (pf && (pf.how === "by-design" || pf.how === "rebuilt" || pf.how === "failed")) {
+    out.push({ v: pf.how, code: pf.code ?? `preflop:${pf.piece}`, text: `preflop ${pf.how === "rebuilt" ? "fallback" : pf.how === "failed" ? "FAILED" : "by design"}: ${pf.why ?? pf.piece}` });
   }
   for (const x of p.preflopAlso ?? []) out.push(x);
   for (const s of p.streets) {
@@ -150,7 +151,7 @@ export function reasonsOf(p: Pick<DecisionPath, "arrival" | "preflop" | "streets
       if (!l.soft?.applied) continue;
       const at = `${s.street}${s.plan ? ` (${s.plan})` : ""}: ${l.seat} ${l.action}${l.betsize != null ? ` ${l.betsize}` : ""}`;
       out.push({ v: "by-design", code: "postflop:offtree-soft", text: `${at} off-tree — ${softText(l.soft)}` });
-      if (l.soft.lock?.ok) out.push({ v: "by-design", code: "postflop:offtree-lock", text: `${at}: the rest of the street node-locked to his soft range` });
+      if (l.soft.lock?.ok) out.push({ v: "by-design", code: "postflop:offtree-lock", text: `${at}: the rest of the street node-locked to his ${l.soft.mode === "soft" ? "soft" : "blended"} range` });
     }
     // a street that did not start from the previous street's solved output broke the chain itself
     if (s.check?.ok === false && s.how !== "hit") {
