@@ -12,7 +12,7 @@ import { sbFlatTableMode } from "./poolSbFlat";
 import { seatHistoryFor } from "./seatStats";
 import { chartForHu, resolveChartHu, nodeGetterHu, isHeadsUp, defaultChartHu, neighbourRungsHu, HU_ANTE_BB, HU_RAKE } from "./hrc2max";
 import { preflopArrivalFor, SIX_MAX_STRATEGY_ID, CP_RING_ANTE_STRATEGY_ID } from "./strategies";
-import { alignedAt, blendEvs, collapseRefusal, foldedSeats, pickCollapses, planCollapses, replayPlan, type CollapseSeat, type Picked, type PlanRecipe, type SeatTok } from "./multiwayCollapse";
+import { alignedAt, blendEvs, collapseRefusal, pickCollapses, planCollapses, replanKeeping, type CollapseSeat, type Picked, type SeatTok } from "./multiwayCollapse";
 import { heroPreloadAtNode, pickDeadMoney, planDeadMoney, tableTotalActions, treeAllInAmounts, type DeadMoneyPlan } from "./deadMoneyCollapse";
 import { blendWalks, recordServed, servedMixOf, servedTraceField } from "./servedStrategy";
 import { narrowForLastResort, rerootCollapse, moneyThrough, type WalkFailure } from "./multiwayReroot";
@@ -36,7 +36,7 @@ import { deriveExploitSpot } from "../utils/deriveExploitSpot/deriveExploitSpot"
 import { effectiveBehind, forgetChainMemo, rangesFp, solveAiChain, type AiChainResult, type ChainTrace, type ChainTraceNode } from "./aiChain";
 import { offTreeLog } from "./offTreeLog";
 import { pctOf, softText } from "./offTree";
-import { handFacts, type DealtFact } from "./handFacts";
+import { handFacts, type DealtFact, type KeptCollapses } from "./handFacts";
 import { withRequestScope } from "./requestScope";
 import { asLive } from "./livePriority";
 import { classifyPath, faultPath, type ArrivalPath, type DecisionPath, type PathReason, type StreetPath } from "./chainPath";
@@ -1335,34 +1335,77 @@ function sbFlatLogLine(hand: ParsedHand, key: string, u: SbFlatUse, was: number,
  * them and every street already walked comes from the hand's checkpoints. Picked afresh, a seat that folded without
  * chips leaves from the flop — new trees from the root, nothing reusable (hand 4924401943's river: 26 s, flop + turn
  * walked again heads-up, the off-tree lock solved again). COLLAPSE_KEEP=off picks afresh at every decision.
+ *
+ * SURVIVORS ARE KEPT, THE COVER TOPPED UP (2026-10-14 evening, multiwayCollapse.replanKeeping): when one kept collapse no
+ * longer holds (the villain it ghosted bet since) the others stay and the pick is brought back to three with collapses
+ * built on the hand's real history (the later folders fold inside them); only when none holds is it picked afresh. The
+ * memo becomes what was used, and it is a FACT of the hand (handFacts `collapses`): an API restart mid-hand replays it.
  */
-const keptCollapses = new Map<string, { heroPos: string; recipes: PlanRecipe[]; mode: Picked["mode"]; why: string }>();
+const keptCollapses = new Map<string, KeptCollapses>();
 const KEPT_COLLAPSES_MAX = 300;
+/** the hands whose collapses this process wrote to the ledger (forgetKeptCollapses clears them there too) */
+const keptLedgerKeys = new Set<string>();
 const collapseKeepOn = (): boolean => process.env.COLLAPSE_KEEP !== "off";
-/** The hand's kept collapses rebuilt on this decision's streets, or null (none kept, switched off, or one no longer holds). */
-export function keptCollapsePick(handKey: string, heroPos: string, seats: CollapseSeat[], toks: SeatTok[][]): Picked | null {
-  const kept = handKey && collapseKeepOn() ? keptCollapses.get(handKey) : undefined;
-  if (!kept || kept.heroPos !== heroPos) return null;
-  const plans = kept.recipes.map((r) => replayPlan(seats, heroPos, toks, r));
-  // one no longer holds (a ghosted seat put chips in since): the hand's collapses are picked afresh from here on
-  if (!plans.length || plans.some((p) => !p)) { keptCollapses.delete(handKey); return null; }
-  const since = foldedSeats(seats, heroPos, toks).filter((f) => !kept.recipes[0]!.folds.includes(f));
-  return {
-    plans: plans as NonNullable<(typeof plans)[number]>[], mode: kept.mode,
-    why: kept.why + (since.length
-      ? `; the hand's collapses kept from its earlier decision — ${since.join(", ")} folded since, inside the trees that hold ${since.length === 1 ? "him" : "them"}, so the streets already walked are reused`
-      : ""),
-  };
-}
-/** Remember the collapses this decision was answered on (the from-the-flop ones; a re-root or dead-money pick is not kept). */
-export function keepCollapses(handKey: string, heroPos: string, picked: Picked): void {
-  if (!handKey || picked.plans.some((p) => !p.recipe)) return;
+function storeKeptCollapses(handKey: string, rec: KeptCollapses): void {
   keptCollapses.delete(handKey);
-  keptCollapses.set(handKey, { heroPos, recipes: picked.plans.map((p) => p.recipe!), mode: picked.mode, why: picked.why });
+  keptCollapses.set(handKey, rec);
   while (keptCollapses.size > KEPT_COLLAPSES_MAX) keptCollapses.delete(keptCollapses.keys().next().value!);
+  handFacts.setCollapses(handKey, rec);
+  keptLedgerKeys.add(handKey);
 }
-/** Forget every hand's kept collapses (tests). */
-export function forgetKeptCollapses(): void { keptCollapses.clear(); }
+function dropKeptCollapses(handKey: string): void {
+  keptCollapses.delete(handKey);
+  handFacts.forgetCollapses(handKey);
+}
+/**
+ * The hand's kept collapses on this decision's streets — the ones that still hold, topped back up to three when one broke
+ * (replanKeeping) — or null: none kept (memory, then the hand's ledger), another hero seat, switched off, or none holds
+ * (then the memo is dropped and the caller's fresh pick is kept instead).
+ */
+export function keptCollapsePick(handKey: string, heroPos: string, seats: CollapseSeat[], toks: SeatTok[][]): Picked | null {
+  if (!handKey || !collapseKeepOn()) return null;
+  let kept = keptCollapses.get(handKey);
+  if (!kept) {
+    kept = handFacts.collapses(handKey);
+    if (kept) keptCollapses.set(handKey, kept);
+  }
+  if (!kept || kept.heroPos !== heroPos || !kept.recipes.length) return null;
+  // NOT A LATER DECISION OF THE SAME LINE (a replay of the hand from its start, a capture that rewrote an action): the
+  // memo belongs to another point of the hand — the caller's fresh pick replaces it
+  if (kept.line && !lineExtends(kept.line, collapseLineOf(toks))) return null;
+  const r = replanKeeping(seats, heroPos, toks, kept.recipes, 3, kept.why);
+  // none holds any longer (every ghosted seat put chips in since): the hand's collapses are picked afresh from here on
+  if (!r) { dropKeptCollapses(handKey); return null; }
+  if (r.dropped.length) {
+    console.log(`[collapse-keep] hand ${handKey}: ${r.dropped.map((d) => `${d.kind} dropped (${d.why})`).join(", ")}; ` +
+      `kept ${r.kept.map((p) => p.kind).join(", ")}${r.added.length ? `; added ${r.added.map((p) => p.kind).join(", ")}` : ""}` +
+      `${r.uncovered.length ? `; ${r.uncovered.join(", ")} in no tree` : ""}`);
+    // the memo becomes what this decision is walked on: the next one replays these
+    storeKeptCollapses(handKey, { heroPos, recipes: r.plans.map((p) => p.recipe!), mode: r.mode, why: r.baseWhy, line: collapseLineOf(toks), at: Date.now() });
+  }
+  return { plans: r.plans, mode: r.mode, why: r.why };
+}
+/** The postflop line as the memo compares it: each action's seat and kind, a wager's size left out (a re-read size is the
+ *  same action). */
+const collapseLineOf = (toks: SeatTok[][]): string[][] =>
+  toks.map((st) => st.map((t) => `${t.seat}:${/^R(?!AI$)/.test(t.tok) ? "R" : t.tok}`));
+/** `now` continues `was`: every street of `was` begins `now`'s street of the same index. */
+const lineExtends = (was: string[][], now: string[][]): boolean =>
+  was.every((st, k) => !st.length || (now[k] != null && st.every((x, j) => now[k]![j] === x)));
+/** Remember the collapses this decision was answered on (the from-the-flop ones; a re-root or dead-money pick is not kept).
+ *  `toks`: the decision's postflop line — a later decision that does not extend it ignores the memo. */
+export function keepCollapses(handKey: string, heroPos: string, picked: Picked, toks?: SeatTok[][]): void {
+  if (!handKey || !picked.plans.length || picked.plans.some((p) => !p.recipe)) return;
+  storeKeptCollapses(handKey, { heroPos, recipes: picked.plans.map((p) => p.recipe!), mode: picked.mode, why: picked.why,
+    ...(toks ? { line: collapseLineOf(toks) } : {}), at: Date.now() });
+}
+/** Forget every hand's kept collapses (tests) — memory and the hand ledger; `memoryOnly` keeps the ledger (a restart). */
+export function forgetKeptCollapses(memoryOnly = false): void {
+  keptCollapses.clear();
+  if (memoryOnly) return;
+  for (const k of keptLedgerKeys) handFacts.forgetCollapses(k);
+  keptLedgerKeys.clear();
+}
 
 const arrivalMemo = new Map<string, FlopArrival & { at: number; walks: RecordedRangeWalk[] }>();
 const ARRIVAL_MEMO_MAX = 400;
@@ -2146,7 +2189,7 @@ async function solvePostflopViaChainOnce(
       const collapseHandKey = String(hand.clientHandId ?? hand.handId ?? "");
       const keptPick = keptCollapsePick(collapseHandKey, ordered[heroAt]!, cSeats, toks);
       let picked = keptPick ?? pickCollapses(plans);
-      if (picked && !keptPick) keepCollapses(collapseHandKey, ordered[heroAt]!, picked);
+      if (picked && !keptPick) keepCollapses(collapseHandKey, ordered[heroAt]!, picked, toks);
       let rerootWhy: string | null = null;
       if (!picked && cur !== "flop") {
         // NO COLLAPSE FROM THE FLOP (every villain put chips in on an earlier street, none adjacent) — RE-ROOT at
