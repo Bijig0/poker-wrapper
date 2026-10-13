@@ -1133,6 +1133,7 @@ async function postPreflopSolution(body: any, need: GtowNeed, solution: { action
     if (owners.size > 400) owners.delete(owners.keys().next().value as string);
     posted.set(solId, { body, need, locks }); bound(posted);
     gtowSessions.noteSuccess(id, { tree: true });
+    gtowSessions.noteSolvePosted(id, solId);   // routing: a solve running on this account until its first node answers
     return { solId };
   }
   return { error: last };
@@ -1210,6 +1211,7 @@ export async function lockedSolution(parentSolId: string, body: unknown, locks: 
       solId = lk.solId;
     }
     owners.set(solId, owner);
+    gtowSessions.noteSolvePosted(owner, solId);   // routing: the locked child runs on the parent's account until it answers
     const seats = Array.isArray((body as any)?.players) ? (body as any).players.length : 2;
     // the chain as posted: a parent that was itself locked keeps its locks first (failover review 2026-10-13 — a re-post of
     // the child would otherwise build a less-locked tree under the child's id)
@@ -1456,6 +1458,7 @@ async function readNode(solId: string, k: string, line: string, addr: string, ck
       let j: any = null;
       try { j = text ? JSON.parse(text) : null; } catch { j = null; }
       if (j?.action_solutions?.length) {
+        gtowSessions.noteSolveReady(real);   // routing: this solve no longer runs on its account
         nodes.set(k, j);
         if (nodes.size > 2000) nodes.delete(nodes.keys().next().value as string);
         if (ck) solveCache.putNode(ck, addr, NODE_OK, text);
