@@ -25,6 +25,7 @@ export const UNSAFE_CODES: Record<string, string> = {
   // THE RESIDUE GATE (services/residueGate, 2026-10-13): its exact tree did not answer, so the chart answered behind a
   // villain size the chart's own player barely uses — and the flop ranges walked off that node are his sliver
   "preflop:residue-gate-ai-failed": "the residue gate's exact tree did not answer — the chart answered behind a size its own player barely uses (his range there is a sliver)",
+  "preflop:residue-gate-ai-residue": "the residue gate routed this decision, but in GTO Wizard's own tree the villain's action is also under 1% of his range — the exact tree reads a leftover too",
   "arrival:residue-gate-ai-failed": "the flop ranges were walked off a chart node behind a size its player barely uses (the exact tree was not built) — a villain enters with a sliver of his range",
 };
 

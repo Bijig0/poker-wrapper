@@ -128,7 +128,9 @@ export interface TreeGap {
    *  audit reads), and how the exact tree's answer went — "answered"; "failed" / "timeout" = the chart answered after all */
   routed?: { chartMix: { action: string; frequency: number }[]; ai: "answered" | "failed" | "timeout"; aiWhy?: string; aiMs?: number };
   /** THE RESIDUE GATE's verdict on this decision (services/residueGate) — under mode log only recorded; under live its
-   *  firing is a `gate.reasons` entry with rule "residue" */
+   *  firing is a `gate.reasons` entry with rule "residue", but ONLY when the gap gate does not route the decision (Brady
+   *  2026-10-13: the gap gate decides whether the picked chart is close enough to the table at all; the residue rule
+   *  judges only the chart that stays the answer). When the gap gate routes, the verdict is recorded here as info. */
   residue?: ResidueVerdict;
 }
 
@@ -276,7 +278,12 @@ export function treeGap6(a: {
   const mode = a.mode ?? gapGateMode();
   const heroGap = { real: Math.round(heroReal * 100) / 100, chart: stacks[hero] };
   const bvb = (hero === "SB" || hero === "BB") && seats.length === 1 && (seats[0]!.seat === "SB" || seats[0]!.seat === "BB");
-  const reasons = [...(mode === "off" ? [] : gapReasons({ seats, raises, allIn, hero: heroGap, bvb }, snaps)), ...residueReasons(a.residue)];
+  // THE ORDER (Brady 2026-10-13): the gap gate first — a chart past a size / stack bound is not the answer, and the
+  // residue rule is not a reason on it; only a chart that stays the answer (no gap-gate route, PREFLOP_GAP_GATE log /
+  // off included) has its walked line judged by the residue rule
+  const bounds = mode === "off" ? [] : gapReasons({ seats, raises, allIn, hero: heroGap, bvb }, snaps);
+  const gapRoutes = mode === "live" && bounds.length > 0;
+  const reasons = gapRoutes ? bounds : [...bounds, ...residueReasons(a.residue)];
   const out: TreeGap = {
     v: 2, chart: a.chartId, hero: heroGap, seats, stack, pot, raises, allIn, ...(bvb ? { bvb } : {}),
     size: snaps[0] ?? null, gate: { mode, route: reasons.length > 0, reasons },

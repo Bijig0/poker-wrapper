@@ -236,3 +236,42 @@ describe("the pin carries the mark: the hand's later decisions follow it (preflo
     forgetPreflopPin(key);
   });
 });
+
+describe("THE ORDER (Brady 2026-10-13): the gap gate first; the residue rule only on the chart that stays the answer", () => {
+  const byPos = { UTG: 50, HJ: 46, CO: 50, BTN: 50, SB: 50, BB: 50 };
+  const base = { chartId: "ign200_6max_D50_o2_5", byPos, hero: "HJ", folded: new Set(["UTG", "BTN", "SB", "BB"]), aggressor: "CO", after: [] as string[],
+    rawTokens: ["F", "R2.5", "R10.5", "F", "F", "F"], repaired: [{ index: 2, from: "R10.5", to: "R9", logDist: Math.log(10.5 / 9) }], fitted: ["F", "R2.5", "R9"] };
+  const shares = { lines: [{ seat: "CO", code: "R9", label: "Raise 9", line: "F-R2.5", hero: false, type: "raise" as const, nodeFreq: 0.0014, typeFreq: 0.083, maxHand: 0.5 }] };
+  it("both fire, gap gate live: the size bound alone routes — the residue verdict is info (no second reason)", () => {
+    const g = treeGap6({ ...base, mode: "live", residue: residueVerdict({ mode: "live", shares, heroFold: 0 }) })!;
+    expect(routingReasons(g).map((r) => r.rule)).toEqual(["size"]);
+    expect(g.gate.reasons.some((r) => r.rule === "residue")).toBe(false);
+    expect(residueRouted(g)).toBe(false);
+    expect(g.residue?.fire).toBe(true);
+  });
+  it("both fire, gap gate off: the residue rule routes", () => {
+    const g = treeGap6({ ...base, mode: "off", residue: residueVerdict({ mode: "live", shares, heroFold: 0 }) })!;
+    expect(routingReasons(g).map((r) => r.rule)).toEqual(["residue"]);
+  });
+});
+
+describe("GTO Wizard's own residue (aiResidueOf): the trigger read in the exact tree", () => {
+  it("the same seat's raise at the same raise level under 1% of his range there: the guard fires; at a real share it does not", async () => {
+    const { aiResidueOf } = await import("./fastSolve");
+    const mark: ResidueMark = { at: 9, rawTokens: [], chart: FX.chart, seat: "CO", code: "R9", line: "F-R2.5", s: 0.0014, a: 0.083 };
+    const line = (code: string, at: string, f: number) => ({ seat: "CO", code, line: at, nodeFreq: f, maxHand: 1, offTree: false });
+    expect(aiResidueOf(mark, [line("R9.2", "F-R2.6", 0.004)])?.code).toBe("R9.2");
+    expect(aiResidueOf(mark, [line("R9.2", "F-R2.6", 0.08)])).toBeNull();
+    // another raise level of the same seat is not the trigger (a 4-bet after the 3-bet)
+    expect(aiResidueOf(mark, [line("R9.2", "F-R2.6", 0.08), line("R50", "F-R2.6-R9.2-F-F-F-R22", 0.002)])).toBeNull();
+    // the seat named through the shape's API positions; no lines (not scored, or hero's own trigger): nothing
+    expect(aiResidueOf({ ...mark, seat: "BTN", code: "R50", line: "F-F-F" }, [{ ...line("R46.6", "F-F-F", 0.002), seat: "BU" }], { BTN: "BU" })?.code).toBe("R46.6");
+    expect(aiResidueOf(mark, undefined)).toBeNull();
+  });
+  it("its code is unsafe and FAILED", () => {
+    const p = classifyPath({ street: "preflop", streets: [], preflop: { piece: "gtow-ai-preflop", how: "by-design", code: "preflop:residue-gate" },
+      preflopAlso: [{ v: "failed", code: "preflop:residue-gate-ai-residue", text: "RESIDUE GATE: GTO Wizard's own tree …" }] });
+    expect(p.verdict).toBe("failed");
+    expect(unsafeReasons(p)).toEqual([UNSAFE_CODES["preflop:residue-gate-ai-residue"]!]);
+  });
+});

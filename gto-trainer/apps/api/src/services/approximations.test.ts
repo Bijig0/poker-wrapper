@@ -118,7 +118,7 @@ describe("the answer path emits nothing the register does not account for", () =
     expect(departureForCode("arrival:pool-limp-floor")?.id).toBe("pool-limp-floor");
     expect(departureForCode("preflop:gap-gate")?.id).toBe("gap-gate");
     // the residue gate (2026-10-13): its own entry for every code it writes, its off switch, and the warning prefixes
-    for (const c of ["preflop:residue-gate", "preflop:residue-gate-ai-failed", "arrival:residue-gate", "arrival:residue-gate-ai-failed"]) expect(departureForCode(c)?.id).toBe("preflop-residue-gate");
+    for (const c of ["preflop:residue-gate", "preflop:residue-gate-ai-failed", "preflop:residue-gate-ai-residue", "arrival:residue-gate", "arrival:residue-gate-ai-failed"]) expect(departureForCode(c)?.id).toBe("preflop-residue-gate");
     expect(departureForCode("preflop:residue-gate")?.offSwitch?.env).toBe("PREFLOP_RESIDUE_GATE");
     expect(departureForWarning("RESIDUE GATE")?.id).toBe("preflop-residue-gate");
     expect(departuresOf(["preflop:residue-gate"], "GTO Wizard AI preflop (Ultra) answered because the 6-max charts could not: RESIDUE GATE: the CO's Raise 9 …").map((x) => x.id)).toContain("preflop-residue-gate");

@@ -203,3 +203,108 @@ describe.skipIf(gated)("warmPreflop6max live: the exact tree is pre-built the ti
     } finally { log.mockRestore(); forget("rg-warm"); }
   });
 });
+
+const withGapMode = async <T>(mode: string | null, f: () => Promise<T>): Promise<T> => {
+  const was = process.env.PREFLOP_GAP_GATE;
+  if (mode == null) delete process.env.PREFLOP_GAP_GATE; else process.env.PREFLOP_GAP_GATE = mode;
+  try { return await f(); } finally { if (was == null) delete process.env.PREFLOP_GAP_GATE; else process.env.PREFLOP_GAP_GATE = was; }
+};
+
+describe.skipIf(gated)("THE ORDER (Brady 2026-10-13): gap gate first, the residue rule on the chart that stays the answer", () => {
+  // the CO 3-bets to 10.5: read at R9 (the leftover) AND 1.167x off it — past the 3-bet size bound (1.15x)
+  test("both fire: the gap gate's refusal alone (GAP GATE, size reasons only); the residue verdict rides as info", async () => {
+    if (!(await calibrated("rg-probe-both"))) return;
+    const r = await withMode("live", () => solvePreflop6max(at("rg-both", QQ, FACING, 10.5), "HJ", "audit", SIX_MAX_STRATEGY_ID));
+    forget("rg-both");
+    expect(r?.ok).toBe(false);
+    if (!r || r.ok) return;
+    expect(r.reason).toStartWith("GAP GATE: the 3-bet R10.5→R9");
+    expect(r.reason).not.toContain("RESIDUE GATE");
+    expect(r.treeGap?.gate.reasons.map((x) => x.rule)).toEqual(["size"]);
+    expect(r.treeGap?.residue?.fire).toBe(true);
+  });
+
+  test("gap gate log + the residue rule fires: RESIDUE GATE routes", async () => {
+    if (!(await calibrated("rg-probe-gaplog"))) return;
+    const r = await withGapMode("log", () => withMode("live", () => solvePreflop6max(at("rg-gaplog", QQ, FACING, 10.5), "HJ", "audit", SIX_MAX_STRATEGY_ID)));
+    forget("rg-gaplog");
+    expect(r?.ok).toBe(false);
+    if (!r || r.ok) return;
+    expect(r.reason).toStartWith("RESIDUE GATE: the CO's Raise 9");
+    expect(r.reason).not.toContain("GAP GATE");
+  });
+
+  test("gap-gate route + GTO Wizard failure: preflop:gap-gate-ai-failed primary, preflop:residue-gate-ai-failed beside it (FAILED, unsafe), pin marked, the flop's residue handling", async () => {
+    if (!(await calibrated("rg-probe-both-e2e"))) return;
+    const id = "rg-both-e2e";
+    forget(id); dropArrivalMemo();
+    await withMode("live", async () => {
+      const r = await fastSolve(at(id, QQ, FACING, 10.5), "HJ", { heroPos: "HJ", origin: "audit", strategyId: SIX_MAX_STRATEGY_ID } as any);
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.source).toBe("hrc-6max-preflop");
+      expect(r.path?.preflop?.code).toBe("preflop:gap-gate-ai-failed");
+      expect(r.path?.reasons.map((x) => `${x.code}:${x.v}`)).toContain("preflop:residue-gate-ai-failed:failed");
+      expect(r.path?.verdict).toBe("failed");
+      expect(r.warning).toContain("GAP GATE: the 3-bet R10.5→R9");
+      expect(r.warning).toContain("RESIDUE GATE: on the chart that answers instead, the CO's Raise 9");
+      expect(unsafeReasons(r.path).join(" ")).toContain("the residue gate's exact tree did not answer");
+      expect(getPreflopPin(id)?.residue?.aiFailed).toBe(true);
+      const f = await fastSolve(at(id, QQ, 9, 10.5), "HJ", { heroPos: "HJ", origin: "audit", strategyId: SIX_MAX_STRATEGY_ID } as any);
+      expect(f.ok && f.warning).toContain("RESIDUE GATE FAILED AT THE FLOP");
+    });
+    forget(id); dropArrivalMemo();
+  }, 60_000);
+
+  test("gap-gate route + GTO Wizard failure with the residue rule in LOG: the gap gate's failure only, nothing marked", async () => {
+    if (!(await calibrated("rg-probe-both-log"))) return;
+    const id = "rg-both-log";
+    forget(id);
+    const r = await withMode("log", () => fastSolve(at(id, QQ, FACING, 10.5), "HJ", { heroPos: "HJ", origin: "audit", strategyId: SIX_MAX_STRATEGY_ID } as any));
+    forget(id);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.path?.preflop?.code).toBe("preflop:gap-gate-ai-failed");
+    expect(r.path?.reasons.some((x) => x.code.startsWith("preflop:residue"))).toBe(false);
+    expect(r.warning).not.toContain("RESIDUE GATE");
+  }, 60_000);
+});
+
+describe.skipIf(gated)("GTO Wizard's own residue: a routed answer whose trigger is under 1% in the exact tree too", () => {
+  const fakeAi = (villainFreq: number) => async (_h: unknown, _p: unknown, _why: string, opts: { villainLines?: boolean } = {}) => ({
+    ok: true as const, actions: [{ action: "Fold", frequency: 30 }, { action: "Call", frequency: 70 }], decision: null, line: "F-R2.5-R9.2-F-F-F", pos: "HJ", heroClass: "QQ",
+    treeKey: "fake", solId: "fake-sol", usedLine: "F-R2.5-R9.2-F-F-F", solveSecs: 0, cached: true, note: "GTO Wizard AI preflop (Ultra) answered (a fake)",
+    shape: { n: 6, apiOf: { UTG: "UTG", HJ: "HJ", CO: "CO", BTN: "BTN", SB: "SB", BB: "BB" }, seatOf: { UTG: 1, HJ: 2, CO: 3, BTN: 4, SB: 5, BB: 6 },
+      positions: ["UTG", "HJ", "CO", "BTN", "SB", "BB"], stacks: { UTG: 50, HJ: 50, CO: 50, BTN: 50, SB: 50, BB: 50 }, sb: 0.5, bb: 1, straddle: null,
+      rakeCapBb: 1.5, deadSb: false, deadBb: 0, heroApiPos: "HJ" },
+    ...(opts.villainLines ? { villainLines: [{ seat: "CO", code: "R9.2", line: "F-R2.5", nodeFreq: villainFreq, maxHand: 1, offTree: false }] } : {}),
+  });
+  test("under 1%: served, but preflop:residue-gate-ai-residue — FAILED and unsafe; at a real share: preflop:residue-gate, not that", async () => {
+    if (!(await calibrated("rg-probe-aires"))) return;
+    const AI = await import("./gtowAiPreflop");
+    for (const [freq, fires] of [[0.003, true], [0.08, false]] as const) {
+      const id = `rg-aires-${fires}`;
+      forget(id);
+      const spy = spyOn(AI, "solvePreflopGtowAi").mockImplementation(fakeAi(freq) as never);
+      try {
+        const r = await withMode("live", () => fastSolve(at(id, QQ, FACING), "HJ", { heroPos: "HJ", origin: "audit", strategyId: SIX_MAX_STRATEGY_ID } as any));
+        expect(spy.mock.calls.length).toBeGreaterThan(0);
+        expect((spy.mock.calls[0]![3] as { villainLines?: boolean }).villainLines).toBe(true);   // the residue route asks for them
+        expect(r.ok).toBe(true);
+        if (!r.ok) continue;
+        expect(r.source).toBe("gtow-ai-preflop");
+        expect(r.path?.preflop?.code).toBe("preflop:residue-gate");
+        const codes = r.path?.reasons.map((x) => x.code) ?? [];
+        if (fires) {
+          expect(codes).toContain("preflop:residue-gate-ai-residue");
+          expect(r.path?.verdict).toBe("failed");
+          expect(r.warning).toContain("RESIDUE GATE: GTO Wizard's own tree also barely takes the trigger — the CO's R9.2");
+          expect(unsafeReasons(r.path).join(" ")).toContain("in GTO Wizard's own tree the villain's action is also under 1%");
+        } else {
+          expect(codes).not.toContain("preflop:residue-gate-ai-residue");
+          expect(r.path?.verdict).not.toBe("failed");
+        }
+      } finally { spy.mockRestore(); forget(id); }
+    }
+  });
+});
