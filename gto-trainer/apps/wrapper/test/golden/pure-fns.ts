@@ -178,6 +178,11 @@ export const FNS_EXTRA: Record<string, (args: any[], rec: any) => unknown> = {
     sessionsDeps();
     const out = await S.runPreflight(preset, cfg, fake, reg, port);
     for (const c of out.checks) if (c.id === "recording") c.detail = "<debug dir>";
+    // 2026-10-13: the desktop-app GTO Wizard account and scripts/start_gtow_secondary.ps1 were removed on purpose
+    // (branch claude/remove-gtow-desktop-app), so the hint names only the Chrome start script; the Python recording
+    // still names both — map the new hint back to the recorded one so the rest of the check is still compared.
+    const CHROME_ONLY = "no session reachable — start one: scripts/start_gtow_chrome.ps1";
+    for (const c of out.checks) if (c.detail === CHROME_ONLY) c.detail = `${CHROME_ONLY} or scripts/start_gtow_secondary.ps1`;
     return out;
   },
   "sessions.versions_snapshot": ([reg]) => {
