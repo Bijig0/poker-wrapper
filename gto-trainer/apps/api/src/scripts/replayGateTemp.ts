@@ -52,18 +52,29 @@ export function gateRunDirs(o: { tmp: string; runId: string; work?: string | nul
     controlWork: `${work}-control-${o.commit}`, candidateWork: `${work}-candidate` };
 }
 
+/** what a run leaves in a work dir: its reports, the lock's files, the copies, the copied configs (api/ and wrapper/ hold json / sqlite only) */
+const isLeftover = (dir: string, name: string): boolean => {
+  if (isGateReport(name) || name.startsWith(LOCK_FILE) || /^(poker|gtow-cache)\.sqlite/i.test(name) || /\.copying$/i.test(name) || name === "gtow-accounts.json") return true;
+  if (name !== "api" && name !== "wrapper") return false;
+  try { return readdirSync(join(dir, name), { withFileTypes: true }).every((e) => e.isFile() && /\.(json|sqlite(-wal|-shm)?)$/i.test(e.name)); } catch { return false; }
+};
+
 /**
  * Why a dir may not be a run's work dir (null = it may): the run's cleanup deletes everything in it but the reports, so
- * an existing dir must be the gate's — named like one (isGateTempName) or empty. `--work .` from apps/api, or a
- * checkout, would otherwise be emptied (the 2026-10-13 audit; so since 2026-10-09).
+ * an existing dir must be the gate's — named like one (isGateTempName), empty, holding a run's lock, or holding only
+ * what a run leaves (a report among it: a re-run on the same --work, a --reuse-copy). `--work .` from apps/api, a
+ * checkout, the live data would otherwise be emptied (the 2026-10-13 audit; so since 2026-10-09).
  */
-export function workDirRefusal(dir: string): string | null {
+export function workDirRefusal(dir: string, protect: readonly string[] = []): string | null {
+  const refusal = refusalFor(dir, protect);
+  if (refusal) return `work dir ${dir}: ${refusal}`;
   let st; try { st = lstatSync(dir); } catch { return null; }        // not there: the run makes it
-  if (st.isSymbolicLink() || !st.isDirectory()) return `--work ${dir} is not a directory`;
+  if (st.isSymbolicLink() || !st.isDirectory()) return `work dir ${dir} is not a directory`;
   if (isGateTempName(basename(dir))) return null;
   const names = readdirSync(dir);
-  if (!names.length) return null;
-  return `--work ${dir} exists and is not a replay-gate dir (${names.slice(0, 5).join(", ")}${names.length > 5 ? ", …" : ""}) — the run's `
+  if (!names.length || names.includes(LOCK_FILE)) return null;
+  if (names.some(isGateReport) && names.every((n) => isLeftover(dir, n))) return null;
+  return `work dir ${dir} exists and is not a replay-gate dir (${names.slice(0, 5).join(", ")}${names.length > 5 ? ", …" : ""}) — the run's `
     + "cleanup would delete what is in it: give a new or empty dir, or one named replay-gate*";
 }
 
@@ -77,29 +88,46 @@ export function pidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }
 }
 
-const readLock = (path: string): GateHolder | null => { try { return JSON.parse(readFileSync(path, "utf8")); } catch { return null; } };
+/**
+ * A lock's holder: null when there is none (no file; not JSON and older than 5 s: corrupt, every lock is written whole);
+ * "unreadable" when it is there but was not read (a sharing violation, a scanner) or is not JSON yet young — held, for now.
+ */
+const readLock = (path: string): GateHolder | null | "unreadable" => {
+  let text: string;
+  try { text = readFileSync(path, "utf8"); } catch (e) { return (e as NodeJS.ErrnoException).code === "ENOENT" ? null : "unreadable"; }
+  try { return JSON.parse(text); } catch { try { return Date.now() - statSync(path).mtimeMs < 5000 ? "unreadable" : null; } catch { return null; } }
+};
+/** the holder named for a lock that could not be read: it holds (the safe side) until it reads */
+const UNREADABLE: GateHolder = { pid: 0, started: "?", startedMs: 0, cwd: "?", argv: ["(a lock that could not be read)"] };
 /** a holder that holds: a live pid, a lock younger than a day (a pid reused by another program must not hold for ever) */
-const live = (h: GateHolder | null, opts: LockOpts): GateHolder | null => {
+const live = (h: GateHolder | null | "unreadable", opts: LockOpts): GateHolder | null => {
+  if (h === "unreadable") return UNREADABLE;
   if (!h || !Number.isInteger(h.pid) || h.pid <= 0) return null;
   if ((opts.now ?? Date.now()) - Number(h.startedMs ?? 0) >= DAY_MS) return null;
   return (opts.alive ?? pidAlive)(h.pid) ? h : null;
 };
 
-/** Who holds `dir`: null when nobody does — no lock, an unreadable one, a dead pid, or a lock older than a day. */
+/** Who holds `dir`: null when nobody does — no lock, a corrupt one, a dead pid, or a lock older than a day. */
 export function gateHolder(dir: string, opts: LockOpts = {}): GateHolder | null {
   return live(readLock(join(dir, LOCK_FILE)), opts);
 }
 
 /**
  * A lock file made whole or not at all: the text is written to a temp file, then hard-linked to `path` — the link fails
- * (EEXIST) when the file is there, and a reader never sees it half written.
+ * (EEXIST) when the file is there, and a reader never sees it half written. (A temp file removed under it — another
+ * run's cleanup — is written again.)
  */
 function linkExclusive(path: string, text: string, pid: number): boolean {
-  const tmp = `${path}.${pid}.${Date.now()}.tmp`;
-  writeFileSync(tmp, text);
-  try { linkSync(tmp, path); return true; }
-  catch (e) { if ((e as NodeJS.ErrnoException).code === "EEXIST") return false; throw e; }
-  finally { rmSync(tmp, { force: true }); }
+  for (let i = 0; ; i++) {
+    const tmp = `${path}.${pid}.${Date.now()}.${i}.tmp`;
+    writeFileSync(tmp, text);
+    try { linkSync(tmp, path); return true; }
+    catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if (code === "EEXIST") return false;
+      if (code !== "ENOENT" || i >= 3) throw e;
+    } finally { rmSync(tmp, { force: true }); }
+  }
 }
 
 /**
@@ -112,10 +140,12 @@ function claimOne(dir: string, me: GateHolder, text: string, opts: LockOpts): Ga
   for (let i = 0; i < 200; i++) {
     if (linkExclusive(lock, text, me.pid)) return null;
     const h = live(readLock(lock), opts);
+    if (h === UNREADABLE) { Bun.sleepSync(10); continue; }                    // look again: it may be read in a moment
     if (h) return h.pid === me.pid ? null : h;
     if (linkExclusive(token, text, me.pid)) {
       try {
         const now = live(readLock(lock), opts);         // still stale? (a run that held the token may have taken it)
+        if (now === UNREADABLE) continue;
         if (now) return now.pid === me.pid ? null : now;
         rmSync(lock, { force: true });
         if (linkExclusive(lock, text, me.pid)) return null;

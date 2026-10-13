@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { claimGateDirs, DAY_MS, gateHolder, type GateHolder, gateRunDirs, gateRunId, isControlWorktreeName, isGateReport, isGateTempName, LOCK_FILE, pidAlive,
   refusalFor, releaseGateDirs, removeGateTemp, sizeOf, sweepGateTemp, workDirRefusal } from "./replayGateTemp";
 
@@ -189,6 +189,25 @@ describe("workDirRefusal (the cleanup empties a work dir: only the gate's may be
     file(join(root, "replay-gate-file"));
     expect(workDirRefusal(join(root, "replay-gate-file"))).toMatch(/is not a directory/);
   });
+  it("a dir an earlier run left (its reports; a --reuse-copy's copies), or one a run holds, may be used again, whatever its name", () => {
+    const root = scratch();
+    const rerun = join(root, "mywork-candidate");                                          // the cleanup leaves the reports
+    file(join(rerun, "replay-gate-S.json")); file(join(rerun, "replay-gate-S.vs-baseline.json"));
+    expect(workDirRefusal(rerun)).toBeNull();
+    const reuse = join(root, "mycopy");                                                     // --reuse-copy keeps the copies
+    for (const f of ["poker.sqlite", "poker.sqlite-wal", "gtow-cache.sqlite", "gtow-accounts.json", "replay-gate-S.json", "wrapper/profiles.json", "api/fx.json"]) file(join(reuse, f));
+    expect(workDirRefusal(reuse)).toBeNull();
+    const held = join(root, "busy");
+    file(join(held, LOCK_FILE)); file(join(held, "poker.sqlite.copying"));
+    expect(workDirRefusal(held)).toBeNull();                                               // the claim then names its holder (75)
+    const apps = join(root, "apps");                                                        // a report beside real things: not the gate's
+    file(join(apps, "replay-gate-S.json")); file(join(apps, "api", "src", "index.ts")); file(join(apps, "wrapper", "package.json"));
+    expect(workDirRefusal(apps)).toMatch(/not a replay-gate dir/);
+    const live = join(root, "replay-gate-data");                                           // the live data root, gate name or not
+    file(join(live, "poker.sqlite"));
+    expect(workDirRefusal(live, [live])).toMatch(/live data root/);
+    expect(workDirRefusal(root, [live])).toMatch(/live data root/);
+  });
 });
 
 describe("claimGateDirs", () => {
@@ -254,11 +273,22 @@ describe("claimGateDirs", () => {
     expect(sweepGateTemp(root, { alive: alive([111]) })).toMatchObject({ removed: [], kept: [d] });
     expect(sweepGateTemp(root, { alive: alive([]) }).removed.map((r) => r.path)).toEqual([d]);   // its run died: swept
   });
+  it("a lock that cannot be read yet holds (it may be another run's, being read in a moment); a corrupt old one is stale", () => {
+    const root = scratch();
+    const d = join(root, "replay-gate-u");
+    mkdirSync(d);
+    writeFileSync(join(d, LOCK_FILE), "{ not json");                                       // young: held (2 s of looking again)
+    expect(claimGateDirs([d], holder(111), { alive: alive([111]) })).toMatch(/pid 0, .*a lock that could not be read/s);
+    const t = new Date(Date.now() - 60_000); utimesSync(join(d, LOCK_FILE), t, t);         // a minute old: corrupt, taken over
+    expect(claimGateDirs([d], holder(111), { alive: alive([111]) })).toBeNull();
+    expect(gateHolder(d, { alive: alive([111]) })?.pid).toBe(111);
+  }, 30_000);
   it("runs racing onto a dead run's lock: exactly one takes it (the takeover token; 2-12 of 12 did before)", async () => {
     const root = scratch();
     const dir = join(root, "replay-gate-w"), done = join(root, "done");
     mkdirSync(dir);
-    writeFileSync(join(dir, LOCK_FILE), JSON.stringify({ pid: 4194300, startedMs: Date.now(), started: "x", cwd: "x", argv: [] }));
+    const dead = spawnSync(process.execPath, ["-e", "0"]).pid!;                            // a pid that has just exited
+    writeFileSync(join(dir, LOCK_FILE), JSON.stringify({ pid: dead, startedMs: Date.now(), started: "x", cwd: "x", argv: [] }));
     const racer = join(root, "racer.ts");
     writeFileSync(racer, [
       `import { existsSync } from "node:fs";`,

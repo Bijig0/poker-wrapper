@@ -84,10 +84,11 @@ const PREFLOP = (arg("preflop") ?? "served") === "charts" ? "charts" : "served";
 const CONTROL = arg("control");
 const FROM = arg("from"), TO = arg("to");
 const EXTRA_SINCE = arg("extra-since");
-const LIVE_DIR = resolve(arg("data") ?? process.env.POKER_DATA_DIR ?? "C:/Users/Brady/poker-data").replace(/\\/g, "/");
+/** a path argument, %VAR% expanded (bash and PowerShell pass "%TEMP%/x" through as text: a dir named %TEMP% here) */
+const pathArg = (k: string): string | null => arg(k)?.replace(/%([A-Za-z_][\w]*)%/g, (m, v: string) => process.env[v] ?? m) || null;
+const LIVE_DIR = resolve(pathArg("data") ?? process.env.POKER_DATA_DIR ?? "C:/Users/Brady/poker-data").replace(/\\/g, "/");
 const RUN_ID = gateRunId();
-/** --work as given, %VAR% expanded (bash and PowerShell pass "%TEMP%/x" through as text: a dir named %TEMP% here) */
-const WORK_ARG = arg("work")?.replace(/%([A-Za-z_][\w]*)%/g, (m, v: string) => process.env[v] ?? m) || null;
+const WORK_ARG = pathArg("work");
 const WORK = gateRunDirs({ tmp: tmpdir(), runId: RUN_ID, work: WORK_ARG }).work;   // the worker is always given --work
 const ONLY = arg("hands")?.split(",").filter(Boolean) ?? null;
 const MAX_HANDS = Number(arg("max-hands") ?? Infinity);
@@ -99,6 +100,17 @@ const liveSession = (): string | null => {
   try { return (d.query("select id from sessions where ended_at is null limit 1").get() as { id: string } | null)?.id ?? null; } finally { d.close(); }
 };
 { const s = liveSession(); if (s) { console.error(`a poker session is LIVE (${s}) — not replaying; run again when it has ended`); process.exit(2); } }
+// a session (or range) with no logged answers replays nothing — and two runs of nothing "differ" in nothing: no PASS
+{
+  const d = liveDb();
+  let n = 0;
+  try {
+    const r = SESSION ? d.query("select count(*) n from answers where session_id = ? and client_hand_id is not null").get(SESSION)
+      : d.query("select count(*) n from answers where ts >= ? and ts < ? and client_hand_id is not null").get(Date.parse(FROM!), Date.parse(TO!));
+    n = (r as { n: number } | null)?.n ?? 0;
+  } finally { d.close(); }
+  if (!n) { console.error(`no answers logged for ${SESSION ? `--session ${SESSION}` : `--from ${FROM} --to ${TO}`} in ${LIVE_DIR}/poker.sqlite — nothing to replay`); process.exit(64); }
+}
 
 // ---- the parent: sweep the leftovers, run the replay in a child (two under --control), remove the copies -----------
 // The replay itself runs with --worker in a child process: its SQLite handles on the copies are closed by the time
@@ -118,7 +130,13 @@ if (!WORKER) {
   const dirs = gateRunDirs({ tmp: tmpdir(), runId: RUN_ID, work: WORK_ARG, commit });
   const workDirs = commit ? [dirs.controlWork!, dirs.candidateWork!] : [dirs.work];
   // a --work the cleanup must not empty (an existing dir that is not the gate's) is refused before anything is touched
-  for (const d of workDirs) { const why = workDirRefusal(d); if (why) { console.error(why); process.exit(64); } }
+  for (const d of workDirs) {
+    const why = workDirRefusal(d, [LIVE_DIR]);
+    if (why) { console.error(`${why}${WORK_ARG && d !== dirs.work ? `\n  (the dir --control makes of --work ${WORK_ARG})` : ""}`); process.exit(64); }
+  }
+  // a --baseline (the plain run's) that is not there is said now, not after the whole replay
+  const BASE_ARG = CONTROL ? null : pathArg("baseline");
+  if (BASE_ARG && !existsSync(BASE_ARG)) { console.error(`--baseline ${resolve(BASE_ARG)}: no such file`); process.exit(64); }
   // the sweep: earlier runs' work dirs under %TEMP% older than a day, whole — never this run's, never one a live run holds
   {
     const s = sweepGateTemp(tmpdir(), { protect: [LIVE_DIR], keep: workDirs });
@@ -128,7 +146,7 @@ if (!WORKER) {
   }
   // the children get every path absolute (they run in other directories: the control worktree's apps/api, this one's)
   const dropped = ["--control", "--baseline", "--work"];
-  const pass = argv.map((a, i) => ["--data", "--env"].includes(argv[i - 1] ?? "") ? resolve(a) : a)
+  const pass = argv.map((a, i) => argv[i - 1] === "--data" ? LIVE_DIR : argv[i - 1] === "--env" ? resolve(pathArg("env")!) : a)
     .filter((a, i) => !dropped.includes(a) && !dropped.includes(argv[i - 1] ?? "") && !["--keep-control", "--keep-temp", "--worker"].includes(a));
   // the children run on THIS Bun (config/env.ps1's 1.3.14 when the gate is started with it) — PATH's `bun` can be another
   const child = (script: string, cwd: string, work: string, extra: string[] = []) =>
@@ -169,11 +187,14 @@ if (!WORKER) {
         for (const p of [reportC, reportN, vs]) rmSync(p, { force: true });
         console.log(`== control ${commit} (${controlDir}; work ${workC})`);
         const c = child("src/scripts/replayGate.ts", join(controlDir, api), workC);
+        const replayedC = answersOf(reportC);
         if (c.status === 2) status = 2;
-        else if ((c.status !== 0 && c.status !== 1) || !existsSync(reportC)) {
-          // a control that died (an import error, a throw) is no baseline: the candidate is not run against nothing
-          console.log(`\nVERDICT against ${commit}: FAIL (the control run ${c.status !== 0 && c.status !== 1 ? `exited ${c.status ?? "on a signal"}` : "wrote no report"} — no candidate run)`);
-          status = 1;
+        else if ((c.status !== 0 && c.status !== 1) || !replayedC?.size) {
+          // a control that died (an import error, a throw, a session with no answers: 64) or replayed nothing is no
+          // baseline: the candidate is not run against nothing, and nothing is no PASS
+          const why = c.status !== 0 && c.status !== 1 ? `exited ${c.status ?? "on a signal"}` : replayedC ? "replayed no decision" : "wrote no report";
+          console.log(`\nVERDICT against ${commit}: FAIL (the control run ${why} — no candidate run)`);
+          status = c.status !== 0 && c.status !== 1 && c.status != null ? c.status : 1;
         } else {
           console.log(`== candidate ${git("rev-parse", "--short", "HEAD")} (this checkout; work ${workN})`);
           const n = child(join(import.meta.dir, "replayGate.ts"), apiDir, workN, ["--baseline", reportC]);
@@ -190,8 +211,8 @@ if (!WORKER) {
       }
     } else if (!claim([WORK])) status = 75;
     else {
-      const b = arg("baseline");          // the manual two-checkout flow (header): this run against another's report
-      status = child(join(import.meta.dir, "replayGate.ts"), apiDir, WORK, b ? ["--baseline", resolve(b)] : []).status ?? 1;
+      // the manual two-checkout flow (header): this run against another's report
+      status = child(join(import.meta.dir, "replayGate.ts"), apiDir, WORK, BASE_ARG ? ["--baseline", resolve(BASE_ARG)] : []).status ?? 1;
     }
   } finally {
     if (controlDir && top && !flag("keep-control")) {
@@ -203,11 +224,12 @@ if (!WORKER) {
     // the copies go while this run still holds its dirs, the locks after (no run claims a dir this one is emptying);
     // the reports stay (replay-gate-<tag>.json, .vs-baseline.json — what `report:` named and what a later --baseline
     // reads); the day-old sweep takes the rest
-    const removed = KEEP_TEMP ? [] : copies.map((w) => removeGateTemp(w, { protect: [LIVE_DIR], keep: (n) => isGateReport(n) || n === LOCK_FILE }));
+    // (the lock's own files are left — this run's lock is released below, another run's half-made one is that run's)
+    const removed = KEEP_TEMP ? [] : copies.map((w) => removeGateTemp(w, { protect: [LIVE_DIR], keep: (n) => isGateReport(n) || n.startsWith(LOCK_FILE) }));
     releaseGateDirs(copies, process.pid);
     if (KEEP_TEMP && copies.length) console.log(`(the work copies stay — ${flag("reuse-copy") ? "--reuse-copy" : "--keep-temp"}: ${copies.join(", ")})`);
     for (const r of removed) {
-      const kept = r.kept.filter((n) => n !== LOCK_FILE);
+      const kept = r.kept.filter((n) => !n.startsWith(LOCK_FILE));
       if (!kept.length) { try { rmdirSync(r.path); } catch { /* not empty: a run that claimed it since holds it */ } }
       if (r.error) console.error(`(the work copy stays: ${r.error})`);
       else if (r.bytes || kept.length) console.log(`work copy removed: ${r.path} (${fmtGb(r.bytes)}${kept.length ? `; kept ${kept.join(", ")}` : ""})`);
