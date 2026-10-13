@@ -8,8 +8,9 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawn } from "node:child_process";
 import { claimGateDirs, DAY_MS, gateHolder, type GateHolder, gateRunDirs, gateRunId, isControlWorktreeName, isGateReport, isGateTempName, LOCK_FILE, pidAlive,
-  refusalFor, releaseGateDirs, removeGateTemp, sizeOf, sweepGateTemp } from "./replayGateTemp";
+  refusalFor, releaseGateDirs, removeGateTemp, sizeOf, sweepGateTemp, workDirRefusal } from "./replayGateTemp";
 
 let roots: string[] = [];
 afterEach(() => { for (const r of roots) rmSync(r, { recursive: true, force: true }); roots = []; });
@@ -156,6 +157,13 @@ describe("a run's own dirs (2026-10-13: two gates at once shared them)", () => {
     for (const p of all) expect(isGateTempName(p.split("/").pop()!)).toBe(true);           // the sweep still finds them
     expect(all.filter(isControlWorktreeName)).toEqual([a.controlWorktree!, b.controlWorktree!]);
   });
+  it("every dir is absolute: a relative --work is the parent's, not each child's (they run in other directories)", () => {
+    const d = gateRunDirs({ tmp: "rel-tmp", runId: "r1", work: "rel/replay-gate-x", commit: "abc" });
+    const here = process.cwd().replace(/\\/g, "/");
+    expect(d.work).toBe(`${here}/rel/replay-gate-x`);
+    expect(d.candidateWork).toBe(`${here}/rel/replay-gate-x-candidate`);
+    expect(d.controlWorktree).toBe(`${here}/rel-tmp/replay-gate-control-abc-r1`);
+  });
   it("an explicit --work is the person's: the copies sit beside it, the worktree still carries the run id", () => {
     const d = gateRunDirs({ tmp: "C:\\T", runId: "r1", work: "C:\\T\\replay-gate-d468ad", commit: "a9638ca" });
     expect(d.work).toBe("C:/T/replay-gate-d468ad");
@@ -163,6 +171,23 @@ describe("a run's own dirs (2026-10-13: two gates at once shared them)", () => {
     expect(d.candidateWork).toBe("C:/T/replay-gate-d468ad-candidate");
     expect(d.controlWorktree).toBe("C:/T/replay-gate-control-a9638ca-r1");
     expect(gateRunDirs({ tmp: "C:/T", runId: "r1" })).toEqual({ work: "C:/T/replay-gate-r1", controlWorktree: null, controlWork: null, candidateWork: null });
+  });
+});
+
+describe("workDirRefusal (the cleanup empties a work dir: only the gate's may be one)", () => {
+  it("a new dir, an empty one, a gate-named one may be; a dir with other things in it, or a file, may not", () => {
+    const root = scratch();
+    expect(workDirRefusal(join(root, "never-made"))).toBeNull();
+    mkdirSync(join(root, "empty"));
+    expect(workDirRefusal(join(root, "empty"))).toBeNull();
+    expect(workDirRefusal(workDir(root, "replay-gate-d468ad-candidate"))).toBeNull();
+    expect(workDirRefusal(workDir(root, "rgc-candidate"))).toBeNull();
+    const checkout = join(root, "apps", "api");
+    file(join(checkout, "package.json"));
+    file(join(checkout, "src", "index.ts"));
+    expect(workDirRefusal(checkout)).toMatch(/exists and is not a replay-gate dir \(package\.json, src\) — the run's cleanup would delete/);
+    file(join(root, "replay-gate-file"));
+    expect(workDirRefusal(join(root, "replay-gate-file"))).toMatch(/is not a directory/);
   });
 });
 
@@ -209,6 +234,51 @@ describe("claimGateDirs", () => {
     expect(removeGateTemp(d, { keep: (n) => /\.json$/.test(n) }).kept).toEqual(["replay-gate-session_1.json"]);
     expect(readdirSync(d)).toEqual(["replay-gate-session_1.json"]);
   });
+  it("a throw half way (the second dir cannot be made) undoes the first claim; a lock with no argv still names its holder", () => {
+    const root = scratch();
+    const first = join(root, "replay-gate-r1-control-abc");
+    file(join(root, "blocker"));                                                           // a FILE where a dir's parent should be
+    expect(() => claimGateDirs([first, join(root, "blocker", "replay-gate-r1-candidate")], holder(111), { alive: alive([111]) })).toThrow();
+    expect(existsSync(first)).toBe(false);
+    const d = join(root, "replay-gate-y");
+    mkdirSync(d);
+    writeFileSync(join(d, LOCK_FILE), JSON.stringify({ pid: 222, startedMs: Date.now() }));
+    expect(claimGateDirs([d], holder(111), { alive: alive([111, 222]) })).toMatch(/in use by another replay gate — pid 222/);
+  });
+  it("a claimed dir is touched young, and the sweep leaves a dir a live run holds whatever its age", () => {
+    const root = scratch();
+    const d = workDir(root, "replay-gate-reused", 3 * DAY_MS);
+    expect(claimGateDirs([d], holder(111), { alive: alive([111]) })).toBeNull();
+    expect(sweepGateTemp(root, { alive: alive([]) }).removed).toEqual([]);                 // young again (its holder aside)
+    const t = new Date(Date.now() - 3 * DAY_MS); utimesSync(d, t, t);                      // a --reuse-copy run adds no entry
+    expect(sweepGateTemp(root, { alive: alive([111]) })).toMatchObject({ removed: [], kept: [d] });
+    expect(sweepGateTemp(root, { alive: alive([]) }).removed.map((r) => r.path)).toEqual([d]);   // its run died: swept
+  });
+  it("runs racing onto a dead run's lock: exactly one takes it (the takeover token; 2-12 of 12 did before)", async () => {
+    const root = scratch();
+    const dir = join(root, "replay-gate-w"), done = join(root, "done");
+    mkdirSync(dir);
+    writeFileSync(join(dir, LOCK_FILE), JSON.stringify({ pid: 4194300, startedMs: Date.now(), started: "x", cwd: "x", argv: [] }));
+    const racer = join(root, "racer.ts");
+    writeFileSync(racer, [
+      `import { existsSync } from "node:fs";`,
+      `import { claimGateDirs } from ${JSON.stringify(join(import.meta.dir, "replayGateTemp").replace(/\\/g, "/"))};`,
+      `const [dir, at, done] = [process.argv[2]!, Number(process.argv[3]), process.argv[4]!];`,
+      `while (Date.now() < at) { /* the barrier */ }`,
+      `const r = claimGateDirs([dir], { pid: process.pid, started: "s", startedMs: Date.now(), cwd: "c", argv: ["racer"] });`,
+      `console.log(r === null ? "CLAIMED" : "REFUSED");`,
+      `const t0 = Date.now(); while (!existsSync(done) && Date.now() - t0 < 30000) await Bun.sleep(20);   // alive until all have claimed`,
+    ].join("\n"));
+    const N = 8, at = Date.now() + 2500;
+    const said: string[] = [];
+    const runs = Array.from({ length: N }, () => new Promise<void>((res) => {
+      const p = spawn(process.execPath, [racer, dir, String(at), done]);
+      p.stdout.on("data", (b) => { said.push(String(b).trim()); if (said.length === N) writeFileSync(done, ""); });
+      p.on("close", () => res());
+    }));
+    await Promise.all(runs);
+    expect(said.sort()).toEqual(["CLAIMED", ...Array(N - 1).fill("REFUSED")]);
+  }, 60_000);
   it("pidAlive: this process is, a pid past the range is not", () => {
     expect(pidAlive(process.pid)).toBe(true);
     expect(pidAlive(4194300)).toBe(false);

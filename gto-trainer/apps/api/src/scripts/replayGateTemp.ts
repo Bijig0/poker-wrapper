@@ -19,7 +19,7 @@
  * time and the pid), and a run CLAIMS every work dir it uses with a lock file (claimGateDirs): a dir another live run
  * holds — an explicit --work two runs were both given — is refused, naming the holder.
  */
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
@@ -42,58 +42,119 @@ export function gateRunId(now = new Date(), pid = process.pid): string {
  * path as a work dir (it was, by default, until 2026-10-13: the copies landed inside the worktree).
  */
 export function gateRunDirs(o: { tmp: string; runId: string; work?: string | null; commit?: string | null }) {
-  const slash = (p: string) => p.replace(/\\/g, "/");
+  // ABSOLUTE (the 2026-10-13 audit): the children run in other directories (the control worktree's apps/api, this
+  // checkout's) — a relative --work ("%TEMP%/x" is literal text in bash and PowerShell) put the control's copies and
+  // report inside its worktree, and the candidate's --baseline pointed at an empty dir
+  const slash = (p: string) => resolve(p).replace(/\\/g, "/");
   const work = slash(o.work ?? join(o.tmp, `replay-gate-${o.runId}`));
   if (!o.commit) return { work, controlWorktree: null, controlWork: null, candidateWork: null };
   return { work, controlWorktree: slash(join(o.tmp, `replay-gate-control-${o.commit}-${o.runId}`)),
     controlWork: `${work}-control-${o.commit}`, candidateWork: `${work}-candidate` };
 }
 
+/**
+ * Why a dir may not be a run's work dir (null = it may): the run's cleanup deletes everything in it but the reports, so
+ * an existing dir must be the gate's — named like one (isGateTempName) or empty. `--work .` from apps/api, or a
+ * checkout, would otherwise be emptied (the 2026-10-13 audit; so since 2026-10-09).
+ */
+export function workDirRefusal(dir: string): string | null {
+  let st; try { st = lstatSync(dir); } catch { return null; }        // not there: the run makes it
+  if (st.isSymbolicLink() || !st.isDirectory()) return `--work ${dir} is not a directory`;
+  if (isGateTempName(basename(dir))) return null;
+  const names = readdirSync(dir);
+  if (!names.length) return null;
+  return `--work ${dir} exists and is not a replay-gate dir (${names.slice(0, 5).join(", ")}${names.length > 5 ? ", …" : ""}) — the run's `
+    + "cleanup would delete what is in it: give a new or empty dir, or one named replay-gate*";
+}
+
 // ---- the claim: one live run per work dir ---------------------------------------------------------------------------
 export const LOCK_FILE = ".replay-gate.lock";
 export type GateHolder = { pid: number; started: string; startedMs: number; cwd: string; argv: string[] };
+type LockOpts = { alive?: (pid: number) => boolean; now?: number };
 
 /** whether a process is alive (signal 0 tests, sends nothing; EPERM = alive, not ours) */
 export function pidAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === "EPERM"; }
 }
 
-/**
- * Who holds `dir`: null when nobody does — no lock, an unreadable one, a dead pid, or a lock older than a day (the
- * sweep's age: a pid reused by another program must not hold a dir for ever).
- */
-export function gateHolder(dir: string, opts: { alive?: (pid: number) => boolean; now?: number } = {}): GateHolder | null {
-  let h: GateHolder;
-  try { h = JSON.parse(readFileSync(join(dir, LOCK_FILE), "utf8")); } catch { return null; }
-  if (!Number.isInteger(h?.pid) || h.pid <= 0) return null;
+const readLock = (path: string): GateHolder | null => { try { return JSON.parse(readFileSync(path, "utf8")); } catch { return null; } };
+/** a holder that holds: a live pid, a lock younger than a day (a pid reused by another program must not hold for ever) */
+const live = (h: GateHolder | null, opts: LockOpts): GateHolder | null => {
+  if (!h || !Number.isInteger(h.pid) || h.pid <= 0) return null;
   if ((opts.now ?? Date.now()) - Number(h.startedMs ?? 0) >= DAY_MS) return null;
   return (opts.alive ?? pidAlive)(h.pid) ? h : null;
+};
+
+/** Who holds `dir`: null when nobody does — no lock, an unreadable one, a dead pid, or a lock older than a day. */
+export function gateHolder(dir: string, opts: LockOpts = {}): GateHolder | null {
+  return live(readLock(join(dir, LOCK_FILE)), opts);
 }
 
 /**
- * Claim the dirs for this run (made when missing): a lock file in each, written exclusively. A dir another live run
- * holds is refused — every claim this call made is undone and the refusal names the holder; a stale lock is taken
- * over. Returns null when every dir is this run's.
+ * A lock file made whole or not at all: the text is written to a temp file, then hard-linked to `path` — the link fails
+ * (EEXIST) when the file is there, and a reader never sees it half written.
  */
-export function claimGateDirs(dirs: readonly string[], me: GateHolder, opts: { alive?: (pid: number) => boolean; now?: number } = {}): string | null {
-  const done: { dir: string; made: boolean }[] = [];
-  const text = JSON.stringify(me, null, 1);
-  for (const dir of dirs) {
-    const made = !existsSync(dir);
-    mkdirSync(dir, { recursive: true });
-    const lock = join(dir, LOCK_FILE);
-    try { writeFileSync(lock, text, { flag: "wx" }); done.push({ dir, made }); continue; }
-    catch (e) { if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e; }
-    const h = gateHolder(dir, opts);
-    if (h && h.pid !== me.pid) {
-      releaseGateDirs(done.map((d) => d.dir), me.pid);
-      for (const d of done) if (d.made) { try { rmdirSync(d.dir); } catch { /* not empty: the sweep takes it */ } }
-      return `${dir} is in use by another replay gate — pid ${h.pid}, started ${h.started}, in ${h.cwd}: ${h.argv.join(" ")}\n`
-        + `  wait for it to end, or give this run another --work (if pid ${h.pid} is not a replay gate, delete ${lock})`;
+function linkExclusive(path: string, text: string, pid: number): boolean {
+  const tmp = `${path}.${pid}.${Date.now()}.tmp`;
+  writeFileSync(tmp, text);
+  try { linkSync(tmp, path); return true; }
+  catch (e) { if ((e as NodeJS.ErrnoException).code === "EEXIST") return false; throw e; }
+  finally { rmSync(tmp, { force: true }); }
+}
+
+/**
+ * One dir's lock for `me`: null when it is this run's, else the run that holds it. A STALE lock (a dead pid, a day
+ * old) is replaced only by the run holding the dir's takeover token (another exclusive file) — two runs that both
+ * found it stale cannot both take it (12 runs racing onto a dead run's lock: 2-12 of them did, before; the audit).
+ */
+function claimOne(dir: string, me: GateHolder, text: string, opts: LockOpts): GateHolder | null {
+  const lock = join(dir, LOCK_FILE), token = `${lock}.takeover`;
+  for (let i = 0; i < 200; i++) {
+    if (linkExclusive(lock, text, me.pid)) return null;
+    const h = live(readLock(lock), opts);
+    if (h) return h.pid === me.pid ? null : h;
+    if (linkExclusive(token, text, me.pid)) {
+      try {
+        const now = live(readLock(lock), opts);         // still stale? (a run that held the token may have taken it)
+        if (now) return now.pid === me.pid ? null : now;
+        rmSync(lock, { force: true });
+        if (linkExclusive(lock, text, me.pid)) return null;
+        continue;                                        // a run linked into the gap: it holds (read on the next turn)
+      } finally { rmSync(token, { force: true }); }
     }
-    writeFileSync(lock, text);            // stale (or already this run's): taken over
-    done.push({ dir, made });
+    // another run is taking it over: look again shortly (a token a crashed run left — 10 s old — is cleared)
+    try { if (Date.now() - statSync(token).mtimeMs > 10_000) rmSync(token, { force: true }); } catch { /* gone */ }
+    Bun.sleepSync(10);
   }
+  return live(readLock(lock), opts) ?? { pid: 0, started: "?", startedMs: 0, cwd: "?", argv: ["(a takeover that did not settle in 2 s)"] };
+}
+
+/**
+ * Claim the dirs for this run (made when missing; touched, so the day-old sweep sees them young): a lock file in
+ * each. A dir another live run holds is refused — every claim this call made is undone (on a throw too) and the
+ * refusal names the holder. Returns null when every dir is this run's.
+ */
+export function claimGateDirs(dirs: readonly string[], me: GateHolder, opts: LockOpts = {}): string | null {
+  const done: { dir: string; made: boolean }[] = [];
+  const undo = () => {
+    releaseGateDirs(done.map((d) => d.dir), me.pid);
+    for (const d of done) if (d.made) { try { rmdirSync(d.dir); } catch { /* not empty: the sweep takes it */ } }
+  };
+  const text = JSON.stringify(me, null, 1);
+  try {
+    for (const dir of dirs) {
+      const made = !existsSync(dir);
+      mkdirSync(dir, { recursive: true });
+      const h = claimOne(dir, me, text, opts);
+      if (h) {
+        undo();
+        return `${dir} is in use by another replay gate — pid ${h.pid}, started ${h.started}, in ${h.cwd}: ${(h.argv ?? []).join(" ")}\n`
+          + `  wait for it to end, or give this run another --work (if pid ${h.pid} is not a replay gate, delete ${join(dir, LOCK_FILE)})`;
+      }
+      done.push({ dir, made });
+      try { const t = new Date(); utimesSync(dir, t, t); } catch { /* the age stays the dir's own */ }
+    }
+  } catch (e) { undo(); throw e; }
   return null;
 }
 
@@ -176,7 +237,7 @@ export type Sweep = { removed: Removed[]; kept: string[]; skipped: string[] };
  * older than `olderThanMs` goes — whole, reports included. `keep` names this run's own dirs (never swept whatever
  * their age). Returns what went, what stayed for being young or kept, and what could not be removed.
  */
-export function sweepGateTemp(root: string, opts: { olderThanMs?: number; now?: number; keep?: readonly string[]; protect?: readonly string[] } = {}): Sweep {
+export function sweepGateTemp(root: string, opts: { olderThanMs?: number; now?: number; keep?: readonly string[]; protect?: readonly string[]; alive?: (pid: number) => boolean } = {}): Sweep {
   const res: Sweep = { removed: [], kept: [], skipped: [] };
   const olderThan = opts.olderThanMs ?? DAY_MS, now = opts.now ?? Date.now();
   const keep = new Set((opts.keep ?? []).map(norm));
@@ -188,6 +249,8 @@ export function sweepGateTemp(root: string, opts: { olderThanMs?: number; now?: 
     let st; try { st = lstatSync(p); } catch { continue; }
     if (!st.isDirectory()) continue;
     if (keep.has(norm(p))) { res.kept.push(p); continue; }
+    // a dir a live run holds stays whatever its age (a --reuse-copy run adds no entry: its dir's mtime can be old)
+    if (gateHolder(p, { alive: opts.alive, now })) { res.kept.push(p); continue; }
     let mtime = st.mtimeMs;
     try { mtime = Math.max(mtime, statSync(p).mtimeMs); } catch { /* the lstat's time stands */ }
     if (now - mtime < olderThan) { res.kept.push(p); continue; }
