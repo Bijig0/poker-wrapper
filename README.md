@@ -92,8 +92,8 @@ the blue **Update available** bar. `--stage` instead of `--publish` uploads the 
 its installer works on any machine, but no install is offered it — a build to try first.
 
 **Handing the installer to a machine:** `setup\handoff.cmd` (or `bun setup/handoff.ts [--version <v>] [--days N]
-[--public] [--gtow <Setup.exe>]`) prints a ready-to-paste message with 7-day download links — the installer on the
-channel, the key, and the GTO Wizard desktop app's installer when one is in Downloads — and `--public` also copies them
+[--public]`) prints a ready-to-paste message with 7-day download links — the installer on the
+channel and the key — and `--public` also copies them
 to `C:\Users\Public\PokerWrapper` for a second Windows account on this computer.
 
 ## The chart factory

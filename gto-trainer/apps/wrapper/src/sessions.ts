@@ -419,7 +419,7 @@ export async function runPreflight(preset: string, config: any, fakeMode: boolea
     : truthy(g.tokenLive) ? "token live" + (truthy(g.expiresInMs) ? ` · ${pyRound((g.expiresInMs || 0) / 60000)} min left` : "") : "";
   add("gtow", truthy(g.tokenLive), truthy(g.tokenLive) ? summary
     : truthy(g.clientUp) ? (summary || "a client is up but no session has a token — sign in (or enter the activation code) in its window")
-    : (summary || "no session reachable — start one: scripts/start_gtow_chrome.ps1 or scripts/start_gtow_secondary.ps1"));
+    : (summary || "no session reachable — start one: scripts/start_gtow_chrome.ps1"));
   if (checks.length && checks[checks.length - 1].id === "gtow") {
     // EVERY account the API knows, disabled ones included (enabled: false) — the panel's Connection list shows the
     // whole pool; the setup page's rows keep to the enabled ones

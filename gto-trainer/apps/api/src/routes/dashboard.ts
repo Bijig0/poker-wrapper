@@ -3250,11 +3250,10 @@ app.get("/load", (c) => c.json(loadReport()));
 /**
  * POST /gtow-connect — bring a session back.
  *
- * `{ source: "primary" | "secondary" }` targets one session; omitted, it
- * connects whichever sessions are not already up. The two are launched
- * differently (the primary is a Chrome profile or an Electron build driven by
- * services/gtowCdp; the secondary is the Elite desktop build on its own port),
- * so each has its own launcher.
+ * `{ source: "<account id>" }` targets one session; omitted, it
+ * connects whichever sessions are not already up. Each is a Chrome profile on
+ * its own port; the primary is launched through services/gtowCdp, the others
+ * by their registry row's launcher script.
  *
  * A client parked on its ACTIVATION or SIGN-IN screen is NOT relaunched —
  * that would throw away whatever the user is typing. The launcher reports it
@@ -3301,7 +3300,7 @@ app.post("/gtow-connect", async (c) => {
     hint: live ? null
       : needsHuman ? "a client is waiting for a human — enter the activation code (or sign in) in its window, then press Connect again"
       : st.clientUp ? "a client is up but no token came back — sign in to GTO Wizard in its window (it was started minimized) and try again"
-      : "no client came up — start one by hand: scripts/start_gtow_chrome.ps1 (primary) or scripts/start_gtow_secondary.ps1",
+      : "no client came up — start one by hand: scripts/start_gtow_chrome.ps1",
   });
 });
 

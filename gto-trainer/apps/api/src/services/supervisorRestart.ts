@@ -49,7 +49,7 @@ export const SUPERVISOR_REPLACE_EXIT = 3;
 export const COOLDOWN_MS = 5 * 60_000;
 export const MIN_UPTIME_MS = 60_000;
 /** config/env.ps1's port table (services/ports.ts): a change to any of these is a supervisor-level change. */
-export const PORT_KEYS = ["PORT_OFFSET", "PORT", "HRC_UI_PORT", "PANEL_PORT", "GTOW_CDP_PORT", "GTOW_SECONDARY_CDP_PORT", "CDP_PORT"];
+export const PORT_KEYS = ["PORT_OFFSET", "PORT", "HRC_UI_PORT", "PANEL_PORT", "GTOW_CDP_PORT", "CDP_PORT"];
 
 /** <repo>, from <repo>/gto-trainer/apps/api/src/services. */
 const REPO = resolve(import.meta.dir, "..", "..", "..", "..", "..");

@@ -37,7 +37,7 @@ if (Test-Path $local) {
 #     install beside this one needs its own set (setup\setup.ps1 picks the offset; 2026-09-30).
 $portOffset = 0
 if ($env:PORT_OFFSET -match '^\d+$') { $portOffset = [int]$env:PORT_OFFSET }
-$portDefaults = [ordered]@{ PORT = 2000; HRC_UI_PORT = 8777; PANEL_PORT = 7700; GTOW_CDP_PORT = 9222; GTOW_SECONDARY_CDP_PORT = 9223; CDP_PORT = 9333 }
+$portDefaults = [ordered]@{ PORT = 2000; HRC_UI_PORT = 8777; PANEL_PORT = 7700; GTOW_CDP_PORT = 9222; CDP_PORT = 9333 }
 foreach ($k in $portDefaults.Keys) {
   if (-not [Environment]::GetEnvironmentVariable($k, 'Process')) { Set-Item "env:$k" ([string]($portDefaults[$k] + $portOffset)) }
 }

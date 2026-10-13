@@ -8,7 +8,7 @@
  * [chain] anatomy behind it, and a hit-rate summary; exits 1 unless the hit rate is 100%.
  *
  *   cd gto-trainer/apps/api
- *   GTOW_SECONDARY=0 GTOW_REQUEST_ORIGIN=stress bun src/scripts/chainReuseStress.ts --hands=140508800003,4919645501,rowid:704 [--drift=-1.4] [--stack=100] [--twice]
+ *   GTOW_REQUEST_ORIGIN=stress bun src/scripts/chainReuseStress.ts --hands=140508800003,4919645501,rowid:704 [--drift=-1.4] [--stack=100] [--twice]
  *
  * --hands   archived hands by CoinPoker id, Ignition clientHandId, or hands.db rowid
  * --drift   perturb the SHORTER villain's read stack on every street after the flop, as live readings do — the
