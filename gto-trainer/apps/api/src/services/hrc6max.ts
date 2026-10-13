@@ -229,6 +229,23 @@ export function poolFreeChart(tokens: string[], hero: Seat6 | ""): (PoolLimpPick
     note: `hero-free pool limp tree (the ${limper}'s first-in limp at the pool's measured range, hero's own node solved — not GTO, our own read of the pool)` };
 }
 
+/**
+ * A SHORT SEAT STILL IN BEHIND A LONE DEEP LIMPER (2026-10-13, deep-limper gap #1; Brady: "sounds good"). NOT GTO — OUR
+ * OWN READ OF THE POOL, like poolFreeChart: with a short seat (<85bb) still in the hand, unevenLimp named the uneven
+ * EQUILIBRIUM tree of that seat (or, unbaked, D100_olimp), whose deep first-in limp is residue (0.09-0.90% of hands).
+ * Four reviews + a GTO Wizard calibration (session 15cef28d): the limper's range is the bigger error than the short
+ * stack at hero's node. So: a short CO/BTN behind hero → that seat's hero-free uneven tree (_s{30,50,70}_<SEAT>_olimp_poolh
+ * locks the deep first-in limp at the same 3.08% AND models the short stack), then the even hero-free tree; a short blind
+ * → the even hero-free tree (the blind played at 100bb). What answered before stays behind both.
+ * DEEP_LIMP_POOLH_SHORT: on (default) | cobtn (the short CO/BTN half only; short blinds as before) | off.
+ * Register entry: approximations.ts "pool-free-limp-chart-short".
+ */
+export type DeepLimpShortMode = "on" | "cobtn" | "off";
+export const deepLimpShortMode = (): DeepLimpShortMode => {
+  const v = String(process.env.DEEP_LIMP_POOLH_SHORT ?? "on").trim().toLowerCase();
+  return v === "off" ? "off" : v === "cobtn" ? "cobtn" : "on";
+};
+
 /** The opening-orbit line through the THIRD limp (e.g. "C-F-C-C"), or null when the line has fewer than three limps
  *  before the first raise. A tree holds three limpers iff it has a node at this line (a v1 tree's seat behind two limps
  *  has no limp action, so the line through a third limp leads nowhere). */
@@ -727,6 +744,45 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
     return finish(ids[0]!, [...ids, ...evenLadder(rung, "limp")], DEEP6, s, seat, "limp");
   }
 
+  /**
+   * Hero (HJ/CO/BTN, reloaded) behind ONE deep non-blind limp at the 100bb rung with a short seat still in — the case
+   * poolFreeChart's even() never sees, because unevenLimp answers first (see deepLimpShortMode). A short seat who raised
+   * keeps his own tree (the rung follows him); a short limper is unevenLimp's (his own range); a folded short is already
+   * dropped (even() answers). Every later preflop decision of the hand takes the same route while the short is in.
+   */
+  function deepLimperShort(): Chart6Choice | null {
+    const mode = deepLimpShortMode();
+    if (mode === "off" || rung !== DEEP6) return null;
+    const freePick = poolFreeChart(tokens, me);
+    if (!freePick || !(Number(byPos[freePick.limper] ?? NaN) > 85)) return null;
+    if (readableAgg && shorts.some(([p]) => p === readableAgg)) return null;
+    const live = shorts.filter(([p]) => p !== freePick.limper);
+    if (!live.length) return null;
+    // the short that gets modelled: the first still to act behind hero, else the shortest
+    const seat = after.find((p) => live.some(([q]) => q === p)) ?? live.slice().sort((a, b) => a[1] - b[1])[0]![0];
+    const bb = oppStack(seat)!;
+    const unevenFree = seat === "CO" || seat === "BTN";
+    if (!unevenFree && mode === "cobtn") return null;
+    // what answered here before, behind it (its prose and gaps belong to that pick, not to this one); none = even()
+    // already reads the hero-free tree
+    const n0 = notes.length, a0 = approx.length;
+    const before = unevenLimp();
+    notes.length = n0; approx.length = a0;
+    if (!before) return null;
+    const evenGap = Math.abs(Math.log(DEEP6 / bb));
+    const rungs = unevenFree
+      ? LIMP_SHORTS6.filter((r) => Math.abs(Math.log(r / bb)) < evenGap).sort((x, y) => Math.abs(Math.log(x / bb)) - Math.abs(Math.log(y / bb)))
+      : [];
+    const ids = [...rungs.map((r) => unevenLimpFreeChartId(r, seat)), POOL_FREE_CHART];
+    notes.push(rungs.length
+      ? `short seat behind a lone deep limper: the ${freePick.limper}'s limp at the pool's deep range and the ${seat}'s ${Math.round(bb)}bb on his hero-free uneven tree (${rungs[0]}bb), then the 100bb one — not GTO, our own read of the pool`
+      : `short seat behind a lone deep limper: the ${freePick.limper}'s limp at the pool's deep range on the 100bb hero-free tree — the ${seat}'s ${Math.round(bb)}bb is not modelled (not GTO, our own read of the pool)`);
+    const others = live.filter(([p]) => p !== seat);
+    if (others.length) notes.push(`${others.map(([p, x]) => `${p} ${Math.round(x)}bb`).join(", ")} also short — not modelled`);
+    if (hero > DEEP6 + SHORT_GAP) notes.push(`hero has ${Math.round(hero)}bb — the chart plays him at 100bb`);
+    return finish(ids[0]!, [...ids, ...before.candidates], DEEP6, rungs[0] ?? DEEP6, rungs.length ? seat : "EQ", "limp");
+  }
+
   // hero has not reloaded: his own stack sets the rung like anyone else's
   if (hero < HERO_RELOAD_FLOOR) {
     notes.push(`hero has ${Math.round(hero)}bb — answered from the even ${rung}bb chart`);
@@ -737,7 +793,7 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
   const shorts = opps.filter(([, bb]) => bb < DEEP6 - SHORT_GAP);
   if (!shorts.length || open === "limp") {
     if (shorts.length && open === "limp") {
-      const uneven = unevenLimp() ?? shortLimperAlone();
+      const uneven = deepLimperShort() ?? unevenLimp() ?? shortLimperAlone();
       if (uneven) return uneven;
       const seat = shorts.slice().sort((a, b) => a[1] - b[1])[0]![0];
       gap("no-limp-uneven", `the uneven set has no limp tree — the even ${rung}bb limp chart answers`,
