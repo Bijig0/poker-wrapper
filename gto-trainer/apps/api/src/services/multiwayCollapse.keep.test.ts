@@ -97,10 +97,24 @@ describe("fastSolve keeps the hand's collapses between its decisions", () => {
     expect(keptCollapsePick("4924401943", "SB", FIVE, RIVER_ASKED)).toBeNull();
   });
 
-  it("a collapse that no longer holds drops the hand's memo: picked afresh from then on", () => {
+  // CHANGED 2026-10-14 evening (replanKeeping): this used to drop the whole memo. Now the collapse that still holds stays;
+  // nothing can top it up (the CO bet and the BTN called: no other ghost-only collapse holds), so it is served alone.
+  it("a collapse that no longer holds is dropped, the one that holds stays (was: the whole memo dropped)", () => {
     keepCollapses("h1", "SB", turn());
     const coBets = [FLOP, toks(["X", "SB"], ["X", "BB"], ["X", "HJ"], ["R3", "CO"], ["C", "BTN"])];
-    expect(keptCollapsePick("h1", "SB", FIVE, coBets)).toBeNull();
+    const r = keptCollapsePick("h1", "SB", FIVE, coBets)!;
+    expect(r.plans.map((p) => p.kind)).toEqual(["ghost:BB + ghost:HJ"]);
+    expect(r.mode).toBe("single");
+    expect(r.why).toContain("ghost:BB + ghost:CO dropped — the CO bet the turn");
+    expect(r.why).toContain("ghost:HJ + ghost:CO dropped — the CO bet the turn");
+    expect(r.why).toContain("the BB, HJ in no tree");
+  });
+
+  it("nothing holds any longer → null, the memo is gone (the caller's fresh pick is kept from then on)", () => {
+    keepCollapses("h1", "SB", turn());
+    // the HJ bets and the CO calls: every kept collapse ghosted one of them
+    const bothIn = [FLOP, toks(["X", "SB"], ["X", "BB"], ["R3", "HJ"], ["C", "CO"], ["F", "BTN"])];
+    expect(keptCollapsePick("h1", "SB", FIVE, bothIn)).toBeNull();
     expect(keptCollapsePick("h1", "SB", FIVE, RIVER_ASKED)).toBeNull();   // gone, not just refused once
   });
 });

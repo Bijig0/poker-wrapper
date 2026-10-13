@@ -225,7 +225,24 @@ export function planCollapses(
   streets: SeatTok[][]
 ): CollapsePlan[] {
   const folds = foldedSeats(seats, heroPos, streets);
-  const start = startState(seats, heroPos, streets, folds);
+  return collapsesFrom(startState(seats, heroPos, streets, folds), folds, null);
+}
+
+/**
+ * The identity of a finished tree. The RANGES are part of it, not just the shape: ghosting a villain who only checked
+ * and merging him into his neighbour leave the same seats and the same tokens, but the merged seat carries both ranges.
+ * Keying on shape alone silently threw the merge away as a duplicate.
+ */
+const planKey = (st: { seats: CollapseSeat[]; streets: SeatTok[][] }): string =>
+  st.seats.map((s) => `${s.pos}:${s.range.reduce((a, b) => a + b, 0).toFixed(3)}`).join("/") + "|" +
+  st.streets.map((x) => x.map((t) => `${t.seat}${t.tok}`).join(",")).join(";");
+
+/**
+ * Every distinct tree reachable from `start` by GHOST / MERGE, in planCollapses' order. `foldCheck` (replanKeeping's walk,
+ * which keeps the seats that folded after the hand's first collapse): the streets on which a merge with a FOLDED member is
+ * refused, as replayPlan refuses it. Null for planCollapses, whose folded seats left before any merge.
+ */
+function collapsesFrom(start: State, folds: string[], foldCheck: SeatTok[][] | null): CollapsePlan[] {
   const out: CollapsePlan[] = [];
   const seen = new Set<string>();
 
@@ -233,11 +250,7 @@ export function planCollapses(
     if (st.seats.length <= 3) {
       const plan = planOf(st, folds);
       if (!plan) return;
-      // The RANGES are part of the identity, not just the shape: ghosting a villain who only checked and
-      // merging him into his neighbour leave the same seats and the same tokens, but the merged seat carries
-      // both ranges. Keying on shape alone silently threw the merge away as a duplicate.
-      const key = st.seats.map((s) => `${s.pos}:${s.range.reduce((a, b) => a + b, 0).toFixed(3)}`).join("/") + "|" +
-        st.streets.map((x) => x.map((t) => `${t.seat}${t.tok}`).join(",")).join(";");
+      const key = planKey(st);
       if (seen.has(key)) return;
       seen.add(key);
       out.push(plan);
@@ -248,6 +261,10 @@ export function planCollapses(
       if (g) walk(g);
     }
     for (let i = 0; i + 1 < st.seats.length; i++) {
+      if (foldCheck) {
+        const pair = st.seats.slice(i, i + 2).flatMap((s) => s.members ?? [s.pos]);
+        if (pair.some((m) => hasFolded(m, foldCheck))) continue;
+      }
       const m = merge(st, i);
       if (m) walk(m);
     }
@@ -283,23 +300,173 @@ function startState(seats: CollapseSeat[], heroPos: string, streets: SeatTok[][]
  * ranges came from a hand that was never heads-up on the flop.
  */
 export function replayPlan(seats: CollapseSeat[], heroPos: string, streets: SeatTok[][], recipe: PlanRecipe): CollapsePlan | null {
-  if (recipe.folds.some((f) => f === heroPos || !hasFolded(f, streets) || !seats.some((s) => s.pos === f))) return null;
-  let st: State | null = startState(seats, heroPos, streets, recipe.folds);
-  for (const op of recipe.ops) {
-    if (!st) return null;
-    if ("ghost" in op) {
-      const i: number = st.seats.findIndex((s) => s.pos === op.ghost);
-      st = i < 0 ? null : ghost(st, i);
-    } else {
-      const [a, b] = op.merge;
-      const i: number = st.seats.findIndex((s) => s.pos === a);
-      if (i < 0 || st.seats[i + 1]?.pos !== b) return null;
-      const members = [...(st.seats[i]!.members ?? [a]), ...(st.seats[i + 1]!.members ?? [b])];
-      if (members.some((m) => hasFolded(m, streets))) return null;
-      st = merge(st, i);
+  const r = replayExplained(seats, heroPos, streets, recipe);
+  return "plan" in r ? r.plan : null;
+}
+
+const STREET_NAMES = ["flop", "turn", "river"];
+const streetName = (k: number): string => STREET_NAMES[k] ?? `street ${k + 1}`;
+
+/** "the SB bet the turn": the first time `pos` put chips in on the walked streets, in words. */
+function commitPhrase(pos: string, streets: SeatTok[][]): string {
+  for (let k = 0; k < streets.length; k++) {
+    const street = streets[k]!;
+    for (let j = 0; j < street.length; j++) {
+      const t = street[j]!;
+      if (t.seat !== pos || !COMMITS(t.tok)) continue;
+      const verb = t.tok === "C" ? "called" : t.tok === "RAI" ? "went all-in on"
+        : /^[RB]/.test(t.tok) ? (street.slice(0, j).some((x) => COMMITS(x.tok)) ? "raised" : "bet") : "put chips in on";
+      return `the ${pos} ${verb} the ${streetName(k)}`;
     }
   }
-  return st ? planOf(st, recipe.folds) : null;
+  return `the ${pos} put chips in`;
+}
+
+/** Why MERGE of `pair` (its members) no longer holds on these streets, in words. */
+function mergePhrase(pair: string[], streets: SeatTok[][]): string {
+  for (let k = 0; k < streets.length; k++) {
+    const allIn = streets[k]!.find((t) => pair.includes(t.seat) && t.tok === "RAI");
+    if (allIn) return `the ${allIn.seat} went all-in on the ${streetName(k)}`;
+  }
+  for (let k = 0; k < streets.length; k++) {
+    const who = [...new Set(streets[k]!.filter((t) => pair.includes(t.seat) && COMMITS(t.tok)).map((t) => t.seat))];
+    if (who.length > 1) return `the ${who.join(" and the ")} both put chips in on the ${streetName(k)}`;
+  }
+  return `the ${pair.join("+")} merge no longer fits the action`;
+}
+
+/** replayPlan, saying why the recipe no longer holds when it does not (replanKeeping's `why`). */
+function replayExplained(seats: CollapseSeat[], heroPos: string, streets: SeatTok[][], recipe: PlanRecipe): { plan: CollapsePlan } | { broke: string } {
+  for (const f of recipe.folds) {
+    if (f === heroPos || !seats.some((s) => s.pos === f)) return { broke: `the ${f} is not a villain in the hand` };
+    if (!hasFolded(f, streets)) return { broke: `the ${f}'s fold is no longer in the capture` };
+  }
+  let st: State = startState(seats, heroPos, streets, recipe.folds);
+  for (const op of recipe.ops) {
+    if ("ghost" in op) {
+      const i = st.seats.findIndex((s) => s.pos === op.ghost);
+      if (i < 0) return { broke: `the ${op.ghost} is no longer a seat of the tree` };
+      const g = ghost(st, i);
+      if (!g) return { broke: commitPhrase(op.ghost, streets) };
+      st = g;
+    } else {
+      const [a, b] = op.merge;
+      const i = st.seats.findIndex((s) => s.pos === a);
+      if (i < 0 || st.seats[i + 1]?.pos !== b) return { broke: `the ${a} and the ${b} no longer sit side by side in the tree` };
+      const members = [...(st.seats[i]!.members ?? [a]), ...(st.seats[i + 1]!.members ?? [b])];
+      const gone = members.find((m) => hasFolded(m, streets));
+      if (gone) return { broke: `the ${gone} folded out of the merged seat` };
+      const m = merge(st, i);
+      if (!m) return { broke: mergePhrase(members, streets) };
+      st = m;
+    }
+  }
+  const plan = planOf(st, recipe.folds);
+  return plan ? { plan } : { broke: "it no longer leaves hero in a tree" };
+}
+
+/** A recipe's label, as planOf names the plan it builds (a merge without its "(X's action)" note). */
+const recipeLabel = (r: PlanRecipe): string =>
+  labelOf(r.folds, r.ops.map((op) => ("ghost" in op ? `ghost:${op.ghost}` : `merge:${op.merge[0]}+${op.merge[1]}`)));
+
+const himOrThem = (xs: string[]): string => (xs.length === 1 ? "him" : "them");
+
+export interface Replanned extends Picked {
+  /** `why` without its closing "… folded since" clause — what the hand's memo keeps for its next decision */
+  baseWhy: string;
+  /** the kept recipes that still hold, rebuilt on these streets (the first of `plans`, in the memo's order) */
+  kept: CollapsePlan[];
+  /** the kept recipes that no longer hold, by label, and why */
+  dropped: { kind: string; why: string }[];
+  /** plans added after a drop to bring the pick back up to `max` (the rest of `plans`) */
+  added: CollapsePlan[];
+  /** villains who folded without chips after the recipes were made (they fold inside the trees) */
+  since: string[];
+  /** after a drop: villains in no tree, because no collapse that holds keeps them */
+  uncovered: string[];
+}
+
+/**
+ * KEEP WHAT STILL HOLDS, TOP UP THE REST (2026-10-14, Brady: "I don't care about upfront cost, just want the one with the
+ * best final performance"). A later decision of a 4+ way hand, given the collapse recipes its earlier decision was
+ * answered on (the hand's memo, fastSolve.keptCollapsePick):
+ *
+ *   1. every recipe is replayed (replayPlan); the ones that still hold are KEPT — same seats, same ranges, same flop, so
+ *      the streets already walked come from the hand's checkpoints — and always come first, never replaced;
+ *   2. when one or more no longer hold (the villain a plan ghosted put chips in since), the pick is TOPPED BACK UP to
+ *      `max` with collapses built over the hand's ORIGINAL seats and the folds as they were when the recipes were made
+ *      (`recipe.folds`): a villain who folded after that stays in the tree and folds inside it (the hand's real history),
+ *      never removed from the flop as planCollapses does. A top-up holds now (a ghosted seat committed nothing on any
+ *      walked street; a merge commits at most once a street and no member of it folded) and is chosen as coverPick
+ *      chooses: repeatedly the one keeping the most villains no plan yet keeps, ties to planCollapses' order. Only
+ *      GHOST-only plans top up ghost-only survivors — what the blend was measured on; a merge is never blended in, and a
+ *      merge survivor (a single pick) gets no top-up;
+ *   3. nothing holds → null: the caller picks afresh (planCollapses), as before.
+ *
+ * Mode as pickCollapses: "blend" with two or more ghost-only plans, else "single". Until this, one broken recipe dropped
+ * them all and the fresh pick took every villain who had folded without chips out of the FLOP — a 4-way flop answered as
+ * heads-up, new trees from the root, no checkpoints: six live hands on 2026-10-14 (4924195300, 4923556567, 4923565359,
+ * 4923553178, 4924403091, 4923484379), each with one of three single-ghost plans broken and two still holding.
+ */
+export function replanKeeping(
+  seats: CollapseSeat[], heroPos: string, streets: SeatTok[][], keptRecipes: PlanRecipe[], max = 3, prevWhy?: string,
+): Replanned | null {
+  const kept: CollapsePlan[] = [];
+  const dropped: { kind: string; why: string }[] = [];
+  for (const r of keptRecipes) {
+    const x = replayExplained(seats, heroPos, streets, r);
+    if ("plan" in x) kept.push(x.plan);
+    else dropped.push({ kind: recipeLabel(r), why: x.broke });
+  }
+  if (!kept.length) return null;
+  const base = kept[0]!.recipe!.folds;
+  const added: CollapsePlan[] = [];
+  const covered = new Set(kept.flatMap(keptVillains));
+  if (dropped.length && kept.length < max && kept.every((p) => p.ghostOnly)) {
+    const have = new Set(kept.map(planKey));
+    const left = collapsesFrom(startState(seats, heroPos, streets, base), base, streets)
+      .filter((p) => p.ghostOnly && !have.has(planKey(p)));
+    while (kept.length + added.length < max && left.length) {
+      let best = 0;
+      let bestGain = -1;
+      left.forEach((p, i) => {
+        const gain = new Set(keptVillains(p).filter((v) => !covered.has(v))).size;
+        if (gain > bestGain) { best = i; bestGain = gain; }   // strict: a tie stays with the earlier plan
+      });
+      const p = left.splice(best, 1)[0]!;
+      added.push(p);
+      for (const v of keptVillains(p)) covered.add(v);
+    }
+  }
+  const plans = [...kept, ...added];
+  const mode: Picked["mode"] = plans.filter((p) => p.ghostOnly).length >= 2 ? "blend" : "single";
+  const since = foldedSeats(seats, heroPos, streets).filter((f) => !base.includes(f));
+  const uncovered = dropped.length
+    ? seats.filter((s) => s.pos !== heroPos && !base.includes(s.pos) && !covered.has(s.pos)).map((s) => s.pos) : [];
+  let baseWhy: string;
+  if (!dropped.length) {
+    baseWhy = prevWhy ?? (mode === "blend"
+      ? `${plans.length} independent collapses blended (measured 0.008bb vs the true tree; a single collapse costs 0.020-0.066bb)`
+      : "one collapse of this field (measured 0.020-0.066bb vs the true tree)");
+  } else {
+    // what each top-up brought back into a tree, said beside it
+    const seen = new Set(kept.flatMap(keptVillains));
+    const addedText = added.map((p) => {
+      const gain = [...new Set(keptVillains(p).filter((v) => !seen.has(v)))];
+      for (const v of gain) seen.add(v);
+      return gain.length ? `${p.kind} added to keep the ${gain.join(", ")} in a tree` : `${p.kind} added`;
+    });
+    baseWhy = (mode === "blend" ? `${plans.length} collapses blended (measured 0.008bb vs the true tree)`
+      : "one collapse (measured 0.020-0.066bb vs the true tree)") +
+      `: ${dropped.map((d) => `${d.kind} dropped — ${d.why}`).join("; ")}; ${kept.map((p) => p.kind).join(", ")} kept from the hand's earlier decision` +
+      (addedText.length ? `; ${addedText.join("; ")}` : "") +
+      (uncovered.length ? `; the ${uncovered.join(", ")} in no tree — no collapse that holds keeps ${himOrThem(uncovered)}` : "");
+  }
+  const told = /kept from (the hand's|its) earlier decision/.test(baseWhy);
+  const why = baseWhy + (!since.length ? ""
+    : told ? `; ${since.join(", ")} folded since, inside the trees that hold ${himOrThem(since)}`
+    : `; the hand's collapses kept from its earlier decision — ${since.join(", ")} folded since, inside the trees that hold ${himOrThem(since)}, so the streets already walked are reused`);
+  return { plans, mode, why, baseWhy, kept, dropped, added, since, uncovered };
 }
 
 export interface Picked {

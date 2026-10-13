@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import type { PlanRecipe } from "./multiwayCollapse";
 import type { PreflopPin, PreflopNodeRecord } from "./preflopPin";
 import { emptyCounts, type RequestCounts } from "./requestScope";
 import { handFactsDbPath, openStore } from "./storePaths";
@@ -109,6 +110,22 @@ export interface HandDoc {
   trees?: TreeRecord[];
   /** GTO Wizard requests spent on this hand, by the origin of the call that made them ("live", "warm", …) */
   requests?: Record<string, RequestCounts>;
+  /** the 4+ way collapses the hand's postflop answers are walked on (fastSolve.keepCollapses) */
+  collapses?: KeptCollapses;
+  at: number;
+}
+
+/**
+ * THE HAND'S COLLAPSES (2026-10-14): the recipes of the three-seat trees a 4+ way hand was last answered on, so a later
+ * decision walks the same trees (multiwayCollapse.replanKeeping) — after an API restart mid-hand too. A fact: which
+ * trees the hand's answers were read on cannot be re-derived once a villain has folded since.
+ */
+export interface KeptCollapses {
+  heroPos: string;
+  recipes: PlanRecipe[];
+  mode: "blend" | "single";
+  /** the pick's why without its "folded since" clause */
+  why: string;
   at: number;
 }
 
@@ -290,6 +307,13 @@ class HandFacts {
       && (x.origin ?? null) === (rec.origin ?? null) && !!x.reroute === !!rec.reroute;
     if (this.trees(key).some(same)) return;
     this.update(key, (d) => { d.trees = [...(d.trees ?? []), rec].slice(-TREES_MAX); });
+  }
+
+  // ── the collapses a 4+ way hand is answered on (KeptCollapses) ─────────────────────────────────────────────────
+  collapses(key: string): KeptCollapses | undefined { return this.get(key)?.collapses; }
+  setCollapses(key: string, rec: KeptCollapses): void { this.update(key, (d) => { d.collapses = rec; }); }
+  forgetCollapses(key: string): void {
+    if (this.get(key)?.collapses) this.update(key, (d) => { delete d.collapses; });
   }
 
   // ── the requests the hand cost ──────────────────────────────────────────────────────────────────────────────
