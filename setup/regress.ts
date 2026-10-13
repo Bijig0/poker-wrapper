@@ -94,7 +94,7 @@ try {
 // And the fit rule end to end (2026-10-04, fastSolve.fitEmpties.test.ts): the chart refuses a fit that deletes the only
 // limper / caller, the exact tree is asked, and with GTO Wizard blocked the fitted answer comes back flagged.
 try {
-  const [, out] = run([BUN, "test", "src/scripts/mutationHarness.test.ts", "src/scripts/mutationHarness.fixtures.test.ts", "src/scripts/mutation/rangeOracle.test.ts", "src/scripts/mutation/referenceRanges.test.ts", "src/services/fastSolve.chainLedger.test.ts", "src/services/fastSolve.hand4920544353.test.ts", "src/services/missQueue.realHands.test.ts", "src/services/fastSolve.fitEmpties.test.ts"], API, 900, { ...process.env, MUTATION_GATE: "1", ANSWERS_DB_PATH: ":memory:" });
+  const [, out] = run([BUN, "test", "src/scripts/mutationHarness.test.ts", "src/scripts/mutationHarness.fixtures.test.ts", "src/scripts/mutation/rangeOracle.test.ts", "src/scripts/mutation/referenceRanges.test.ts", "src/services/fastSolve.chainLedger.test.ts", "src/services/fastSolve.hand4920544353.test.ts", "src/services/missQueue.realHands.test.ts", "src/services/fastSolve.fitEmpties.test.ts", "src/services/fastSolve.residueGate.test.ts"], API, 900, { ...process.env, MUTATION_GATE: "1", ANSWERS_DB_PATH: ":memory:" });
   const m = /(\d+) pass\s+(?:\d+ skip\s+)?(\d+) fail/.exec(out);
   rec("api input-mutation gate", !!m && m[2] === "0", m ? `${m[1]} pass / ${m[2]} fail` : lastLines(out, 200));
 } catch (e: any) {

@@ -33,6 +33,7 @@
  *     to act behind.
  */
 import { SEATS6, type Seat6 } from "./hrc6max";
+import { residueHitText, type ResidueVerdict } from "./residueGate";
 
 /** The stack ratio scripts/treeGapReport.ts tabulates at by default (the first, provisional log-only bound). */
 export const STACK_GAP_TAU = 1.25;
@@ -84,15 +85,18 @@ export interface SeatGap {
 
 /** One bound a decision is past. */
 export interface GapReason {
-  rule: "size" | "stack";
+  /** residue = THE RESIDUE GATE (services/residueGate, 2026-10-13): an action on hero's line at a size the chart's own
+   *  player barely uses (ratio = s, tau = the 1% bound); routed only under PREFLOP_RESIDUE_GATE=live */
+  rule: "size" | "stack" | "residue";
   /** a stack bound: which one — facing an all-in, facing a re-raise, hero's first decision (the raiser / the other
-   *  blind), hero's own stack */
-  why?: "allin" | "reraise" | "first" | "hero";
+   *  blind), hero's own stack; residue: "sticky" = an earlier decision of the hand was routed by the rule */
+  why?: "allin" | "reraise" | "first" | "hero" | "sticky";
   /** which raise of the line: 1 = the open, 2 = the 3-bet, 3 = the 4-bet or later (stack: the raises hero faces) */
   level: number;
   ratio: number;
   tau: number;
-  /** the size as played → as read ("R5→R3.5"), or the seat whose stack it is ("BTN 22bb, 50bb in the chart") */
+  /** the size as played → as read ("R5→R3.5"), or the seat whose stack it is ("BTN 22bb, 50bb in the chart");
+   *  residue: the action's sentence (residueGate.residueHitText) */
   what: string;
 }
 
@@ -123,6 +127,27 @@ export interface TreeGap {
   /** on a decision the gate sent to the exact tree: what the chart would have told hero's hand (the side-by-side the
    *  audit reads), and how the exact tree's answer went — "answered"; "failed" / "timeout" = the chart answered after all */
   routed?: { chartMix: { action: string; frequency: number }[]; ai: "answered" | "failed" | "timeout"; aiWhy?: string; aiMs?: number };
+  /** THE RESIDUE GATE's verdict on this decision (services/residueGate) — under mode log only recorded; under live its
+   *  firing is a `gate.reasons` entry with rule "residue" */
+  residue?: ResidueVerdict;
+}
+
+/** The reasons that ROUTE this decision: every bound under the gap gate's live mode; under its log / off mode only the
+ *  residue gate's (which has its own switch, PREFLOP_RESIDUE_GATE). */
+export const routingReasons = (g: Pick<TreeGap, "gate"> | null | undefined): GapReason[] =>
+  !g ? [] : g.gate.mode === "live" ? g.gate.reasons : g.gate.reasons.filter((r) => r.rule === "residue");
+/** Does the residue gate route this decision? */
+export const residueRouted = (g: Pick<TreeGap, "gate"> | null | undefined): boolean => routingReasons(g).some((r) => r.rule === "residue");
+
+/** The residue gate's verdict as gate reasons (live mode, firing) — [] otherwise. */
+export function residueReasons(v: ResidueVerdict | null | undefined): GapReason[] {
+  if (!v || v.mode !== "live" || !v.fire) return [];
+  const out: GapReason[] = v.hits.map((h) => ({ rule: "residue" as const, level: 0, ratio: Math.round(h.s * 1e5) / 1e5, tau: 0.01, what: residueHitText(h) }));
+  if (!out.length && v.sticky) {
+    out.push({ rule: "residue", why: "sticky", level: 0, ratio: 0, tau: 0.01,
+      what: `an earlier decision of this hand was routed (the ${v.sticky.seat}'s ${v.sticky.code} at "${v.sticky.line || "root"}"), so the hand stays on the exact tree` });
+  }
+  return out;
 }
 
 const val = (t: string) => Number(t.replace("_", "."));
@@ -208,7 +233,8 @@ export function gapReasons(g: Pick<TreeGap, "seats" | "raises" | "allIn"> & Part
 /** The gate's verdict as one sentence, for the answer's note. */
 export function gapText(reasons: GapReason[]): string {
   const lv = (n: number) => (n <= 1 ? "open" : n === 2 ? "3-bet" : "4-bet");
-  return reasons.map((r) => (r.rule === "size"
+  return reasons.map((r) => (r.rule === "residue" ? r.what
+    : r.rule === "size"
     ? `the ${lv(r.level)} ${r.what} is ${r.ratio}x from the chart's size (bound ${r.tau}x)`
     : r.why === "hero" ? `${r.what} — ${r.ratio}x apart (bound ${r.tau}x under ${HERO_STACK_DEPTH}bb)`
     : r.why === "first" ? `a short stack in front: ${r.what} — ${r.ratio}x apart (bound ${r.tau}x under ${FIRST_STACK_DEPTH}bb)`
@@ -232,6 +258,8 @@ export function treeGap6(a: {
   aggressor?: string | null; after?: readonly string[];
   repaired?: { index?: number; from: string; to: string; logDist: number; borrowed?: string }[]; fitted?: readonly string[];
   rawTokens?: readonly string[]; wantedId?: string | null; mode?: GapGateMode;
+  /** THE RESIDUE GATE's verdict (services/residueGate), computed by the caller from the walk's nodes */
+  residue?: ResidueVerdict | null;
 }): TreeGap | null {
   const hero = String(a.hero ?? "").toUpperCase() as Seat6;
   const stacks = chartStacks6(a.chartId);
@@ -248,10 +276,11 @@ export function treeGap6(a: {
   const mode = a.mode ?? gapGateMode();
   const heroGap = { real: Math.round(heroReal * 100) / 100, chart: stacks[hero] };
   const bvb = (hero === "SB" || hero === "BB") && seats.length === 1 && (seats[0]!.seat === "SB" || seats[0]!.seat === "BB");
-  const reasons = mode === "off" ? [] : gapReasons({ seats, raises, allIn, hero: heroGap, bvb }, snaps);
+  const reasons = [...(mode === "off" ? [] : gapReasons({ seats, raises, allIn, hero: heroGap, bvb }, snaps)), ...residueReasons(a.residue)];
   const out: TreeGap = {
     v: 2, chart: a.chartId, hero: heroGap, seats, stack, pot, raises, allIn, ...(bvb ? { bvb } : {}),
     size: snaps[0] ?? null, gate: { mode, route: reasons.length > 0, reasons },
+    ...(a.residue && a.residue.mode !== "off" ? { residue: a.residue } : {}),
   };
   if (a.wantedId && a.wantedId !== a.chartId) {
     const w = chartStacks6(a.wantedId);
