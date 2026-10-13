@@ -441,8 +441,14 @@ export function replanKeeping(
   const plans = [...kept, ...added];
   const mode: Picked["mode"] = plans.filter((p) => p.ghostOnly).length >= 2 ? "blend" : "single";
   const since = foldedSeats(seats, heroPos, streets).filter((f) => !base.includes(f));
+  // a villain who has folded since is out of the hand: "in no tree" is said of the ones still in
   const uncovered = dropped.length
-    ? seats.filter((s) => s.pos !== heroPos && !base.includes(s.pos) && !covered.has(s.pos)).map((s) => s.pos) : [];
+    ? seats.filter((s) => s.pos !== heroPos && !base.includes(s.pos) && !since.includes(s.pos) && !covered.has(s.pos)).map((s) => s.pos) : [];
+  // THE ONE LEFT MAY BE EXACT NOW (hand 4920544353): every seat it ghosts has folded since without chips, so it is the very
+  // tree planCollapses builds for the seats still in ("fold:SB") — under the label the hand's walks were recorded with
+  const exactNow = plans.length === 1 && plans[0]!.ghostOnly && plans[0]!.recipe!.ops.length > 0 &&
+    plans[0]!.recipe!.ops.every((op) => "ghost" in op && since.includes(op.ghost));
+  const ghostedNow = exactNow ? plans[0]!.recipe!.ops.map((op) => ("ghost" in op ? op.ghost : "")) : [];
   let baseWhy: string;
   if (!dropped.length) {
     baseWhy = prevWhy ?? (mode === "blend"
@@ -456,16 +462,24 @@ export function replanKeeping(
       for (const v of gain) seen.add(v);
       return gain.length ? `${p.kind} added to keep the ${gain.join(", ")} in a tree` : `${p.kind} added`;
     });
-    baseWhy = (mode === "blend" ? `${plans.length} collapses blended (measured 0.008bb vs the true tree)`
+    baseWhy = (exactNow ? `nothing collapsed — the ${ghostedNow.join(", ")} folded since, so ${plans[0]!.kind} is the tree of the ${plans[0]!.seats.length} seats still in`
+      : mode === "blend" ? `${plans.length} collapses blended (measured 0.008bb vs the true tree)`
       : "one collapse (measured 0.020-0.066bb vs the true tree)") +
       `: ${dropped.map((d) => `${d.kind} dropped — ${d.why}`).join("; ")}; ${kept.map((p) => p.kind).join(", ")} kept from the hand's earlier decision` +
       (addedText.length ? `; ${addedText.join("; ")}` : "") +
       (uncovered.length ? `; the ${uncovered.join(", ")} in no tree — no collapse that holds keeps ${himOrThem(uncovered)}` : "");
   }
+  // the folders since: inside the trees that hold them; one no tree holds (he was ghosted) is said plainly, once
   const told = /kept from (the hand's|its) earlier decision/.test(baseWhy);
-  const why = baseWhy + (!since.length ? ""
-    : told ? `; ${since.join(", ")} folded since, inside the trees that hold ${himOrThem(since)}`
-    : `; the hand's collapses kept from its earlier decision — ${since.join(", ")} folded since, inside the trees that hold ${himOrThem(since)}, so the streets already walked are reused`);
+  const inside = since.filter((f) => covered.has(f));
+  const outside = since.filter((f) => !covered.has(f) && !(exactNow && ghostedNow.includes(f) && dropped.length));
+  const sinceText = [
+    inside.length ? `${inside.join(", ")} folded since, inside the trees that hold ${himOrThem(inside)}` : "",
+    outside.length ? `${outside.join(", ")} folded since` : "",
+  ].filter(Boolean).join("; ");
+  const why = baseWhy + (!sinceText ? ""
+    : told ? `; ${sinceText}`
+    : `; the hand's collapses kept from its earlier decision — ${sinceText}${inside.length ? ", so the streets already walked are reused" : ""}`);
   return { plans, mode, why, baseWhy, kept, dropped, added, since, uncovered };
 }
 

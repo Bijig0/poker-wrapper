@@ -220,6 +220,32 @@ describe("fastSolve: the kept collapses after a drop, a restart, and COLLAPSE_KE
     expect(keptCollapsePick(s.hand, s.hero, s.seats, s.later)).toBeNull();
   });
 
+  it("a decision that does not continue the memo's line (a replay of the hand from its start) ignores the memo", () => {
+    // kept at the turn (after the drop): a replay back at the flop decision is not a later decision of that line
+    keepCollapses(s.hand, s.hero, earlier(), s.earlier);
+    expect(keptCollapsePick(s.hand, s.hero, s.seats, s.later)).not.toBeNull();   // the turn continues the flop's line
+    expect(keptCollapsePick(s.hand, s.hero, s.seats, s.earlier)).toBeNull();     // the memo is now the turn's
+    // a re-read wager size is the same action: the line still continues
+    const resized = [s.later[0]!, toks(["R4.5", "SB"], ["F", "BB"], ["F", "CO"])];
+    expect(keptCollapsePick(s.hand, s.hero, s.seats, resized)).not.toBeNull();
+  });
+
+  it("the one collapse left ghosting only a seat that has folded since is said to be the exact tree", () => {
+    // hand 4920544353's shape: hero CO faces the BB's flop bet (SB checked, BTN to act) — answered on ghost:BTN + ghost:SB;
+    // then the BTN raises and both blinds fold
+    const seats = seatsOf("SB", "BB", "CO", "BTN");
+    const facing = [toks(["X", "SB"], ["R1", "BB"])];
+    const p = pickCollapses(planCollapses(seats, "CO", facing))!;
+    expect(p.plans.map((x) => x.kind)).toEqual(["ghost:BTN", "ghost:SB"]);
+    const jam = [toks(["X", "SB"], ["R1", "BB"], ["C", "CO"], ["R10", "BTN"], ["F", "SB"], ["F", "BB"])];
+    const r = replanKeeping(seats, "CO", jam, p.plans.map((x) => x.recipe!), 3, p.why)!;
+    expect(r.plans.map((x) => x.kind)).toEqual(["ghost:SB"]);
+    expect(r.plans[0]!.seats).toEqual(planCollapses(seats, "CO", jam)[0]!.seats);   // the fresh "fold:SB" tree
+    expect(r.uncovered).toEqual([]);
+    expect(r.why).toBe("nothing collapsed — the SB folded since, so ghost:SB is the tree of the 3 seats still in: " +
+      "ghost:BTN dropped — the BTN raised the flop; ghost:SB kept from the hand's earlier decision");
+  });
+
   it("nothing holds → null and the memo is dropped from memory and the ledger", () => {
     keepCollapses(s.hand, s.hero, earlier());
     // the SB bets, the BB raises, the CO calls: every single ghost is broken

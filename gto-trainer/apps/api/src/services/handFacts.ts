@@ -126,6 +126,9 @@ export interface KeptCollapses {
   mode: "blend" | "single";
   /** the pick's why without its "folded since" clause */
   why: string;
+  /** the postflop line the recipes were kept on ("seat:X|F|C|R|RAI" per street): a decision whose line does not extend it
+   *  is not later in this hand (a replay from the start) and ignores them */
+  line?: string[][];
   at: number;
 }
 
