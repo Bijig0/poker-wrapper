@@ -4,6 +4,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import type { PlanRecipe } from "./multiwayCollapse";
 import type { PreflopPin, PreflopNodeRecord } from "./preflopPin";
+import type { RerootFact } from "./multiwayRerootKeep";
 import { emptyCounts, type RequestCounts } from "./requestScope";
 import { handFactsDbPath, openStore } from "./storePaths";
 
@@ -112,6 +113,9 @@ export interface HandDoc {
   requests?: Record<string, RequestCounts>;
   /** the 4+ way collapses the hand's postflop answers are walked on (fastSolve.keepCollapses) */
   collapses?: KeptCollapses;
+  /** the hand's KEPT RE-ROOT (services/multiwayRerootKeep) — only on the hand's own `<hand>#reroot` row, never on the
+   *  hand's doc: its entering ranges are ~14 KB a seat, and the hand's doc is rewritten by every other fact */
+  reroot?: RerootFact;
   at: number;
 }
 
@@ -137,8 +141,11 @@ const STREETS_MAX = 60;
 const TREES_MAX = 40;
 const PREFLOP_NODES_MAX = 12;
 
-/** A key worth persisting: a real site hand id, not the wrapper's small per-process counter (see above). */
-export const isDurableKey = (key: string): boolean => !!key && !/^\d{1,6}$/.test(key);
+/** A key worth persisting: a real site hand id, not the wrapper's small per-process counter (see above). A derived key
+ *  (`<hand>#reroot`, `<hand>#lr-narrow`) is as durable as the hand it derives from. */
+export const isDurableKey = (key: string): boolean => { const base = key.split("#")[0] ?? ""; return !!base && !/^\d{1,6}$/.test(base); };
+/** the hand's kept-re-root row (HandDoc.reroot) */
+const rerootKeyOf = (key: string): string => `${key}#reroot`;
 
 function assertTestSafePath(path: string): void {
   if (process.env.NODE_ENV !== "test") return;
@@ -300,6 +307,17 @@ class HandFacts {
   forgetStreets(key: string): void {
     const d0 = this.get(key);
     if (d0?.streets || d0?.trees) this.update(key, (d) => { delete d.streets; delete d.trees; });
+    // the kept re-root rests on the streets walked: a cold walk of the hand starts without it
+    this.forgetReroot(key);
+  }
+
+  // ── the hand's kept re-root (multiwayRerootKeep): its own row, `<hand>#reroot` ─────────────────────────────────
+  reroot(key: string): RerootFact | undefined { return key ? this.get(rerootKeyOf(key))?.reroot : undefined; }
+  setReroot(key: string, fact: RerootFact): void {
+    if (key) this.update(rerootKeyOf(key), (d) => { d.reroot = fact; });
+  }
+  forgetReroot(key: string): void {
+    if (key && this.get(rerootKeyOf(key))) this.forget(rerootKeyOf(key));
   }
 
   // ── the trees the chain asked for (TreeRecord) ───────────────────────────────────────────────────────────────
@@ -331,6 +349,7 @@ class HandFacts {
 
   /** Forget a hand entirely — memory and disk (tests, and a replay that wants a cold hand). */
   forget(key: string): void {
+    if (key && !key.endsWith("#reroot")) this.forgetReroot(key);
     this.mem.delete(key);
     if (!isDurableKey(key)) return;
     try { this.open(); this.stmts?.del.run(key); } catch { /* nothing to forget */ }
