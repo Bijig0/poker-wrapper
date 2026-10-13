@@ -48,6 +48,8 @@ let lastUserActionAt = 0;
  *  neither the click guard nor the relaunch gap holds it */
 let forStart = false;
 export function noteUserAction(now = Date.now()): void { lastUserActionAt = now; }
+/** When a person last did something on these pages (tests). */
+export const userActionAt = (): number => lastUserActionAt;
 
 /** config/local.env as main.ts read it at start (the launcher reads it once): a change needs a relaunch too. */
 const LOCAL_ENV = join(REPO, "config", "local.env");
