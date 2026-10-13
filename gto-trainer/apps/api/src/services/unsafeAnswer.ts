@@ -22,6 +22,11 @@ export const UNSAFE_CODES: Record<string, string> = {
   "preflop:pool-limp-lock-failed": "the pool limp lock failed — answered against the solver's residue limp range",
   "preflop:pool-coldcall-lock-failed": "the pool cold-call lock failed — answered against the solver's residue cold-call range",
   "postflop:hero-absent": "hero's hand is absent from his own range at his node — the mix is noise",
+  // THE RESIDUE GATE (services/residueGate, 2026-10-13): its exact tree did not answer, so the chart answered behind a
+  // villain size the chart's own player barely uses — and the flop ranges walked off that node are his sliver
+  "preflop:residue-gate-ai-failed": "the residue gate's exact tree did not answer — the chart answered behind a size its own player barely uses (his range there is a sliver)",
+  "preflop:residue-gate-ai-residue": "the residue gate routed this decision, but in GTO Wizard's own tree the villain's action is also under 1% of his range — the exact tree reads a leftover too",
+  "arrival:residue-gate-ai-failed": "the flop ranges were walked off a chart node behind a size its player barely uses (the exact tree was not built) — a villain enters with a sliver of his range",
 };
 
 /** input / output checks whose FAIL means the model is not the spot at the table (process checks #9-#13 never do) */
@@ -46,6 +51,11 @@ export function unsafeReasons(path: (Pick<DecisionPath, "reasons" | "checks" | "
   }
   // a pool lock hero's preflop answer was read with, lost at the flop — unless a floor gave the seat a pool range after all
   const a = path.arrival;
+  // an arrival code that is unsafe stays so on later streets (a memo hit carries it as `first`, not as a reason)
+  for (const x of [a, a?.first].filter(Boolean) as NonNullable<typeof a>[]) {
+    const say = x.code ? UNSAFE_CODES[x.code] : undefined;
+    if (say && x.code!.startsWith("arrival:")) out.push(say);
+  }
   for (const x of [a, a?.first].filter(Boolean) as NonNullable<typeof a>[]) {
     const covered = new Set((x.poolSeats ?? []).map((s) => s.pos.toUpperCase()));
     for (const l of x.lockLost ?? []) {

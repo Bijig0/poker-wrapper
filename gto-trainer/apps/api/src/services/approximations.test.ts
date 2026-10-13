@@ -84,7 +84,7 @@ describe("the answer path emits nothing the register does not account for", () =
         // a templated code: its fixed head must be a NOT_DEPARTURES prefix, or every expansion registered (below)
         const head = code.slice(0, code.indexOf("${"));
         if (Object.keys(NOT_DEPARTURES.codePrefixes).some((p) => head.startsWith(p))) continue;
-        if (code === "preflop:${tag}-ai-failed") continue;   // tag = gap-gate | fit-empties, registered below
+        if (code === "preflop:${tag}-ai-failed") continue;   // tag = gap-gate | fit-empties | residue-gate, registered below
         if (head === "arrival:" || head === "preflop:") continue; // `arrival:${producer}` / `preflop:${piece}`: chainPath's default when no code is set
         unknown.push(`${code} (${file})`);
         continue;
@@ -95,7 +95,7 @@ describe("the answer path emits nothing the register does not account for", () =
     }
     expect(unknown).toEqual([]);
     // the expansions of the templated AI-failed code
-    for (const c of ["preflop:gap-gate-ai-failed", "preflop:fit-empties-ai-failed"]) expect(departureForCode(c)).not.toBeNull();
+    for (const c of ["preflop:gap-gate-ai-failed", "preflop:fit-empties-ai-failed", "preflop:residue-gate-ai-failed"]) expect(departureForCode(c)).not.toBeNull();
   });
 
   test("every warning prefix", () => {
@@ -117,6 +117,11 @@ describe("the answer path emits nothing the register does not account for", () =
     expect(departureForCode("preflop:pool-limp-lock")?.id).toBe("pool-limp-lock");
     expect(departureForCode("arrival:pool-limp-floor")?.id).toBe("pool-limp-floor");
     expect(departureForCode("preflop:gap-gate")?.id).toBe("gap-gate");
+    // the residue gate (2026-10-13): its own entry for every code it writes, its off switch, and the warning prefixes
+    for (const c of ["preflop:residue-gate", "preflop:residue-gate-ai-failed", "preflop:residue-gate-ai-residue", "arrival:residue-gate", "arrival:residue-gate-ai-failed"]) expect(departureForCode(c)?.id).toBe("preflop-residue-gate");
+    expect(departureForCode("preflop:residue-gate")?.offSwitch?.env).toBe("PREFLOP_RESIDUE_GATE");
+    expect(departureForWarning("RESIDUE GATE")?.id).toBe("preflop-residue-gate");
+    expect(departuresOf(["preflop:residue-gate"], "GTO Wizard AI preflop (Ultra) answered because the 6-max charts could not: RESIDUE GATE: the CO's Raise 9 …").map((x) => x.id)).toContain("preflop-residue-gate");
     expect(departureForCode("postflop:offtree-soft")?.id).toBe("offtree-soft-range");
     expect(departureForCode("postflop:offtree-lock")?.id).toBe("offtree-node-lock");
     expect(departureForWarning("OFF-TREE RANGE")?.id).toBe("offtree-soft-range");

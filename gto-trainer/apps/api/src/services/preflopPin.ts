@@ -10,6 +10,7 @@ import { tmark } from "./answerTrace";
 import { handFacts } from "./handFacts";
 import { currentRequestScope } from "./requestScope";
 import { SNAP_TAU } from "../utils/snapToken/snapToken";
+import type { ResidueMark } from "./residueGate";
 
 /**
  * THE PREFLOP PIN (2026-09-25, Brady: "the final ranges used are the input — if GTO Wizard AI preflop is used
@@ -56,6 +57,11 @@ interface PinBase {
   /** seats whose call hero's decisions were read with FOLDED OUT (a fit, or the caller-cap borrow): later decisions
    *  of the hand fold them the same way (fitLine.foldSeatsOut), and the flop reads each seat on a fitted line */
   foldedSeats?: string[];
+  /** THE RESIDUE GATE routed a decision of this hand (services/residueGate, 2026-10-13): hero's later preflop decisions
+   *  are routed too (the hand stays on one tree family) — carried from pin to pin by setPreflopPin. `aiFailed` is set only
+   *  on the pin of the decision whose exact tree did not answer (the CHART answer is pinned): the flop takes its ranges
+   *  from the exact tree if it exists by then, else says so (arrival:residue-gate-ai-failed, unsafe) */
+  residue?: ResidueMark;
 }
 export interface HeroPick {
   /** the capture's tokens up to hero's node, and the tree's codes there */
@@ -200,12 +206,25 @@ export function setPreflopPin(pin: PreflopPin, heroCards?: string | null): void 
     return;
   }
   const carried =(prev?.picks ?? []).filter((p) => isStrictPrefix(p.rawTokens, pin.rawTokens));
-  pin = { ...pin, picks: [...carried, ...(pin.picks ?? [])] } as PreflopPin;
+  // the residue gate's mark rides along to this hand's later decisions (its aiFailed belongs to the pin it was set on)
+  const residue = pin.residue ?? (prev?.residue && pin.actionIndex >= prev.residue.at ? (({ aiFailed: _f, ...m }) => m)(prev.residue) : undefined);
+  pin = { ...pin, picks: [...carried, ...(pin.picks ?? [])], ...(residue ? { residue } : {}) } as PreflopPin;
   handFacts.setPreflop(pin.handKey, pin, heroCards);
   recordPreflopNode(pin, heroCards);
   tmark("preflop ranges pinned", `hand ${pin.handKey}: ${pin.piece} ${pin.piece === "chart6max" ? pin.chartId : pin.id} at "${pin.codes.join("-") || "root"}" (${pin.heroPos} to act)`);
 }
 export const getPreflopPin = (handKey: string): PreflopPin | undefined => handFacts.preflop(handKey);
+/**
+ * THE RESIDUE GATE'S MARK on the pin of the decision it routed (fastSolve, 2026-10-13) — written by whichever piece
+ * answered it (the exact tree's pin, or the chart's on a failed exact tree). Only the pin written for that very decision
+ * (its actionIndex) is marked; false when there is none (a late exact-tree answer that skipped the pin).
+ */
+export function markPreflopResidue(hand: ParsedHand, mark: ResidueMark): boolean {
+  const pin = preflopPinFor(hand);
+  if (!pin || pin.actionIndex !== mark.at) return false;
+  handFacts.setPreflop(pin.handKey, { ...pin, residue: mark } as PreflopPin);
+  return true;
+}
 /**
  * The hand's pin, found by its site id — or, when the preflop answer was read before the site id reached the capture
  * (the wrapper's counter was the key then), by that counter, provided the hand's hero cards match: the counter

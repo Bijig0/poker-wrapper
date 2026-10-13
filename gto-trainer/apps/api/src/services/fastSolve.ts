@@ -2,7 +2,8 @@ import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { buildPreflopTokens, buildPreflopTokensHu, buildPreflopTokens3max, buildSpotSolutionTokens, allInCalls, actionToken } from "../feed/buildSolutionUrl/buildSolutionUrl";
 import { chartFor, fetchNode, walk3max } from "./hrc3max";
 import { chartFor6max, resolveChart6max, nodeGetter, dealtBySeat, dealtEffective, dealtByPos, replayTokens6, limp3Reroute, threeLimpPrefix } from "./hrc6max";
-import { treeGap6, gapText, gapGateMode, type TreeGap } from "./treeGap";
+import { treeGap6, gapText, gapGateMode, routingReasons, residueRouted, type GapReason, type TreeGap } from "./treeGap";
+import { chartLineShares, memoNodes, residueGateMode, residueHitText, residueVerdict, type ResidueMark, type ResidueVerdict } from "./residueGate";
 import { applyPoolLimpFloor, poolLimpFloorNote, poolLimpLockOn, poolLockTarget, shortLimpPoolOn } from "./poolLimpFloor";
 import { applyPoolColdCallFloor, coldCallLockTarget, coldCallPoolMode, poolColdCallFloorNote } from "./poolColdCall";
 import { applyLimpCallProduct, applyPoolCallRanges, poolCallNote, poolCallsMode } from "./poolCalls";
@@ -58,12 +59,12 @@ import { POSTFLOP_ORDER } from "../utils/aiStudyLine/aiStudyLine";
 import { menuPotMode, threeWaySizes } from "./gtowApi";
 import type { AiChainSpec } from "./aiChain";
 import { nodeTrust, arrivalTrust } from "./nodeTrust";
-import { repostReason, solvePreflopGtowAi, solvePreflopPoolLocked, solvePreflopColdCallLocked, COLD_CALL_NOT_NEEDED, POOL_LOCK_SKIPPED, poolLockMs, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, HERO_OFF_TREE, heroSelfLockReasons, type AiPreflopOutcome, type AiPreflopShape, type PreflopVillainLine } from "./gtowAiPreflop";
+import { repostReason, solvePreflopGtowAi, solvePreflopPoolLocked, solvePreflopColdCallLocked, COLD_CALL_NOT_NEEDED, POOL_LOCK_SKIPPED, poolLockMs, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, aiPreflopTreeBuilt, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, HERO_OFF_TREE, heroSelfLockReasons, type AiPreflopOutcome, type AiPreflopShape, type PreflopVillainLine } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
 import { postInNote, deadPostsBb, freeOptionMix } from "../utils/foldPostIns/foldPostIns";
 import { rollBands } from "./answerIntegrity";
 import { dealtSeats, dealtCount, namesFromRoster } from "../utils/dealtSeats/dealtSeats";
-import { setPreflopPin, preflopPinFor, preflopPinKey, resumeChartPreflopRanges, repickVillainRanges, fittedRangesBySeat, heroDeviation, repairSnaps, snapsNote, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
+import { setPreflopPin, preflopPinFor, preflopPinKey, markPreflopResidue, resumeChartPreflopRanges, repickVillainRanges, fittedRangesBySeat, heroDeviation, repairSnaps, snapsNote, forgetPreflopPin as forgetPreflopPinInner, type ResumeOutcome } from "./preflopPin";
 import { resumeAiPreflopRanges } from "./gtowAiPreflop";
 import { dropPrunedPicks, prunedPicksNote } from "./prunedPicks";
 
@@ -1064,7 +1065,31 @@ async function flopArrivalCompute(
       const via = producer === "recon6max" ? "read again from the 6-max chart the picker chooses" : "read from a GTO Wizard AI preflop tree built from the table";
       return pinMissProv({ pin: !!pin, pinPiece: pin?.piece ?? null, pinMiss, producer, via, extra });
     };
-    if (pin) {
+    // THE RESIDUE GATE'S EXACT TREE DID NOT ANSWER (services/residueGate, 2026-10-13): hero's last preflop decision was
+    // routed off a chart node behind a size its player barely uses, and the CHART answered after all — so the pinned
+    // chart's ranges are that node's sliver. When the exact tree has been built by now (the warm-up or the late answer
+    // finished it), the flop-entering ranges come from it; otherwise the pin is walked as before, and the arrival says
+    // so (arrival:residue-gate-ai-failed — services/unsafeAnswer holds the answer).
+    let residueFail: string | null = null;
+    const rmark = pin?.piece === "chart6max" ? pin.residue : undefined;
+    if (rmark?.aiFailed) {
+      const at = `the ${rmark.seat}'s ${rmark.code} at "${rmark.line || "root"}" (${(100 * rmark.s).toFixed(2)}% of his range, ${(100 * rmark.a).toFixed(2)}% at any size)`;
+      if (aiPreflopTreeBuilt(hand, heroPos, pinnedDealt)) {
+        const ai = await arrivalRangesGtowAi(hand, heroPos, 6, pinnedDealt);
+        if (ai.ok) {
+          const note = `RESIDUE GATE: hero's preflop answer came from the chart (the exact tree did not answer in time) behind ${at} — the flop-entering ranges come from the exact GTO Wizard AI preflop tree, built since`;
+          recon = { ok: true, ranges: ai.ranges }; preTokens = ai.tokens; seatOrder = ai.seatOrder; rangeSource = ai.id; aiFitted = ai.fitted?.folded ?? null;
+          sixNote = [sixNote, note, ai.note].filter(Boolean).join(" · ");
+          prov = reducedProv(ai, { how: "by-design", producer: "ai-arrival", code: "arrival:residue-gate", why: note.slice(0, 240) });
+          tmark("residue gate: arrival from the exact tree", note);
+        } else residueFail = `the exact tree's ranges could not be read (${ai.reason.slice(0, 140)})`;
+      } else residueFail = "the exact tree was not built by the flop";
+      if (residueFail) {
+        tmark("residue gate: arrival walked the leftover node", residueFail);
+        console.log(`[residue-gate] hand ${preflopPinKey(hand)}: the flop ranges are walked off ${pin!.piece === "chart6max" ? (pin as { chartId: string }).chartId : "?"} behind ${at} — ${residueFail}`);
+      }
+    }
+    if (pin && !recon) {
       const tPin = Date.now();
       const resumed: ResumeOutcome = pin.piece === "chart6max"
         ? await resumeChartPreflopRanges(pin, hand, heroPos)
@@ -1181,6 +1206,13 @@ async function flopArrivalCompute(
         sixNote = [sixNote, `${what} hero's preflop answer read the ${l.pos} at the pool's ${l.key}, but that locked tree could not be resumed (${String(pinMiss).slice(0, 160)}) — his flop range is the plain tree's`].filter(Boolean).join(" · ");
         console.log(`[preflop-pin] hand ${preflopPinKey(hand)}: ${what} the ${l.pos} (${l.key}) — ${String(pinMiss).slice(0, 160)}`);
       }
+    }
+    // the residue gate's failure, said on the arrival whichever source answered the walk (services/unsafeAnswer: UNSAFE)
+    if (residueFail && rmark && prov) {
+      const why = `RESIDUE GATE FAILED AT THE FLOP: hero's preflop answer was read behind the ${rmark.seat}'s ${rmark.code} at "${rmark.line || "root"}" ` +
+        `(${(100 * rmark.s).toFixed(2)}% of his range; ${(100 * rmark.a).toFixed(2)}% at any size) and ${residueFail} — the flop ranges are that node's sliver`;
+      prov = { ...prov, how: "failed", code: "arrival:residue-gate-ai-failed", why: why.slice(0, 300) };
+      sixNote = [sixNote, why].filter(Boolean).join(" · ");
     }
   }
   if (!recon) {
@@ -3747,6 +3779,79 @@ function countCallsBefore(tokens: string[]): number {
   return tokens.filter((t) => t === "C").length;
 }
 
+/** The routing reasons as the answer's note: "GAP GATE: …" for the gap gate's bounds, "RESIDUE GATE: …" for the residue
+ *  gate's (services/residueGate) — both, joined, when both route. */
+export function gateRuleText(reasons: GapReason[]): string {
+  const res = reasons.filter((r) => r.rule === "residue"), other = reasons.filter((r) => r.rule !== "residue");
+  return [other.length ? `GAP GATE: ${gapText(other)}` : null, res.length ? `RESIDUE GATE: ${gapText(res)}` : null].filter(Boolean).join("; ");
+}
+/** The mark a residue-routed decision leaves on its pin (preflopPin.markPreflopResidue). */
+function residueMarkOf(g: TreeGap, hand: ParsedHand, heroPos: string | null): ResidueMark | null {
+  const v = g.residue;
+  const h = v?.hits[0];
+  const src = h ? { seat: h.seat, code: h.code, line: h.line, s: h.s, a: h.a } : v?.sticky ? { seat: v.sticky.seat, code: v.sticky.code, line: v.sticky.line, s: v.sticky.s, a: v.sticky.a } : null;
+  if (!src) return null;
+  return { at: hand.actions.length, rawTokens: buildPreflopTokens(hand, heroPos), chart: g.chart, ...src };
+}
+/** one log line per (hand, line, verdict): the poller re-asks a decision every second */
+const residueLogged = new Map<string, number>();
+/**
+ * THE RESIDUE GATE'S VERDICT on one chart decision (services/residueGate) — null under PREFLOP_RESIDUE_GATE=off. The
+ * line is scored through the walk's own node getter (memoised: no node is read twice). `sticky`: the mark an earlier
+ * decision of this hand left on its pin (the hand stays on the exact tree).
+ */
+async function residueOfDecision(a: { get: (line: string) => Promise<HrcNode | null | "unreachable">; line: string; heroPos: string | null;
+    chartId: string; rawActions: { action: string; frequency: number }[] | null; prevPin: ReturnType<typeof preflopPinFor>; tokens: string[];
+    hand: ParsedHand; heroClass: string | null }): Promise<ResidueVerdict | null> {
+  const mode = residueGateMode();
+  if (mode === "off") return null;
+  const m = a.prevPin?.residue;
+  const sticky = m && m.at < a.hand.actions.length && m.rawTokens.length < a.tokens.length && m.rawTokens.every((t, i) => a.tokens[i] === t) ? m : null;
+  const shares = await chartLineShares(a.get, a.line, a.heroPos, { forcedFolds: true })
+    .catch((e): { na: string } => ({ na: `scoring threw: ${e instanceof Error ? e.message : e}` }));
+  const heroFold = a.rawActions ? a.rawActions.find((x) => /^fold$/i.test(x.action))?.frequency ?? 0 : null;
+  return residueVerdict({ mode, shares, heroFold, sticky });
+}
+/**
+ * The residue gate's log line for one decision, once per (hand, line, outcome) — written AFTER the gap gate's verdict, so
+ * it says what happened: the gap gate routed (the residue verdict is info), the fallback chart was marked (it cannot
+ * route again), exempt, routed (live), or would route (log).
+ */
+function logResidue(v: ResidueVerdict | null, gap: TreeGap | undefined, a: { hand: ParsedHand; line: string; chartId: string;
+    rawActions: { action: string; frequency: number }[] | null; heroClass: string | null; fallback?: boolean }): void {
+  if (!v || !(v.hits.length || v.sticky)) return;
+  const gapRoutes = !!gap && gap.gate.mode === "live" && gap.gate.reasons.some((r) => r.rule !== "residue");
+  const verb = v.exempt ? "exempt (hero's chart answer folds >= 99%), not routing"
+    : gapRoutes && a.fallback ? (v.mode === "live" && v.fire ? "fires on the fallback chart (the gap gate's exact tree failed) — marked, not routed" : "would fire on the fallback chart")
+    : gapRoutes ? "the gap gate routes this decision — residue recorded only"
+    : a.fallback ? "fires on the fallback chart — marked, not routed"
+    : v.mode === "live" ? "routing to the exact tree" : "would route";
+  const handKey = a.hand.clientHandId ?? a.hand.handId ?? "?";
+  const k = `${handKey}|${a.line}|${verb}`;
+  if (residueLogged.has(k)) return;
+  residueLogged.set(k, Date.now());
+  if (residueLogged.size > 300) { const first = residueLogged.keys().next().value; if (first !== undefined) residueLogged.delete(first); }
+  const pc = (x: number) => `${(100 * x).toFixed(2)}%`;
+  const what = [...v.hits.map((h) => `${h.hero ? "hero " : ""}${h.seat} ${h.code} at "${h.line || "root"}" s ${pc(h.s)} a ${pc(h.a)}`),
+    ...(v.sticky ? [`sticky: an earlier decision was routed (${v.sticky.seat} ${v.sticky.code} at "${v.sticky.line || "root"}")`] : [])].join("; ");
+  const mix = a.rawActions ? a.rawActions.map((x) => `${x.action} ${x.frequency}`).join("/") : "no cell";
+  console.log(`[residue-gate] ${verb} hand ${handKey} (${a.chartId}, mode ${v.mode}): ${what} · hero ${a.heroClass ?? "?"} chart mix ${mix}`);
+}
+/**
+ * GTO WIZARD'S OWN RESIDUE (Brady 2026-10-13): a decision the residue gate routed (or kept on the exact tree) whose
+ * triggering action — the same seat's raise at the same raise level, at the size played — is itself under 1% of that
+ * player's range in GTO Wizard's tree: its answer reads a leftover too (a 46.6bb open-jam where the tree limps instead,
+ * its jam range 99.8% premiums). Read off the villain lines the AI piece scored on hero's exact line (no request).
+ * null when it is not so (or the trigger was hero's own action, or the lines were not scored).
+ */
+export function aiResidueOf(mark: ResidueMark, lines: readonly PreflopVillainLine[] | undefined, apiOf?: Record<string, string>): PreflopVillainLine | null {
+  if (!lines?.length) return null;
+  const seat = (apiOf?.[mark.seat] ?? mark.seat).toUpperCase();
+  const level = mark.line.split("-").filter((t) => /^R/i.test(t)).length;
+  const hit = lines.find((l) => l.seat.toUpperCase() === seat && /^R/i.test(l.code) && l.line.split("-").filter((t) => /^R/i.test(t)).length === level);
+  return hit && hit.nodeFreq < 0.01 ? hit : null;
+}
+
 export async function solvePreflop6max(
   hand: ParsedHand,
   heroPos: string | null,
@@ -3781,7 +3886,8 @@ export async function solvePreflop6max(
     return null;
   }
 
-  const get = nodeGetter(resolved.id);
+  // every node the walk reads is kept for this solve: the residue gate scores the same nodes (no second read)
+  const get = memoNodes(nodeGetter(resolved.id));
   // FIT THE LINE TO THE TREE (2026-09-22, utils/fitLine): fold the earliest plain caller/limper — never hero,
   // never a later raiser — until the capped tree accepts the line (raise charts: two callers, four entrants; the v2 pool
   // limp trees: three limpers, five active — utils/fitLine asks the tree, it hard-codes no cap).
@@ -3999,12 +4105,21 @@ export async function solvePreflop6max(
   // and the exact GTO Wizard tree answers; the refusal carries what the chart would have said, so the answer row
   // holds both (fastSolveInner falls back to this chart when the exact tree does not answer in time). Measured on the
   // RAW tokens: a caller the fit folded out of the tree is still at the table.
+  // THE RESIDUE GATE (services/residueGate, 2026-10-13): every action on the line hero's node was read at — each
+  // villain's and hero's own earlier ones — as a share of the range its player takes it with, from the nodes the walk
+  // already read. A size its own player barely uses while the action is common (s < 1%, a ≥ 1%, a ≥ 5·s) is a
+  // leftover of the chart: under PREFLOP_RESIDUE_GATE=live the exact tree answers (a gap-gate reason, rule "residue");
+  // under log (the default) the verdict is recorded and logged and the chart answers as before.
+  const residue = await residueOfDecision({ get, line: borrowed?.line ?? line, heroPos: heroSeatPos || nodePos, chartId: resolved.id,
+    rawActions: cell ? rawActions : null, prevPin, tokens, hand, heroClass });
   const gap = treeGap6({ chartId: resolved.id, byPos: dealtByPos(hand, heroPos), hero: heroSeatPos || nodePos,
     ...replayTokens6(tokens), repaired: walk.repaired, fitted: walk.fittedLine ?? walkTokens, rawTokens: tokens,
-    wantedId: retry.keepChart ? null : choice.candidates[0] }) ?? undefined;
-  if (gap?.gate.route && gap.gate.mode === "live" && !retry.noGate) {
+    wantedId: retry.keepChart ? null : choice.candidates[0], residue }) ?? undefined;
+  logResidue(residue, gap, { hand, line: borrowed?.line ?? line, chartId: resolved.id, rawActions: cell ? rawActions : null, heroClass, fallback: !!retry.noGate });
+  const routeBy = routingReasons(gap);
+  if (gap && routeBy.length && !retry.noGate) {
     return { ok: false, street: "preflop", gametype: resolved.id, depth: choice.depth, line: line || "(root)",
-      reason: `GAP GATE: ${gapText(gap.gate.reasons)} — past the bound the chart is trusted to, so the exact tree answers`,
+      reason: `${gateRuleText(routeBy)} — past the bound the chart is trusted to, so the exact tree answers`,
       treeGap: { ...gap, routed: { chartMix: rawActions, ai: "answered" } } };
   }
   // NEVER ROLL INTO A BRANCH HRC NEVER WROTE (services/prunedPicks, 2026-09-25): an action whose child node is
@@ -4216,8 +4331,10 @@ async function warmGapGate(hand: ParsedHand, heroPos: string | null, key: string
   const heroActed = hand.actions.some((a) => a.hero && a.street === "preflop" && !/^post/.test(a.type));
   const asked = heroActed || hand.currentNode.toActIsHero ? hand : { ...hand, currentNode: { ...hand.currentNode, toActIsHero: true } };
   const tokens = buildPreflopTokens(asked, heroPos);
-  // the gate needs a raise in the line (and to be live); the fit rule needs a call in it
-  const gateCan = gapGateMode() === "live" && tokens.some((t) => /^R/i.test(String(t)));
+  // the gate needs a raise in the line (and to be live — the gap gate's own mode, or the residue gate's); the fit rule
+  // needs a call in it
+  const residueLive = residueGateMode() === "live";
+  const gateCan = (gapGateMode() === "live" || residueLive) && tokens.some((t) => /^R/i.test(String(t)));
   if (!gateCan && !tokens.includes("C")) return;
   const k = `${key}|${tokens.join("-")}`;
   if (gateWarmed.has(k)) return;
@@ -4227,7 +4344,8 @@ async function warmGapGate(hand: ParsedHand, heroPos: string | null, key: string
   const resolved = await resolveChart6max(choice);
   if (!resolved || resolved === "unreachable") return;
   const heroSeat = hand.positions[hand.heroSeatId] ?? heroPos ?? null;
-  const walk = await walkFitted(tokens, nodeGetter(resolved.id), { heroSeat, stack: choice.depth });
+  const get = memoNodes(nodeGetter(resolved.id));
+  const walk = await walkFitted(tokens, get, { heroSeat, stack: choice.depth });
   if (!walk.ok) return;
   const emptied = emptiedGroups(tokens, walk.folds.map((f) => f.seat), { heroSeat, stack: choice.depth });
   if (emptied.length) {
@@ -4236,10 +4354,22 @@ async function warmGapGate(hand: ParsedHand, heroPos: string | null, key: string
     return;
   }
   if (!gateCan) return;
+  // THE RESIDUE GATE (live only): the same verdict hero's decision will get, from the walk's nodes — hero's chart cell
+  // at the node he will face decides the Fold exemption
+  let residue: ResidueVerdict | null = null;
+  if (residueLive) {
+    const cls = heroClassOf(hand);
+    const mix = cls ? walk.node.cells.find((c) => c.hand === cls)?.actions : undefined;
+    residue = await residueOfDecision({ get, line: walk.tokens.join("-"), heroPos: heroSeat, chartId: resolved.id,
+      rawActions: mix ? Object.entries(mix).map(([action, frequency]) => ({ action, frequency })) : null,
+      prevPin: preflopPinFor(asked), tokens, hand: asked, heroClass: cls });
+  }
   const gap = treeGap6({ chartId: resolved.id, byPos: dealtByPos(hand, heroPos), hero: heroSeat, ...replayTokens6(tokens),
-    repaired: walk.repaired, fitted: walk.fittedLine ?? tokens, rawTokens: tokens });
-  if (!gap?.gate.route) return;
-  console.log(`[gap-gate] hand ${key}: ${gapText(gap.gate.reasons)} — pre-building the exact tree`);
+    repaired: walk.repaired, fitted: walk.fittedLine ?? tokens, rawTokens: tokens, residue });
+  if (residue) logResidue(residue, gap ?? undefined, { hand: asked, line: walk.tokens.join("-"), chartId: resolved.id, rawActions: null, heroClass: heroClassOf(hand) });
+  const routeBy = routingReasons(gap);
+  if (!routeBy.length) return;
+  console.log(`[${residueRouted(gap) ? "residue-gate" : "gap-gate"}] hand ${key}: ${gateRuleText(routeBy)} — pre-building the exact tree`);
   warmPreflopGtowAi(hand, heroPos);
 }
 /** Tests: forget which lines were checked. */
@@ -4626,7 +4756,7 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
     why = six && !six.ok ? six.reason : "6-max charts unreachable (chart server :8777 down or the state's tree missing)";
     if (six && !six.ok && six.treeGap?.gate.route) gated = six.treeGap;
     if (six && !six.ok && six.fitEmpties) emptied = six.fitEmpties;
-    pf = six ? { piece: "gtow-ai-preflop", how: "by-design", code: gated ? "preflop:gap-gate" : emptied ? "preflop:fit-empties" : "preflop:charts-cannot-hold", why: why.slice(0, 200) }
+    pf = six ? { piece: "gtow-ai-preflop", how: "by-design", code: gated ? (residueRouted(gated) ? "preflop:residue-gate" : "preflop:gap-gate") : emptied ? "preflop:fit-empties" : "preflop:charts-cannot-hold", why: why.slice(0, 200) }
       : { piece: "gtow-ai-preflop", how: "rebuilt", code: "preflop:charts-unreachable", why: "the 6-max charts did not answer (chart server :8777 down or the tree missing) — a GTO Wizard AI preflop tree answered" };
   } else {
     // THE 3-MAX CORPUS IS CUT FROM THIS STRATEGY (Brady, 2026-09-19). It was wired in earlier the same day
@@ -4657,15 +4787,17 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
   // (a fold on the clock, whatever hero holds): the chart's fitted answer is served, flagged, under the path code
   // preflop:fit-empties-ai-failed, with the reason and the seconds on fitEmpties and a [fit-empties] line in api.log.
   let ai: AiPreflopOutcome;
+  /** THE RESIDUE GATE routed this decision (services/residueGate): the mark its pin gets, whichever piece answers */
+  const residueMark = gated && residueRouted(gated) ? residueMarkOf(gated, hand, heroPos) : null;
   if (gated || emptied) {
     const t0 = Date.now();
-    const tag = gated ? "gap-gate" : "fit-empties";
-    const rule = gated ? `GAP GATE: ${gapText(gated.gate.reasons)}`
+    const tag = gated ? (residueMark ? "residue-gate" : "gap-gate") : "fit-empties";
+    const rule = gated ? gateRuleText(routingReasons(gated))
       : `LINE NOT HELD: the chart has no branch for ${emptied!.groups.map(groupText).join(" and ")}`;
     let gaveUp = false;
     tstep("Asking GTO Wizard for the exact tree (the chart is the backup)", { limitMs: gapGateAiMs() });
     // check #3 for the exact line (the fit rule only): how often the tree's own villain takes the action the chart lacks
-    const asked = solvePreflopGtowAi(hand, heroPos, why, { skipPin: () => gaveUp, ...(emptied ? { villainLines: true } : {}) })
+    const asked = solvePreflopGtowAi(hand, heroPos, why, { skipPin: () => gaveUp, ...(emptied || residueMark ? { villainLines: true } : {}) })
       .catch((e): AiPreflopOutcome => ({ ok: false, reason: `GTO Wizard AI preflop threw: ${e instanceof Error ? e.message : e}` }));
     const first = await Promise.race([asked, new Promise<"timeout">((r) => setTimeout(() => r("timeout"), gapGateAiMs()))]);
     if (first === "timeout" || !first.ok) {
@@ -4677,11 +4809,25 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
       const chart = await solvePreflop6max(hand, heroPos, opts.origin, opts.strategyId, { noGate: true, allowEmptied: true });
       console.log(`[${tag}] AI FAILED TO ANSWER (${how}, ${((Date.now() - t0) / 1000).toFixed(1)} s) hand ${hand.clientHandId ?? hand.handId ?? "?"}: ${aiWhy} — ${rule}`);
       if (chart && chart.ok) {
+        // THE FALLBACK CHART IS THE FINAL ANSWER SOURCE (Brady 2026-10-13): when the gap gate (or the fit rule) routed and the
+        // exact tree failed, the residue rule judges the chart that answers instead — it cannot route again, it MARKS:
+        // the gap gate's own code stays the primary (its counts stay honest), preflop:residue-gate-ai-failed rides beside
+        // it as a FAILED reason (unsafe, held), and the pin is marked so the flop's residue handling applies
+        const fbRes = !residueMark && chart.treeGap?.residue?.mode === "live" && chart.treeGap.residue.fire ? chart.treeGap.residue : null;
+        const fbMark = fbRes && chart.treeGap ? residueMarkOf(chart.treeGap, hand, heroPos) : null;
+        const fbText = fbMark && fbRes ? `RESIDUE GATE: on the chart that answers instead, ${fbRes.hits[0] ? residueHitText(fbRes.hits[0]) : `an earlier decision of this hand was routed (the ${fbMark.seat}'s ${fbMark.code})`}` : null;
         const failNote = `${rule} — THE EXACT TREE FAILED TO ANSWER (${aiWhy}), so the chart answers` +
-          (emptied ? ` WITH THAT PLAYER FOLDED OUT OF THE LINE: hero is read as if he had folded` : "");
+          (emptied ? ` WITH THAT PLAYER FOLDED OUT OF THE LINE: hero is read as if he had folded` : "") +
+          (residueMark ? `, read at the leftover size (the villain's range behind it is a sliver of his real one)` : "");
+        // the residue gate's failure is a FAILED answer (the chart node it replaces is a sliver), held by the unsafe guard
+        // (services/unsafeAnswer); its pin is marked so the flop does not silently walk the leftover node either
+        if (residueMark) markPreflopResidue(hand, { ...residueMark, aiFailed: true });
+        if (fbMark) markPreflopResidue(hand, { ...fbMark, aiFailed: true });
+        const fbReason: PathReason[] = fbText ? [{ v: "failed", code: "preflop:residue-gate-ai-failed", text: `${fbText} — the exact tree failed, so hero is answered behind the leftover size`.slice(0, 300) }] : [];
         return { ...chart, approx: true,
-          warning: [failNote, chart.warning].filter(Boolean).join(" · "),
-          path: classifyPath({ street: "preflop", streets: [], preflop: { piece: "hrc-6max-preflop", how: "rebuilt", code: `preflop:${tag}-ai-failed`, why: failNote.slice(0, 240) } }),
+          warning: [failNote, fbText, chart.warning].filter(Boolean).join(" · "),
+          path: classifyPath({ street: "preflop", streets: [], preflop: { piece: "hrc-6max-preflop", how: residueMark ? "failed" : "rebuilt", code: `preflop:${tag}-ai-failed`, why: failNote.slice(0, 240) },
+            ...(fbReason.length ? { preflopAlso: fbReason } : {}) }),
           ...(gated ? { treeGap: { ...gated, routed: { ...gated.routed!, ai: how, aiWhy, aiMs: Date.now() - t0 } } } : {}),
           ...(emptied ? { fitEmpties: { ...(chart.fitEmpties ?? emptied), ai: how, aiWhy, aiMs: Date.now() - t0 } } : {}) };
       }
@@ -4692,7 +4838,7 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
       // the box ran out), which left the hand with no record of its tree — the hand page said "no record", and the flop
       // resumed from an older pin or none. Read again (every node is cached by now) without the skip, so it pins.
       if (first === "timeout" && ai.ok) {
-        const again = await solvePreflopGtowAi(hand, heroPos, why, emptied ? { villainLines: true } : {})
+        const again = await solvePreflopGtowAi(hand, heroPos, why, emptied || residueMark ? { villainLines: true } : {})
           .catch((e): AiPreflopOutcome => ({ ok: false, reason: `GTO Wizard AI preflop threw: ${e instanceof Error ? e.message : e}` }));
         if (again.ok) ai = again;
         else console.log(`[${tag}] the late AI answer could not be pinned (${again.reason.slice(0, 160)}) — served unpinned`);
@@ -4721,7 +4867,18 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
     ...(gated ? { treeGap: gated } : {}),
     ...(emptied ? { fitEmpties: emptied } : {}),
   });
-  if (ai.ok) return asResult(ai, ai.shape.deadSb);
+  if (ai.ok) {
+    // the exact tree answered a residue-routed decision: its pin carries the mark, so the hand's later decisions follow it
+    if (residueMark && !markPreflopResidue(hand, residueMark)) console.log(`[residue-gate] hand ${hand.clientHandId ?? hand.handId ?? "?"}: the exact tree's answer left no pin to mark (late answer) — later decisions are checked afresh`);
+    const res = asResult(ai, ai.shape.deadSb);
+    const aiRes = residueMark && res.ok ? aiResidueOf(residueMark, ai.villainLines, ai.shape.apiOf) : null;
+    if (aiRes && res.ok) {
+      const text = `RESIDUE GATE: GTO Wizard's own tree also barely takes the trigger — the ${aiRes.seat}'s ${aiRes.code} at "${aiRes.line || "root"}" is ${(100 * aiRes.nodeFreq).toFixed(2)}% of his range there (his range behind it is a sliver in the exact tree too)`;
+      console.log(`[residue-gate] hand ${hand.clientHandId ?? hand.handId ?? "?"}: ${text}`);
+      return withPreflopAlso({ ...res, warning: [res.warning, text].filter(Boolean).join(" · ") }, { v: "failed", code: "preflop:residue-gate-ai-residue", text: text.slice(0, 300) });
+    }
+    return res;
+  }
   tstepEnd("failed", /did not return the node in time/.test(ai.reason) ? "GTO Wizard didn't return the answer in time" : "GTO Wizard AI couldn't answer this spot");
   // HERO OFF HIS OWN TREE (2026-10-07, gtowAiPreflop's self-lock): his hand reads 0 at his node because of an earlier
   // action of his own the tree never takes with it, and the lock that would put it back failed, timed out or is off.
@@ -4756,7 +4913,8 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
 function chartMissWords(six: FastSolveResult | null): string {
   if (!six) return "HRC chart server didn't answer";
   const r = six.ok ? "" : String(six.reason ?? "");
-  const why = /GAP GATE/.test(r) ? "bet sizes or stacks too far from the chart's"
+  const why = /RESIDUE GATE/.test(r) ? "a bet size the chart's player barely uses (a leftover of the chart)"
+    : /GAP GATE/.test(r) ? "bet sizes or stacks too far from the chart's"
     : /LINE NOT HELD/.test(r) ? "line not held (a limper or caller the chart has no branch for)"
     : /all-in not in the chart/.test(r) ? "that all-in isn't in the chart"
     : /size past τ/.test(r) ? "that bet size is too far from the chart's"
@@ -4768,8 +4926,6 @@ function chartMissWords(six: FastSolveResult | null): string {
   return `HRC chart doesn't cover this spot — ${why}`;
 }
 
-/** combos a hand class stands for (AA 6, AKs 4, AKo 12) */
-const classCombos = (cls: string): number => (cls.length === 2 ? 6 : cls.endsWith("s") ? 4 : 12);
 /** how long a chart answer waits for its villain lines (the nodes are the walk's own, baked locally: milliseconds) */
 const CHART_LINES_MS = 3_000;
 /**
@@ -4786,35 +4942,11 @@ export async function chartVillainLines(chart: string, line: string | null | und
 /** chartVillainLines over any node getter (tests hand theirs) */
 export async function scoreChartLine(get: (line: string) => Promise<HrcNode | null | "unreachable">, line: string | null | undefined,
     heroPos: string | null): Promise<{ lines: PreflopVillainLine[] } | { na: string }> {
-  const tokens = (line ?? "").split("-").filter(Boolean);
-  if (!tokens.length) return { lines: [] };
-  const hero = (heroPos ?? "").toUpperCase();
-  const weights = new Map<string, Map<string, number>>();
-  const out: PreflopVillainLine[] = [];
-  for (let k = 0; k < tokens.length; k++) {
-    const at = tokens.slice(0, k).join("-");
-    const n = await get(at);
-    if (!n || n === "unreachable") return { na: `the chart's node '${at || "root"}' could not be read to score the villain lines` };
-    if (n.terminal) break;
-    const actor = (n.pos ?? "").toUpperCase();
-    const act = n.actions.find((a) => a.token === tokens[k]);
-    if (!act) return { na: `the chart's node '${at || "root"}' has no '${tokens[k]}' to score` };
-    const w = weights.get(actor);
-    let tot = 0, took = 0, maxHand = 0;
-    const next = new Map<string, number>();
-    for (const c of n.cells) {
-      const wc = w ? w.get(c.hand) ?? 0 : 1;
-      const f = (c.actions[act.action] ?? 0) / 100;
-      next.set(c.hand, wc * f);
-      if (!(wc > 0)) continue;
-      const comb = classCombos(c.hand) * wc;
-      tot += comb; took += comb * f;
-      if (f > maxHand) maxHand = f;
-    }
-    if (actor && actor !== hero && tokens[k] !== "F") out.push({ seat: actor, code: tokens[k]!, line: at, nodeFreq: tot > 0 ? took / tot : 0, maxHand, offTree: false });
-    weights.set(actor, next);
-  }
-  return { lines: out };
+  // ONE SCORER (2026-10-13): the residue gate reads the same walk with every action kept (services/residueGate)
+  const all = await chartLineShares(get, line, heroPos);
+  if ("na" in all) return all;
+  return { lines: all.lines.filter((l) => l.seat && !l.hero && l.code !== "F")
+    .map((l) => ({ seat: l.seat, code: l.code, line: l.line, nodeFreq: l.nodeFreq, maxHand: l.maxHand, offTree: false })) };
 }
 /** A chart answer with its check #3 inputs (villainLines, or villainLinesNa with the reason) — never slower than CHART_LINES_MS. */
 async function withChartVillainLines(r: FastSolveResult, heroPos: string | null): Promise<FastSolveResult> {
