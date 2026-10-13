@@ -10,10 +10,10 @@
  * BUDGET (Brady's rules): GTO Wizard's per-account cap is counted in the main checkout's ledger, which this script
  * only READS; before every live decision it counts the Ultra account's solutions since 00:00 UTC there plus this
  * process's own, and stops once fewer than --reserve (default 450) would be left of the 1,275 cap. Run with
- * GTOW_SECONDARY=0 (never the Elite account), GTOW_RESERVE=450 and GTOW_REQUEST_ORIGIN=harness; paced (--pace-ms,
+ * GTOW_RESERVE=450 and GTOW_REQUEST_ORIGIN=harness; paced (--pace-ms,
  * default 3000 between live decisions); a 429 stops the run (never retried).
  *
- *   GTOW_SECONDARY=0 GTOW_RESERVE=450 GTOW_REQUEST_ORIGIN=harness HRC6MAX_DB=… ANSWERS_DB_PATH=:memory: \
+ *   GTOW_RESERVE=450 GTOW_REQUEST_ORIGIN=harness HRC6MAX_DB=… ANSWERS_DB_PATH=:memory: \
  *     bun src/scripts/mutation/liveVerify.ts --cases=2:late-fold,111:limps [--live-preflop] [--max-solutions=60]
  */
 import { readFileSync, existsSync } from "node:fs";
@@ -33,7 +33,6 @@ const maxOwn = Number(arg("max-solutions", "60"));
 const CAP = 1275;
 const STRATEGY = "ign200-ring-6max-equilibrium";
 
-if (process.env.GTOW_SECONDARY !== "0") { console.error("refusing to run: set GTOW_SECONDARY=0 (the Elite account is never used)"); process.exit(2); }
 if (!cases.length) { console.error("usage: liveVerify.ts --cases=<seed:op+op,...>"); process.exit(2); }
 
 /** Ultra solutions since 00:00 UTC. ONE ledger since 2026-09-25 (the central gtow_requests table): the live API and

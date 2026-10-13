@@ -3,11 +3,11 @@
  * and make me connect them first").
  *
  * The REGISTRY is a JSON file in the data root (<root>/gtow-accounts.json). The session pool (gtowSessions.ts) is
- * built from it, so adding a third account is a row here, not a code change. The two accounts that existed before
- * the registry keep their old slot ids — "primary" (Ultra) and "secondary" (Elite 1) — because the request ledger,
- * every stored solve's owner and the dashboard's routes already speak those ids; new accounts get a slug of their
- * name ("elite-2"). The env vars that used to configure the pool (GTOW_CDP_HOST, GTOW_CDP_HOST_SECONDARY,
- * GTOW_PREFER, GTOW_SECONDARY, …) are read ONCE, to seed the file when it does not exist; after that the file rules.
+ * built from it, so adding a third account is a row here, not a code change. The account that existed before
+ * the registry keeps its old slot id — "primary" (Ultra) — because the request ledger, every stored solve's owner and the
+ * dashboard's routes already speak it (a retired "secondary" slot still owns its old rows there); new accounts get a
+ * slug of their name ("ultra-2"). The env vars that used to configure the pool (GTOW_CDP_HOST, GTOW_PRIMARY, …) are
+ * read ONCE, to seed the file when it does not exist; after that the file rules.
  *
  * What the page shows per account, and where it comes from:
  *   - name / tier / capability / CDP port / enabled …          this file
@@ -23,7 +23,7 @@
  * time (two more requests, once).
  */
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, join } from "node:path";
 import { underTest } from "../../../../packages/data-root/dataRoot";
 import { gtowAccountsPath } from "./storePaths";
 import { livePort, port } from "./ports";
@@ -43,17 +43,13 @@ export interface GtowAccountEntry {
   /** what brings the client up (a .ps1 under scripts/, or "" for the primary's built-in launcher) */
   launchHint: string;
   /**
-   * HOW THE CLIENT IS RUN (2026-09-29, a dynamic number of accounts): the watchdog and the Connect button share one
-   * rule, `launchPlan` below —
-   *   chrome    app.gtowizard.com in a dedicated Chrome profile (`profileDir`, default %LOCALAPPDATA%\gtow-cdp-profile-<id>;
-   *             the primary keeps the original gtow-cdp-profile), launched with --remote-debugging-port=<cdpHost's port>.
-   *             Any number of these can run side by side: one profile folder + one port each.
-   *   electron  a desktop build (`exe`), launched with the same flag. One per INSTALL: GTO Wizard's desktop app is a
-   *             single-instance program, so a second electron account needs its own build ("Secondary GTO Wizard").
-   * A `launchHint` .ps1 that exists under scripts/ still wins over both (the secondary's start_gtow_secondary.ps1).
+   * HOW THE CLIENT IS RUN: app.gtowizard.com in a dedicated Chrome profile (`profileDir`, default
+   * %LOCALAPPDATA%\gtow-cdp-profile-<id>; the primary keeps the original gtow-cdp-profile), launched with
+   * --remote-debugging-port=<cdpHost's port>. Any number of these can run side by side: one profile folder + one port
+   * each. (There used to be an `electron` client for the GTO Wizard desktop app; it was removed 2026-10-13 and a stored
+   * row that still says so reads as `chrome`.) A `launchHint` .ps1 that exists under scripts/ still wins.
    */
-  client: "chrome" | "electron";
-  exe: string | null;
+  client: "chrome";
   profileDir: string | null;
   /** a disabled account takes no work but keeps its token warm (Brady, 2026-09-27) */
   enabled: boolean;
@@ -75,50 +71,18 @@ export interface GtowAccountsFile { version: 1; accounts: GtowAccountEntry[] }
 const envBool = (v: string | undefined, dflt: boolean): boolean =>
   v == null || v.trim() === "" ? dflt : !/^(0|no|false|off)$/i.test(v.trim());
 
-/**
- * Where GTO Wizard's desktop app installs (the official "GTO Wizard Setup x.y.z.exe": per user, under the profile —
- * measured 1.0.9 on 2026-09-29 — older builds under Program Files). The first that exists is the primary's client
- * when the registry is seeded, so an install that put the app on first uses it; GTOW_CLIENT_PATH pins a build,
- * GTOW_CLIENT=chrome says "the Chrome window even though the app is installed".
- */
-export const desktopAppCandidates = (env: NodeJS.ProcessEnv = process.env): string[] => [
-  join(env.USERPROFILE ?? "", "GTO Wizard", "GTO Wizard.exe"),
-  join(env.LOCALAPPDATA ?? "", "Programs", "GTO Wizard", "GTO Wizard.exe"),
-  "C:\\Program Files\\GTO Wizard\\GTO Wizard.exe",
-  "C:\\Program Files\\Chinese GTO Wizard\\Chinese GTO Wizard.exe",
-];
-export function desktopAppPath(env: NodeJS.ProcessEnv = process.env, exists: (p: string) => boolean = existsSync): string | null {
-  if (/^chrome$/i.test(env.GTOW_CLIENT ?? "")) return null;
-  const pinned = env.GTOW_CLIENT_PATH?.trim();
-  if (pinned) return pinned;
-  // absolute only: with USERPROFILE unset the first candidate is the relative "GTO Wizard\GTO Wizard.exe"
-  return desktopAppCandidates(env).find((p) => isAbsolute(p) && exists(p)) ?? null;
-}
-
-/** The two accounts the pool had before the registry, named as Brady named them (2026-09-27). */
-export function defaultAccounts(env: NodeJS.ProcessEnv = process.env, exists: (p: string) => boolean = existsSync): GtowAccountEntry[] {
-  const preferPrimary = /^primary$/i.test(env.GTOW_PREFER ?? "");
-  const app = desktopAppPath(env, exists);
+/** The account the pool had before the registry, named as Brady named it (2026-09-27). */
+export function defaultAccounts(env: NodeJS.ProcessEnv = process.env): GtowAccountEntry[] {
   return [
-    {
-      id: "secondary", name: "Elite 1", tier: "elite",
-      multiway: envBool(env.GTOW_SECONDARY_MULTIWAY, false),
-      cdpHost: env.GTOW_CDP_HOST_SECONDARY ?? `127.0.0.1:${port("gtowSecondary", env)}`,
-      launchHint: "scripts/start_gtow_secondary.ps1",
-      client: "electron", exe: env.GTOW_SECONDARY_PATH?.trim() || null, profileDir: null,
-      enabled: envBool(env.GTOW_SECONDARY, true),
-      order: preferPrimary ? 2 : 1, preflopOrder: 2,
-      priceMonthly: null, notes: "", probeSolId: null, accountEmail: null, accountId: null,
-    },
     {
       id: "primary", name: "Ultra", tier: "ultra",
       multiway: envBool(env.GTOW_PRIMARY_MULTIWAY, true),
       cdpHost: env.GTOW_CDP_HOST ?? `127.0.0.1:${port("gtow", env)}`,
       launchHint: "scripts/start_gtow_chrome.ps1",
-      client: app ? "electron" : "chrome", exe: app,
+      client: "chrome",
       profileDir: env.GTOW_CHROME_PROFILE?.trim() || null,
       enabled: envBool(env.GTOW_PRIMARY, true),
-      order: preferPrimary ? 1 : 2, preflopOrder: 1,
+      order: 1, preflopOrder: 1,
       priceMonthly: null, notes: "", probeSolId: null, accountEmail: null, accountId: null,
     },
   ];
@@ -139,12 +103,11 @@ export function cdpHostTakenBy(cdpHost: string, exceptId: string, accounts: Gtow
 
 export interface LaunchPlan {
   port: number;
-  /** "script": run this .ps1 (repo-relative) with -Force; "electron": start `exe`; "chrome": start_gtow_chrome.ps1 */
-  kind: "script" | "electron" | "chrome";
+  /** "script": run this .ps1 (repo-relative) with -Force; "chrome": start_gtow_chrome.ps1 */
+  kind: "script" | "chrome";
   script: string | null;
-  exe: string | null;
   profileDir: string;
-  /** what the launcher reads: the port for both scripts, the profile for the chrome one */
+  /** what the launcher reads: the port and the profile */
   env: Record<string, string>;
 }
 
@@ -153,24 +116,23 @@ export function launchPlan(a: GtowAccountEntry, repo: string, localAppData = pro
   const port = cdpPort(a.cdpHost) ?? livePort("gtow");
   const profileDir = a.profileDir?.trim() || join(localAppData, a.id === "primary" ? "gtow-cdp-profile" : `gtow-cdp-profile-${a.id}`);
   const script = /\.ps1$/i.test(a.launchHint) && existsSync(join(repo, a.launchHint)) ? a.launchHint : null;
-  const kind: LaunchPlan["kind"] = script ? "script" : a.client === "electron" && a.exe ? "electron" : "chrome";
+  const kind: LaunchPlan["kind"] = script ? "script" : "chrome";
   return {
-    port, kind, script, exe: a.exe, profileDir,
-    env: { GTOW_CDP_PORT: String(port), GTOW_SECONDARY_CDP_PORT: String(port), GTOW_CHROME_PROFILE: profileDir,
-           ...(a.exe ? { GTOW_CLIENT_PATH: a.exe, GTOW_SECONDARY_PATH: a.exe } : {}) },
+    port, kind, script, profileDir,
+    env: { GTOW_CDP_PORT: String(port), GTOW_CHROME_PROFILE: profileDir },
   };
 }
 
-const FIELDS: (keyof GtowAccountEntry)[] = ["id", "name", "tier", "multiway", "cdpHost", "launchHint", "client", "exe", "profileDir", "enabled", "order", "preflopOrder", "priceMonthly", "notes", "probeSolId", "accountEmail", "accountId"];
+const FIELDS: (keyof GtowAccountEntry)[] = ["id", "name", "tier", "multiway", "cdpHost", "launchHint", "client", "profileDir", "enabled", "order", "preflopOrder", "priceMonthly", "notes", "probeSolId", "accountEmail", "accountId"];
 
 function normalize(raw: any, fallback?: GtowAccountEntry): GtowAccountEntry | null {
   const id = String(raw?.id ?? fallback?.id ?? "").trim();
   if (!id) return null;
-  // a row from before a field existed reads as its SEEDED self (the secondary: a desktop build); a NEW row is a Chrome
-  // profile of its own (launchPlan names it), no launcher script, no desktop build
+  // a row from before a field existed reads as its SEEDED self; a NEW row is a Chrome profile of its own
+  // (launchPlan names it), no launcher script
   const seeded = defaultAccounts().find((d) => d.id === id);
-  const f = fallback ?? seeded ?? { ...defaultAccounts()[1]!, id, name: id, tier: "other" as GtowTier, multiway: false, cdpHost: "", launchHint: "",
-                                    client: "chrome" as const, exe: null, profileDir: null, order: 9, preflopOrder: 9 };
+  const f = fallback ?? seeded ?? { ...defaultAccounts()[0]!, id, name: id, tier: "other" as GtowTier, multiway: false, cdpHost: "", launchHint: "",
+                                    client: "chrome" as const, profileDir: null, order: 9, preflopOrder: 9 };
   const tier = ["ultra", "elite", "other"].includes(raw?.tier) ? raw.tier : f.tier;
   const num = (v: unknown, d: number) => (typeof v === "number" && Number.isFinite(v) ? v : d);
   const price = raw?.priceMonthly == null || raw?.priceMonthly === "" ? (raw?.priceMonthly === "" ? null : f.priceMonthly) : Number(raw.priceMonthly);
@@ -181,8 +143,7 @@ function normalize(raw: any, fallback?: GtowAccountEntry): GtowAccountEntry | nu
     multiway: typeof raw?.multiway === "boolean" ? raw.multiway : f.multiway,
     cdpHost: String(raw?.cdpHost ?? f.cdpHost).trim(),
     launchHint: String(raw?.launchHint ?? f.launchHint).trim(),
-    client: raw?.client === "electron" || raw?.client === "chrome" ? raw.client : (f.client ?? "chrome"),
-    exe: raw?.exe == null ? (f.exe ?? null) : String(raw.exe).trim() || null,
+    client: "chrome",
     profileDir: raw?.profileDir == null ? (f.profileDir ?? null) : String(raw.profileDir).trim() || null,
     enabled: typeof raw?.enabled === "boolean" ? raw.enabled : f.enabled,
     order: num(raw?.order, f.order),
@@ -201,7 +162,9 @@ export function loadAccounts(): GtowAccountsFile {
   if (existsSync(path)) {
     try {
       const j = JSON.parse(readFileSync(path, "utf8"));
-      const accounts = (Array.isArray(j?.accounts) ? j.accounts : []).map((a: any) => normalize(a)).filter(Boolean) as GtowAccountEntry[];
+      // a stored row for the removed desktop-app client ("electron") is dropped, not read as a Chrome profile on its port
+      const accounts = (Array.isArray(j?.accounts) ? j.accounts : []).filter((a: any) => a?.client !== "electron")
+        .map((a: any) => normalize(a)).filter(Boolean) as GtowAccountEntry[];
       if (accounts.length) return { version: 1, accounts };
     } catch { /* a torn write: fall through to the defaults, which the next save replaces */ }
   }

@@ -10,11 +10,12 @@
  *    daily browsing/solve limit we keep running into, which is the whole
  *    reason a second account exists.
  *
- *  - SECONDARY is the Elite account in the "Secondary GTO Wizard" desktop
- *    build (CDP 9223). Elite includes GTO Wizard AI but HEADS-UP ONLY: hand it
- *    a 3-player tree and the API refuses it. Its quota is separate from the
- *    primary's, so every heads-up solve it absorbs is one the primary does not
- *    spend.
+ *  - SECONDARY is an Elite account (its own Chrome profile and CDP port). Elite
+ *    includes GTO Wizard AI but HEADS-UP ONLY: hand it a 3-player tree and the
+ *    API refuses it. Its quota is separate from the primary's, so every
+ *    heads-up solve it absorbs is one the primary does not spend. (The pool has
+ *    had no Elite account since the desktop-app one was dropped 2026-10-13;
+ *    the routing below is unchanged and applies whenever one is added.)
  *
  * Hence the routing rule Brady asked for (2026-09-21):
  *
@@ -63,8 +64,8 @@ const SNIFF_PASSIVE_MS = 3_500;
  *  transient, not a wall. */
 const SOFT_BLOCK_MS = 60_000;
 
-/** A slot id from the account registry (services/gtowAccounts.ts): "primary" (Ultra) and "secondary" (Elite 1) for
- *  the two accounts that predate it, a slug of the name for any added later. A string, so a third account is a
+/** A slot id from the account registry (services/gtowAccounts.ts): "primary" (Ultra) and "secondary" (Elite 1, retired
+ *  2026-10-13 — its old ledger rows keep the id) for the accounts that predate it, a slug of the name for any added later. A string, so a third account is a
  *  registry row and not a code change. */
 export type GtowSessionId = string;
 

@@ -22,7 +22,7 @@ describe.skipIf(!win)("supervisor_lib.ps1 (PowerShell, dry run)", () => {
     writeFileSync(join(root, "fake-supervisor.ps1"), "# a stand-in supervisor script\r\n");
     // the environment a scheduled task hands over: none of the values the run checks
     const env: Record<string, string> = {};
-    const drop = /^(PORT|PORT_OFFSET|HRC_UI_PORT|PANEL_PORT|GTOW_CDP_PORT|GTOW_SECONDARY_CDP_PORT|CDP_PORT|GTOW_POLL_MS|POKER_ROOT|POKER_SUPERVISOR|STUDY_API_SUPERVISOR|POKER_SUPERVISOR_REPLACED|AUTO_RESTART)$/i;
+    const drop = /^(PORT|PORT_OFFSET|HRC_UI_PORT|PANEL_PORT|GTOW_CDP_PORT|CDP_PORT|GTOW_POLL_MS|POKER_ROOT|POKER_SUPERVISOR|STUDY_API_SUPERVISOR|POKER_SUPERVISOR_REPLACED|AUTO_RESTART)$/i;
     for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !drop.test(k)) env[k] = v;
     env.USERNAME = "supervisor-lib-test";
     const r = Bun.spawnSync(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",

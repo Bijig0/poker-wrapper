@@ -67,7 +67,7 @@ const CODE_TREES = [
   "setup",                                      // install / update / repair / uninstall (minus the owner's tools below)
   ".claude/study-api.ps1", ".claude/chart-server.ps1",          // the API and chart-server supervisors
   // the GTO Wizard window, its watchdog, and the second account's window (the API's GTO Wizard page can start it)
-  "scripts/start_gtow_chrome.ps1", "scripts/gtow_watchdog.ps1", "scripts/start_gtow_secondary.ps1",
+  "scripts/start_gtow_chrome.ps1", "scripts/gtow_watchdog.ps1",
   "scripts/supervisor_lib.ps1", "scripts/supervisor_replace.ps1",  // every supervisor: config re-read + self-replace
 ];
 // state and tooling that git tracks (or leaves untracked) but a player's install must not carry
