@@ -14,6 +14,7 @@ import { SIX_MAX_STRATEGY_ID, isOnDemandStrategy } from "./strategies";
 import { apiUrl } from "./ports";
 import { withPressNote, type PressEntry } from "./allInPress";
 import { seatStatsJson } from "./seatStats";
+import { unsafeReasons, unsafeHoldOn } from "./unsafeAnswer";
 
 /** What the panel shows about the chain: this answer's verdict and the session's clean count. */
 export interface ChainBanner {
@@ -845,6 +846,14 @@ class StudyPoller {
       pathVerdict: chainPath?.verdict ?? null,
       path: chainPath ? JSON.stringify(chainPath) : null,
     });
+    // AN UNSAFE ANSWER (services/unsafeAnswer, 2026-10-13): wrong for the spot by its own path — shown red, and held by
+    // auto-execute while UNSAFE_HOLD is on. One [unsafe] line per decision in api.log (the register's diagnostic).
+    const unsafe = unsafeReasons(chainPath);
+    if (unsafe.length && this.unsafeLogged !== key) {
+      this.unsafeLogged = key;
+      console.log(`[unsafe] hand ${full.hand?.clientHandId ?? "?"} ${full.hand?.street ?? "?"} ${(full.hero?.cards ?? []).join("")} pick ${rolled.pick}` +
+        `${unsafeHoldOn() ? " (held)" : ""}: ${unsafe.join(" | ")}`);
+    }
     // The solve's own caveat (snapped sizes, generic ranges, …) rides along
     // so the panel can show HOW MUCH to trust this verdict.
     // Provenance rides along with the pick so a recording can say not just
@@ -872,6 +881,7 @@ class StudyPoller {
       chain: this.chainBanner(chainPath, full.sessionId ?? null),
       // how the wrapper presses an ALLIN of this mix when it is not the shove (relay.ts pickReady)
       ...(sol.press?.length ? { press: sol.press } : {}),
+      ...(unsafe.length ? { unsafe: { reasons: unsafe, hold: unsafeHoldOn() } } : {}),
     }, [retryNote, warning, full.hand?.lineUncertain ?? null, full.hand?.lineNote ?? null]
       .filter((s): s is string => !!s).join(" · ") || null);
   }
@@ -1074,7 +1084,8 @@ class StudyPoller {
                        band?: [number, number] | null;
                        strategy?: string | null; source?: string | null; tier?: string | null;
                        chart?: string | null; exploitPick?: string | null; chartPick?: string | null;
-                       uncertain?: string | null; chain?: ChainBanner | null; press?: PressEntry[] } | null = null;
+                       uncertain?: string | null; chain?: ChainBanner | null; press?: PressEntry[];
+                       unsafe?: { reasons: string[]; hold: boolean } } | null = null;
   /** The solve's caveat (snapped sizes, generic ranges) for the current
    *  answer — repeated by the keep-alive alongside it. */
   private lastNote: string | null = null;
@@ -1106,6 +1117,8 @@ class StudyPoller {
   /** decisionKey of the most recent probe — verdicts for any other key are
    *  stale and get dropped instead of pushed. */
   private lastProbeKey: string | null = null;
+  /** the decision the last [unsafe] line was written for (one line per decision, not per keep-alive push) */
+  private unsafeLogged: string | null = null;
   /** the first tick the fast-solver said "not hero's turn" for the current key — see solveSpot */
   private deferredSince: { key: string; at: number } | null = null;
   /** the first tick hero's buttons were up while the export said not-to-act — see tick() */
@@ -1232,7 +1245,10 @@ class StudyPoller {
               band?: [number, number] | null;
               strategy?: string | null; source?: string | null; tier?: string | null;
               chart?: string | null; exploitPick?: string | null; chartPick?: string | null;
-              uncertain?: string | null; chain?: ChainBanner | null; press?: PressEntry[] } | null,
+              uncertain?: string | null; chain?: ChainBanner | null; press?: PressEntry[];
+              /** AN UNSAFE ANSWER (services/unsafeAnswer, 2026-10-13): why it is wrong for the spot, and whether
+               *  auto-execute holds it (UNSAFE_HOLD) — only when there are reasons */
+              unsafe?: { reasons: string[]; hold: boolean } } | null,
     note?: string | null,
   ): Promise<void> {
     this.status.lastAnswer = text;
@@ -1269,6 +1285,8 @@ class StudyPoller {
           chain: this.lastExtra?.chain ?? null,
           // only when the answer carries one: a body without it is byte-identical to before (services/allInPress)
           ...(this.lastExtra?.press?.length ? { press: this.lastExtra.press } : {}),
+          // only when the answer is unsafe: a body without it is byte-identical to before
+          ...(this.lastExtra?.unsafe?.reasons.length ? { unsafe: this.lastExtra.unsafe } : {}),
           note: this.lastNote,
         }),
         signal: AbortSignal.timeout(3000),
