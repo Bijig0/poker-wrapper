@@ -388,9 +388,9 @@ describe("two reads of one solve that overlap", () => {
     expect(took0).toBeLessThan(4_000 + 1_000);
     expect(took1).toBeLessThan(4_000 + 1_000);
     // the first read: primary hung → secondary; secondary hung → polls on. The second starts on the replacement and has
-    // seen only secondary hang, so its re-post goes back onto primary — THE KNOWN LIMIT of a per-read list (the first
-    // read then joins that replacement) — and nothing more: each read is out of accounts it has not hung on
-    expect(trees(f)).toEqual(["primary", "secondary", "primary"]);
+    // seen only secondary hang — a per-read list alone sent its re-post back onto primary (the known limit of 2026-10-13);
+    // the replacement carries the accounts its chain left (avoidOf, the failover review's finding 6), so it polls on too
+    expect(trees(f)).toEqual(["primary", "secondary"]);
   }, T);
 });
 
@@ -697,5 +697,74 @@ describe("a node-lock POST that fails", () => {
     const twice = await P.lockedSolution((parent as { solId: string }).solId, BODY, [{ ...LOCK, action_history: ["F"] }]);
     expect("error" in twice).toBe(true);
     expect((twice as { error: string }).error).toMatch(/failed twice on primary/);
+  }, T);
+});
+
+// ── the 2026-10-13 review of the failover (findings 1-8) ─────────────────────────────────────────────────────────────
+describe("the failover review (2026-10-13)", () => {
+  it("…but a WALL on a later read still moves it back onto an account the chain left on a hang (a wall will not lift)", async () => {
+    const f = fakeGtow();
+    f.hangPolls.set("primary", 1);
+    const made = await P.poolLockSeams.solve("k-chain-wall", BODY, { preflop: true });
+    const old = (made as { solId: string }).solId;
+    expect("error" in await P.fetchNode(old, "")).toBe(false);          // A on primary hung once → B on secondary
+    f.walled.add("secondary");                                            // a later read of B walls
+    const n = await P.fetchNode(old, "F");
+    expect("error" in n).toBe(false);
+    expect(trees(f)).toEqual(["primary", "secondary", "primary"]);
+    expect(failures).toEqual([{ id: "secondary", status: 429 }]);
+  }, T);
+
+  it("a locked chain's re-post gate is two solves (finding 3): with ~7.5 s left and a 4 s cold tree it polls on", async () => {
+    const f = fakeGtow();
+    f.hang.add("primary");
+    process.env.GTOW_NODE_TIMEOUT_MS = "7800";
+    // one lock: 2 × 4 s = 8 s needed, ~7.5 s left after the 0.2 s hang — the old gate (4 s + 3 s a lock = 7 s) re-posted
+    process.env.GTOW_PREFLOP_REPOST_MS = "4000";
+    const parent = await P.poolLockSeams.solve("k-lock-gate", BODY, { preflop: true });
+    const chain = await P.lockedSolution((parent as { solId: string }).solId, BODY, [LOCK]);
+    const n = await P.fetchNode((chain as { solId: string }).solId, "");
+    expect("error" in n).toBe(true);
+    expect(trees(f)).toEqual(["primary"]);
+  }, T);
+
+  it("a re-post never lands back on an account the chain already left", async () => {
+    const f = fakeGtow();
+    f.hang.add("primary");
+    const made = await P.poolLockSeams.solve("k-bounce", BODY, { preflop: true });
+    const old = (made as { solId: string }).solId;
+    expect("error" in await P.fetchNode(old, "")).toBe(false);          // A on primary hung → B on secondary
+    f.hang.add("secondary");                                              // now B's account hangs too
+    const n = await P.fetchNode(old, "F");
+    expect("error" in n).toBe(true);                                      // nobody left: polls on, no answer
+    expect(trees(f)).toEqual(["primary", "secondary"]);                   // never a third tree back on primary
+  }, T);
+
+  it("an answer read on a re-posted solve says so (path reason preflop:solve-reposted)", async () => {
+    const f = fakeGtow();
+    f.hang.add("primary");
+    const made = await P.poolLockSeams.solve("k-reason", BODY, { preflop: true });
+    const old = (made as { solId: string }).solId;
+    expect(P.repostReason(old)).toBeNull();
+    await P.fetchNode(old, "");
+    const r = P.repostReason(old);
+    expect(r?.code).toBe("preflop:solve-reposted");
+    expect(r?.v).toBe("rebuilt");
+    expect(r?.text).toMatch(/primary → secondary/);
+  }, T);
+
+  it("a lock on a locked parent keeps the parent's locks in the chain a re-post rebuilds", async () => {
+    const f = fakeGtow();
+    const parent = await P.poolLockSeams.solve("k-chain", BODY, { preflop: true });
+    const child = await P.lockedSolution((parent as { solId: string }).solId, BODY, [LOCK]);
+    const grand = await P.lockedSolution((child as { solId: string }).solId, BODY, [{ ...LOCK, action_history: ["F"] }]);
+    expect("solId" in grand).toBe(true);
+    f.hang.add("primary");
+    expect("error" in await P.fetchNode((grand as { solId: string }).solId, "")).toBe(false);
+    // the re-post on secondary: tree, solution, then BOTH locks in order
+    const onSecondary = f.seen.filter((x) => x.acct === "secondary" && x.kind !== "poll");
+    expect(onSecondary.map((x) => x.kind)).toEqual(["tree", "solution", "lock", "lock"]);
+    expect(onSecondary[2]!.body.last_node_lock.action_history).toEqual([]);
+    expect(onSecondary[3]!.body.last_node_lock.action_history).toEqual(["F"]);
   }, T);
 });

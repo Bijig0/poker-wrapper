@@ -212,7 +212,11 @@ describe.skipIf(gated)("the chain ledger: each street's ranges computed once, re
       const m = checkMap(r, st);
       expect(Object.values(m).filter((s) => s === "fail")).toEqual([]);
       // the inputs and the process, checked on every street against the capture and the hand's ledgers
-      for (const id of [1, 2, 4, 5, 6, 7, 8, 9, 10]) expect([st, id, m[id]]).toEqual([st, id, "pass"]);
+      for (const id of [1, 4, 5, 6, 7, 8, 9, 10]) expect([st, id, m[id]]).toEqual([st, id, "pass"]);
+      // #2: sound, or the RESIDUE flag (the unsafe-answer guard, 2026-10-13: a villain under one combo) — the fake's
+      // actions are each 1/n of hundreds (above), so the BB's range thins below a combo as the hand goes on; never a fail
+      const two = r.path.checks[st].find((c: any) => c.id === 2);
+      if (two.status !== "pass") expect([st, two.status, two.text.startsWith("RESIDUE: BB holds ")]).toEqual([st, "flag", true]);
     }
     // the decision's own: hero's node, the mix, the key, hero's combo — on the river
     const river = checkMap(r, "river");

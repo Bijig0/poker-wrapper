@@ -667,6 +667,10 @@ export function buildApp(): Hono {
     const ch = b.chain && typeof b.chain === "object" ? b.chain : null;
     const str = (x: unknown) => (typeof x === "string" && x ? x : null);
     st.chain = live && ch ? { verdict: str(ch.verdict), label: str(ch.label), reason: str(ch.reason) } : null;
+    // AN UNSAFE ANSWER (2026-10-13): lives and dies with the answer
+    const un = b.unsafe && typeof b.unsafe === "object" ? b.unsafe : null;
+    const reasons = un && Array.isArray(un.reasons) ? un.reasons.filter((x: unknown): x is string => typeof x === "string" && !!x) : [];
+    st.unsafe = live && reasons.length ? { reasons, hold: un.hold !== false } : null;
     if (ch?.session && typeof ch.session === "object") {
       st.chainSession = { hands: Number(ch.session.hands) || 0, clean: Number(ch.session.clean) || 0,
         rate: typeof ch.session.rate === "number" ? ch.session.rate : null };

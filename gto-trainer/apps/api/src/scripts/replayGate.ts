@@ -16,6 +16,12 @@
  * them, ~60 GB, from 2026-10-03 were found on 2026-10-09). The replay itself runs in a CHILD process (--worker) so the
  * copies' SQLite handles are closed when the parent removes them (Windows will not delete an open file).
  *
+ * EVERY RUN ITS OWN DIRS (2026-10-13; replayGateTemp gateRunDirs / claimGateDirs): the default work dir is
+ * replay-gate-<run id> and the control worktree replay-gate-control-<commit>-<run id> (run id = local start time + pid)
+ * — they were fixed names, and two gates at once against the same main HEAD replaced each other's copies and removed
+ * each other's worktree (294 decisions "changed" with a PASS; alone, 0). Every work dir a run uses is claimed with a
+ * lock file: a --work another live run holds is refused, naming it (exit 75). --reuse-copy needs an explicit --work.
+ *
  * WHAT IS REPLAYED: every logged decision of the session (or the date range), plus with --extra-since every logged
  * decision since that date in a hand with an all-in (by the action or by the chips: a whole-stack raise) on any street,
  * or whose chain plan was a collapse, a re-root or the last resort. Hands IN ORDER, a hand's decisions IN ORDER, in
@@ -40,12 +46,15 @@
  * against the cached trees whatever the charts have become. A preflop DIFF or NEW BODY never stops the hand.
  * --preflop charts: today's charts decide the postflop too (the first gate).
  *
- * Exit: 0 clean · 1 a CRASH or an unexplained DIFF · 2 a poker session went live (stopped; re-run later).
+ * Exit: 0 clean · 1 a CRASH or an unexplained DIFF · 2 a poker session went live (stopped; re-run later) · 75 another
+ * gate holds the work dir (re-run later, or give another --work).
  *
  * ONE COMMAND (--control <commit>): makes a temporary worktree of <commit> (node_modules linked, this script and the
  * seam copied in, the seam put into its fastSolve), runs the gate there, runs it here against that run, prints the
  * verdict and removes the worktree (--keep-control keeps it):
  *   bun src/scripts/replayGate.ts --session session_20261003_111447 --extra-since 2026-09-27 --control 0a2bae4
+ * The verdict is a bare PASS only when no decision differs from the control; a PASS over decisions that changed
+ * without failing (SAME → CACHE-MISS / SKIPPED / NEW BODY …) names them by transition, to be checked (replayGateVerdict).
  *
  * THE LIVE DATA MOVES (first run, 2026-10-04): the same decisions replayed with the code that SERVED them still differ
  * from what was served — a chart node re-baked since, a short-stack rung picked from the stacks as dealt instead of
@@ -58,11 +67,13 @@
  * With a baseline, exit 1 = a CRASH, or a decision that became a DIFF / refusal change against the baseline.
  */
 import { Database } from "bun:sqlite";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fmtGb, isControlWorktreeName, removeGateTemp, sweepGateTemp } from "./replayGateTemp";
+import { dirname, join, resolve } from "node:path";
+import { claimGateDirs, fmtGb, gateRunDirs, gateRunId, isControlWorktreeName, isGateReport, LOCK_FILE, releaseGateDirs, removeGateTemp, sweepGateTemp,
+  workDirRefusal } from "./replayGateTemp";
+import { type CodeDiff, fmtTransitions, gateVerdict, isCodeFail } from "./replayGateVerdict";
 
 // ---- arguments ---------------------------------------------------------------------------------------------------
 const argv = process.argv.slice(2);
@@ -73,8 +84,12 @@ const PREFLOP = (arg("preflop") ?? "served") === "charts" ? "charts" : "served";
 const CONTROL = arg("control");
 const FROM = arg("from"), TO = arg("to");
 const EXTRA_SINCE = arg("extra-since");
-const LIVE_DIR = (arg("data") ?? process.env.POKER_DATA_DIR ?? "C:/Users/Brady/poker-data").replace(/\\/g, "/");
-const WORK = (arg("work") ?? join(tmpdir(), "replay-gate")).replace(/\\/g, "/");
+/** a path argument, %VAR% expanded (bash and PowerShell pass "%TEMP%/x" through as text: a dir named %TEMP% here) */
+const pathArg = (k: string): string | null => arg(k)?.replace(/%([A-Za-z_][\w]*)%/g, (m, v: string) => process.env[v] ?? m) || null;
+const LIVE_DIR = resolve(pathArg("data") ?? process.env.POKER_DATA_DIR ?? "C:/Users/Brady/poker-data").replace(/\\/g, "/");
+const RUN_ID = gateRunId();
+const WORK_ARG = pathArg("work");
+const WORK = gateRunDirs({ tmp: tmpdir(), runId: RUN_ID, work: WORK_ARG }).work;   // the worker is always given --work
 const ONLY = arg("hands")?.split(",").filter(Boolean) ?? null;
 const MAX_HANDS = Number(arg("max-hands") ?? Infinity);
 if (!SESSION && !(FROM && TO)) { console.error("usage: --session <id> | --from <iso> --to <iso> [--extra-since <date>]"); process.exit(64); }
@@ -85,6 +100,17 @@ const liveSession = (): string | null => {
   try { return (d.query("select id from sessions where ended_at is null limit 1").get() as { id: string } | null)?.id ?? null; } finally { d.close(); }
 };
 { const s = liveSession(); if (s) { console.error(`a poker session is LIVE (${s}) — not replaying; run again when it has ended`); process.exit(2); } }
+// a session (or range) with no logged answers replays nothing — and two runs of nothing "differ" in nothing: no PASS
+{
+  const d = liveDb();
+  let n = 0;
+  try {
+    const r = SESSION ? d.query("select count(*) n from answers where session_id = ? and client_hand_id is not null").get(SESSION)
+      : d.query("select count(*) n from answers where ts >= ? and ts < ? and client_hand_id is not null").get(Date.parse(FROM!), Date.parse(TO!));
+    n = (r as { n: number } | null)?.n ?? 0;
+  } finally { d.close(); }
+  if (!n) { console.error(`no answers logged for ${SESSION ? `--session ${SESSION}` : `--from ${FROM} --to ${TO}`} in ${LIVE_DIR}/poker.sqlite — nothing to replay`); process.exit(64); }
+}
 
 // ---- the parent: sweep the leftovers, run the replay in a child (two under --control), remove the copies -----------
 // The replay itself runs with --worker in a child process: its SQLite handles on the copies are closed by the time
@@ -92,56 +118,101 @@ const liveSession = (): string | null => {
 const WORKER = flag("worker");
 const KEEP_TEMP = flag("keep-temp") || flag("reuse-copy");
 if (!WORKER) {
+  if (flag("reuse-copy") && !WORK_ARG) { console.error("--reuse-copy needs --work <dir>: the default work dir is a new one every run (replay-gate-<run id>)"); process.exit(64); }
   const git = (...a: string[]) => { const r = spawnSync("git", a, { cwd: import.meta.dir, encoding: "utf8" }); if (r.status !== 0) throw new Error(`git ${a.join(" ")}: ${r.stderr}`); return r.stdout.trim(); };
   let top: string | null = null;        // the checkout's top (git worktrees need it; a run without --control does not)
   try { top = git("rev-parse", "--show-toplevel"); } catch { /* not a checkout: --control is refused below */ }
+  if (CONTROL && !top) { console.error("--control needs this script to run from a git checkout"); process.exit(64); }
   const api = "gto-trainer/apps/api";
   const apiDir = join(import.meta.dir, "..", "..");
   const tag = (SESSION ?? `${FROM}_${TO}`).replace(/[^\w.-]+/g, "_");
-  // the sweep: earlier runs' work dirs under %TEMP% older than a day, whole (a young one may be another run's)
+  const commit = CONTROL ? git("rev-parse", "--short", CONTROL) : null;
+  const dirs = gateRunDirs({ tmp: tmpdir(), runId: RUN_ID, work: WORK_ARG, commit });
+  const workDirs = commit ? [dirs.controlWork!, dirs.candidateWork!] : [dirs.work];
+  // a --work the cleanup must not empty (an existing dir that is not the gate's) is refused before anything is touched
+  for (const d of workDirs) {
+    const why = workDirRefusal(d, [LIVE_DIR]);
+    if (why) { console.error(`${why}${WORK_ARG && d !== dirs.work ? `\n  (the dir --control makes of --work ${WORK_ARG})` : ""}`); process.exit(64); }
+  }
+  // a --baseline (the plain run's) that is not there is said now, not after the whole replay
+  const BASE_ARG = CONTROL ? null : pathArg("baseline");
+  if (BASE_ARG && !existsSync(BASE_ARG)) { console.error(`--baseline ${resolve(BASE_ARG)}: no such file`); process.exit(64); }
+  // the sweep: earlier runs' work dirs under %TEMP% older than a day, whole — never this run's, never one a live run holds
   {
-    const s = sweepGateTemp(tmpdir(), { protect: [LIVE_DIR] });
+    const s = sweepGateTemp(tmpdir(), { protect: [LIVE_DIR], keep: workDirs });
     if (s.removed.length) console.log(`swept ${s.removed.length} leftover replay-gate dir(s) older than a day from ${tmpdir()} (${fmtGb(s.removed.reduce((n, r) => n + r.bytes, 0))}): ${s.removed.map((r) => r.path.split(/[\\/]/).pop()).join(", ")}`);
     for (const e of s.skipped) console.error(`(sweep: ${e})`);
     if (top && s.removed.some((r) => isControlWorktreeName(r.path))) { try { git("-C", top, "worktree", "prune"); } catch { /* best effort */ } }
   }
+  // the children get every path absolute (they run in other directories: the control worktree's apps/api, this one's)
   const dropped = ["--control", "--baseline", "--work"];
-  const pass = argv.filter((a, i) => !dropped.includes(a) && !dropped.includes(argv[i - 1] ?? "") && !["--keep-control", "--keep-temp", "--worker"].includes(a));
+  const pass = argv.map((a, i) => argv[i - 1] === "--data" ? LIVE_DIR : argv[i - 1] === "--env" ? resolve(pathArg("env")!) : a)
+    .filter((a, i) => !dropped.includes(a) && !dropped.includes(argv[i - 1] ?? "") && !["--keep-control", "--keep-temp", "--worker"].includes(a));
+  // the children run on THIS Bun (config/env.ps1's 1.3.14 when the gate is started with it) — PATH's `bun` can be another
   const child = (script: string, cwd: string, work: string, extra: string[] = []) =>
-    spawnSync("bun", [script, ...pass, "--worker", "--work", work, ...extra], { cwd, stdio: "inherit" });
-  const copies: string[] = [];          // the work dirs this run makes — removed in the finally
+    spawnSync(process.execPath, [script, ...pass, "--worker", "--work", work, ...extra], { cwd, stdio: "inherit" });
+  const copies: string[] = [];          // the work dirs this run claimed — removed, then released, in the finally
+  /** claim this run's work dirs (replayGateTemp claimGateDirs): false, and exit 75, when another live gate holds one */
+  const claim = (ds: string[]): boolean => {
+    const refusal = claimGateDirs(ds, { pid: process.pid, started: new Date().toLocaleString("sv-SE"), startedMs: Date.now(), cwd: process.cwd(), argv: process.argv.slice(1) });
+    if (refusal) { console.error(refusal); return false; }
+    copies.push(...ds);
+    return true;
+  };
+  /** the decisions a report replayed (its `all`), null when it cannot be read */
+  const answersOf = (p: string): Set<number> | null => { try { return new Set((JSON.parse(readFileSync(p, "utf8")).all ?? []).map((x: any) => x.answer)); } catch { return null; } };
   let controlDir: string | null = null;
   let status: number | null = null;
   try {
-    if (CONTROL) {
-      if (!top) throw new Error("--control needs this script to run from a git checkout");
-      const commit = git("rev-parse", "--short", CONTROL);
-      controlDir = join(tmpdir(), `replay-gate-control-${commit}`).replace(/\\/g, "/");
-      try { git("-C", top, "worktree", "prune"); } catch { /* a swept worktree's record would block the add */ }
-      if (!existsSync(controlDir)) git("-C", top, "worktree", "add", "--detach", controlDir, commit);
-      for (const nm of ["gto-trainer/node_modules", `${api}/node_modules`]) {
-        if (existsSync(join(controlDir, nm)) || !existsSync(join(top, nm))) continue;
-        const r = spawnSync("cmd", ["/c", "mklink", "/J", join(controlDir, nm), join(top, nm)], { encoding: "utf8" });
-        if (r.status !== 0) throw new Error(`linking ${nm}: ${r.stderr || r.stdout}`);
-      }
-      for (const f of ["replayGate.ts", "replayGateSeam.ts", "replayGateTemp.ts"]) copyFileSync(join(import.meta.dir, f), join(controlDir, api, "src", "scripts", f));
-      const { withReplaySeam } = await import("./replayGateSeam");
-      const fsPath = join(controlDir, api, "src", "services", "fastSolve.ts");
-      writeFileSync(fsPath, withReplaySeam(readFileSync(fsPath, "utf8")));
-      const workC = `${WORK}-control-${commit}`, workN = `${WORK}-candidate`;
-      copies.push(workC, workN);
-      console.log(`== control ${commit} (${controlDir})`);
-      const c = child("src/scripts/replayGate.ts", join(controlDir, api), workC);
-      if (c.status === 2) status = 2;
+    if (commit) {
+      const workC = dirs.controlWork!, workN = dirs.candidateWork!;
+      if (!claim([workC, workN])) status = 75;
       else {
-        console.log(`== candidate ${git("rev-parse", "--short", "HEAD")} (this checkout)`);
-        const n = child(join(import.meta.dir, "replayGate.ts"), apiDir, workN, ["--baseline", join(workC, `replay-gate-${tag}.json`)]);
-        status = n.status ?? 1;
-        console.log(`\nVERDICT against ${commit}: ${status === 0 ? "PASS" : status === 2 ? "STOPPED (a session went live)" : "FAIL"}`);
+        // this run's own worktree (the run id in its name): never one another run made, so never one it is running in
+        if (existsSync(dirs.controlWorktree!)) throw new Error(`${dirs.controlWorktree} exists — not this run's, left alone`);
+        try { git("-C", top!, "worktree", "prune"); } catch { /* a swept worktree's record would block the add */ }
+        git("-C", top!, "worktree", "add", "--detach", dirs.controlWorktree!, commit);
+        controlDir = dirs.controlWorktree!;
+        for (const nm of ["gto-trainer/node_modules", `${api}/node_modules`]) {
+          if (existsSync(join(controlDir, nm)) || !existsSync(join(top!, nm))) continue;
+          const r = spawnSync("cmd", ["/c", "mklink", "/J", join(controlDir, nm), join(top!, nm)], { encoding: "utf8" });
+          if (r.status !== 0) throw new Error(`linking ${nm}: ${r.stderr || r.stdout}`);
+        }
+        for (const f of ["replayGate.ts", "replayGateSeam.ts", "replayGateTemp.ts", "replayGateVerdict.ts"]) copyFileSync(join(import.meta.dir, f), join(controlDir, api, "src", "scripts", f));
+        const { withReplaySeam } = await import("./replayGateSeam");
+        const fsPath = join(controlDir, api, "src", "services", "fastSolve.ts");
+        writeFileSync(fsPath, withReplaySeam(readFileSync(fsPath, "utf8")));
+        // the reports a reused --work holds from an earlier run go first: what is there after a child ran is this run's
+        const reportC = join(workC, `replay-gate-${tag}.json`), reportN = join(workN, `replay-gate-${tag}.json`), vs = reportN.replace(/\.json$/, ".vs-baseline.json");
+        for (const p of [reportC, reportN, vs]) rmSync(p, { force: true });
+        console.log(`== control ${commit} (${controlDir}; work ${workC})`);
+        const c = child("src/scripts/replayGate.ts", join(controlDir, api), workC);
+        const replayedC = answersOf(reportC);
+        if (c.status === 2) status = 2;
+        else if ((c.status !== 0 && c.status !== 1) || !replayedC?.size) {
+          // a control that died (an import error, a throw, a session with no answers: 64) or replayed nothing is no
+          // baseline: the candidate is not run against nothing, and nothing is no PASS
+          const why = c.status !== 0 && c.status !== 1 ? `exited ${c.status ?? "on a signal"}` : replayedC ? "replayed no decision" : "wrote no report";
+          console.log(`\nVERDICT against ${commit}: FAIL (the control run ${why} — no candidate run)`);
+          status = c.status !== 0 && c.status !== 1 && c.status != null ? c.status : 1;
+        } else {
+          console.log(`== candidate ${git("rev-parse", "--short", "HEAD")} (this checkout; work ${workN})`);
+          const n = child(join(import.meta.dir, "replayGate.ts"), apiDir, workN, ["--baseline", reportC]);
+          let diffs: CodeDiff[] | null = null;
+          try { diffs = JSON.parse(readFileSync(vs, "utf8")); } catch { /* none written */ }
+          // the decisions only one side replayed: the comparison skips them, so they are counted here
+          const a = answersOf(reportC), b = answersOf(reportN);
+          const oneSided = a && b ? [...a].filter((x) => !b.has(x)).length + [...b].filter((x) => !a.has(x)).length : 0;
+          const v = gateVerdict(commit, n.status, diffs, oneSided);
+          console.log("");
+          for (const l of v.lines) console.log(l);
+          status = v.exit;
+        }
       }
-    } else {
-      copies.push(WORK);
-      status = child(join(import.meta.dir, "replayGate.ts"), apiDir, WORK).status ?? 1;
+    } else if (!claim([WORK])) status = 75;
+    else {
+      // the manual two-checkout flow (header): this run against another's report
+      status = child(join(import.meta.dir, "replayGate.ts"), apiDir, WORK, BASE_ARG ? ["--baseline", resolve(BASE_ARG)] : []).status ?? 1;
     }
   } finally {
     if (controlDir && top && !flag("keep-control")) {
@@ -149,14 +220,19 @@ if (!WORKER) {
       // git would otherwise leave them behind, and a recursive delete would follow them into this checkout's packages
       for (const nm of [`${api}/node_modules`, "gto-trainer/node_modules"]) if (existsSync(join(controlDir, nm))) spawnSync("cmd", ["/c", "rmdir", join(controlDir, nm)]);
       try { git("-C", top, "worktree", "remove", "--force", controlDir); } catch (e) { console.error(`(the control worktree stays: ${(e as Error).message})`); }
-    }
-    // the copies go, the reports stay (replay-gate-<tag>.json, .vs-baseline.json — what `report:` named and what a
-    // later --baseline reads); the day-old sweep takes the rest
-    if (KEEP_TEMP) console.log(`(the work copies stay — ${flag("reuse-copy") ? "--reuse-copy" : "--keep-temp"}: ${copies.join(", ")})`);
-    else for (const w of copies) {
-      const r = removeGateTemp(w, { protect: [LIVE_DIR], keep: (n) => /\.json$/i.test(n) });
+    } else if (controlDir) console.log(`(the control worktree stays — --keep-control: ${controlDir})`);
+    // the copies go while this run still holds its dirs, the locks after (no run claims a dir this one is emptying);
+    // the reports stay (replay-gate-<tag>.json, .vs-baseline.json — what `report:` named and what a later --baseline
+    // reads); the day-old sweep takes the rest
+    // (the lock's own files are left — this run's lock is released below, another run's half-made one is that run's)
+    const removed = KEEP_TEMP ? [] : copies.map((w) => removeGateTemp(w, { protect: [LIVE_DIR], keep: (n) => isGateReport(n) || n.startsWith(LOCK_FILE) }));
+    releaseGateDirs(copies, process.pid);
+    if (KEEP_TEMP && copies.length) console.log(`(the work copies stay — ${flag("reuse-copy") ? "--reuse-copy" : "--keep-temp"}: ${copies.join(", ")})`);
+    for (const r of removed) {
+      const kept = r.kept.filter((n) => !n.startsWith(LOCK_FILE));
+      if (!kept.length) { try { rmdirSync(r.path); } catch { /* not empty: a run that claimed it since holds it */ } }
       if (r.error) console.error(`(the work copy stays: ${r.error})`);
-      else if (r.bytes || r.kept.length) console.log(`work copy removed: ${w} (${fmtGb(r.bytes)}${r.kept.length ? `; kept ${r.kept.join(", ")}` : ""})`);
+      else if (r.bytes || kept.length) console.log(`work copy removed: ${r.path} (${fmtGb(r.bytes)}${kept.length ? `; kept ${kept.join(", ")}` : ""})`);
     }
   }
   process.exit(status ?? 1);
@@ -576,7 +652,7 @@ if (stoppedLive) { console.error(`STOPPED: a poker session went live (${stoppedL
 // ---- against a baseline: the same decisions replayed with the code that SERVED them (a checkout of the live commit) —
 // what is left is this checkout's own doing, not the data that moved since (charts, profiles, the cache)
 const BASELINE = arg("baseline");
-let codeDiffs: any[] = [];
+let codeDiffs: CodeDiff[] = [];
 if (BASELINE) {
   const base = JSON.parse(require("node:fs").readFileSync(BASELINE, "utf8"));
   const was = new Map<number, any>((base.all ?? []).map((x: any) => [x.answer, x]));
@@ -584,16 +660,21 @@ if (BASELINE) {
     const b = was.get(r.answer);
     if (!b) continue;
     if (b.verdict === r.verdict && (b.replay ?? null) === (r.replay ?? null)) continue;
-    codeDiffs.push({ answer: r.answer, hand: r.hand, street: r.street, baseline: `${b.verdict}${b.replay ? ` · ${b.replay}` : ""}${b.why ? ` · ${String(b.why).slice(0, 120)}` : ""}`,
+    codeDiffs.push({ answer: r.answer, hand: r.hand, street: r.street, was: b.verdict, is: r.verdict,
+      baseline: `${b.verdict}${b.replay ? ` · ${b.replay}` : ""}${b.why ? ` · ${String(b.why).slice(0, 120)}` : ""}`,
       now: `${r.verdict}${r.replay ? ` · ${r.replay}` : ""}${r.why ? ` · ${String(r.why).slice(0, 160)}` : ""}` });
   }
-  console.log(`\nAGAINST THE BASELINE (${BASELINE}): ${codeDiffs.length} decision(s) differ from the code that served them`);
+  console.log(`\nAGAINST THE BASELINE (${BASELINE}): ${codeDiffs.length} decision(s) differ from the code that served them${codeDiffs.length ? ` — ${fmtTransitions(codeDiffs)}` : ""}`);
+  // the decisions one side only replayed are not compared at all: said, not skipped silently
+  const mine = new Set(report.all.map((r) => r.answer));
+  const onlyHere = report.all.filter((r) => !was.has(r.answer)).length, onlyThere = [...was.keys()].filter((a) => !mine.has(a)).length;
+  if (onlyHere || onlyThere) console.log(`  NOT COMPARED: ${onlyHere} decision(s) of this run are not in the baseline, ${onlyThere} of the baseline are not in this run`);
   for (const d of codeDiffs) console.log(`  answer ${d.answer} · hand ${d.hand} ${d.street}\n      baseline ${d.baseline}\n      this     ${d.now}`);
   await Bun.write(outFile.replace(/\.json$/, ".vs-baseline.json"), JSON.stringify(codeDiffs, null, 1));
 }
 // the exit: a CRASH always fails; without a baseline an unexplained DIFF fails; with one, only what THIS code changed
 // counts — a decision that became a DIFF, a refusal change or a crash (a NEW BODY is listed: the intended changes build
-// new trees, and the replay cannot price them without GTO Wizard)
+// new trees, and the replay cannot price them without GTO Wizard; the --control verdict names it — replayGateVerdict)
 // (a decision the baseline CRASHED on and this code answers is the fix, not a failure)
-const codeFails = codeDiffs.filter((d) => /^(DIFF|REFUSAL-CHANGE|CRASH)/.test(d.now) && !/^CRASH/.test(d.baseline));
+const codeFails = codeDiffs.filter(isCodeFail);
 process.exit(crashes.length || (BASELINE ? codeFails.length : unexplained.length) ? 1 : 0);

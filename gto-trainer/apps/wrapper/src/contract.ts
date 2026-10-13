@@ -51,6 +51,8 @@ export const Body = {
     chart: anyVal.optional(), exploitPick: anyVal.optional(), chartPick: anyVal.optional(),
     // THE SHORT ALL-IN PRESS (2026-10-07, the API's services/allInPress): [{action, kind: "raise-to", amount, verb, why, …}]
     press: anyVal.optional(),
+    // AN UNSAFE ANSWER (2026-10-13, the API's services/unsafeAnswer): {reasons: string[], hold: boolean}
+    unsafe: anyVal.optional(),
   }),
   // LIVE STEPS (2026-10-12): the API's solve steps for one decision, pushed while the solve runs (steps.noteSolveSteps)
   panelSteps: obj({ decisionKey: anyVal.optional(), handId: anyVal.optional(), steps: anyVal.optional(), run: anyVal.optional() }),

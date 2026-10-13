@@ -16,7 +16,7 @@ import { handState } from "./ignition/hand";
 import { stateHealthSummary } from "./ignition/checks";
 import { answerRef } from "./relay";
 import { TAP_STALL_S } from "./ignition/ws";
-import { autoAllowance, currentAnswer, currentChain, currentNote, currentSolveRequest, pickReady } from "./relay";
+import { autoAllowance, currentAnswer, currentChain, currentNote, currentSolveRequest, currentUnsafe, pickReady } from "./relay";
 import { topUpWindow } from "./topup";
 import { stepsView } from "./steps";
 import { sessionBrief } from "./session";
@@ -131,6 +131,8 @@ async function stateInner(light = false): Promise<Record<string, any>> {
     ...((ch) => (ch ? { panelChain: ch } : {}))(currentChain()),
     // where the last answer's ranges are (2026-09-30, relay.answerRef): the same rule — a top-level key, only when there is one
     ...((r) => (r ? { panelAnswerRef: r } : {}))(answerRef()),
+    // AN UNSAFE ANSWER (2026-10-13, relay.currentUnsafe): the same rule — a top-level key, only when the answer is unsafe
+    ...((u) => (u ? { panelUnsafe: u } : {}))(currentUnsafe()),
     // LIVE STEPS (2026-10-12, steps.ts): what is happening on this decision right now + its trail — the same rule, only
     // while answers are on
     ...((sv) => (sv ? { steps: sv } : {}))(stepsView()),
