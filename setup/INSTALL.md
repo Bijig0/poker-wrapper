@@ -14,8 +14,7 @@ The install takes about **10 minutes**, most of it a 3 GB download that setup ha
 - From the person who gave you this: **`PokerWrapperSetup-<version>.exe`** and **`PokerWrapper-key.txt`**, your
   download key (charts, data and updates come through it). Keep the key to yourself.
 - Your own **GTO Wizard** account on a plan with GTO Wizard AI (**Ultra**). The answers after the flop come from it.
-  The GTO Wizard desktop app is optional: install it **before** the Poker Wrapper if you want it, and the Poker
-  Wrapper uses it; otherwise it runs GTO Wizard in a Chrome window of its own.
+  The Poker Wrapper runs GTO Wizard in a Chrome window of its own (there is no desktop app).
 - Your own **Ignition** and/or **CoinPoker** account.
 
 > ⚠️ **Read this first.** Using any tool like this while playing for real money is against Ignition's and
@@ -97,9 +96,9 @@ too (the default is No).
   local copy is in `~\poker-package\PokerWrapperSetup-<version>.exe`.
 - Build one without publishing: `bun setup\buildPackage.ts --installer` (needs Inno Setup:
   `winget install JRSoftware.InnoSetup --scope user`).
-- Hand it over with `setup\handoff.cmd`: it prints a message with download links (the installer, the key, and the GTO
-  Wizard desktop app's installer if one is in your Downloads — valid 7 days) to paste to the person. `--public` also
-  puts the installer, the key, the GTO Wizard app AND the release's data zips in `C:\Users\Public\PokerWrapper`: for
+- Hand it over with `setup\handoff.cmd`: it prints a message with download links (the installer and the key — valid
+  7 days) to paste to the person. `--public` also
+  puts the installer, the key AND the release's data zips in `C:\Users\Public\PokerWrapper`: for
   another Windows account on this computer, or copied to a USB stick, that is an install that downloads nothing (the
   installer unpacks the zips lying beside it — `setup.ps1 -DataDir`, passed by the installer as its own folder).
   Existing installs keep updating through the in-app bar. They don't need the installer.

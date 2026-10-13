@@ -227,11 +227,10 @@ function Set-Cfg($key, $value) {
   $script:cfg = @($script:cfg | Where-Object { $_ -notmatch "^\s*$key\s*=" }) + "$key=$value"
 }
 $has = { param($k) [bool]($cfg | Where-Object { $_ -match "^\s*$k\s*=\s*\S" }) }
-Set-Cfg 'GTOW_SECONDARY' '0'       # one GTO Wizard account (the main one); heads-up solves use it too
 if ($Strategy) { Set-Cfg 'INSTALL_STRATEGY' $Strategy }   # what this install plays: only its data parts are kept up to date
 # PORTS (2026-09-30): PORT_OFFSET moves every port (config\env.ps1 + services/ports.ts). -PortOffset sets it; else what
 # local.env has; step 6 may pick one when another Windows account's Poker Wrapper holds the default ports
-$PortDefaults = [ordered]@{ api = 2000; charts = 8777; panel = 7700; gtow = 9222; gtowSecondary = 9223; tableCdp = 9333 }
+$PortDefaults = [ordered]@{ api = 2000; charts = 8777; panel = 7700; gtow = 9222; tableCdp = 9333 }
 $offsetLine = @($cfg | Where-Object { $_ -match '^\s*PORT_OFFSET\s*=\s*(\d+)' } | ForEach-Object { [int]$Matches[1] }) | Select-Object -First 1
 $curOffset = if ($offsetLine) { $offsetLine } else { 0 }
 function Port($name) { $PortDefaults[$name] + $curOffset }
@@ -244,18 +243,19 @@ function Set-PortOffset([int]$n) {
   $reg = if ($env:GTOW_ACCOUNTS_PATH) { $env:GTOW_ACCOUNTS_PATH } else { Join-Path $dataDir 'gtow-accounts.json' }
   if ((Test-Path -LiteralPath $reg) -and $n -ne $script:curOffset) {
     $txt = Get-Content -LiteralPath $reg -Raw
-    foreach ($base in 9222, 9223) { $txt = $txt -replace "127\.0\.0\.1:$($base + $script:curOffset)(?!\d)", "127.0.0.1:$($base + $n)" }
+    foreach ($base in 9222) { $txt = $txt -replace "127\.0\.0\.1:$($base + $script:curOffset)(?!\d)", "127.0.0.1:$($base + $n)" }
     [IO.File]::WriteAllText($reg, $txt)
   }
   $script:curOffset = $n; Set-Cfg 'PORT_OFFSET' $n; Write-Cfg
 }
 if ($PortOffset -ge 0 -and $PortOffset -ne $curOffset) { Set-PortOffset $PortOffset; $offsetLine = $PortOffset }
-# retired settings (PLAYER_MODE, CHART_SERVER: that is simply how this app is now)
-$cfg = @($cfg | Where-Object { $_ -notmatch '^\s*(PLAYER_MODE|CHART_SERVER)\s*=' })
+# retired settings (PLAYER_MODE, CHART_SERVER: that is simply how this app is now; GTOW_SECONDARY*/GTOW_CLIENT*: the GTO Wizard
+# desktop app and its second account were dropped 2026-10-13 - GTO Wizard runs in a Chrome window only)
+$cfg = @($cfg | Where-Object { $_ -notmatch '^\s*(PLAYER_MODE|CHART_SERVER|GTOW_SECONDARY\w*|GTOW_CLIENT\w*|GTOW_CDP_HOST_SECONDARY)\s*=' })
 # no CoinPoker name to ask for: the reader learns it from the client's own log (sites/cpFeed.ts);
 # CP_HERO in local.env still pins it if that ever guesses wrong
 Write-Cfg
-Ok "written: GTOW_SECONDARY=0$(if (& $has 'CP_HERO') { ', CP_HERO set' })$(if ($curOffset) { ", PORT_OFFSET=$curOffset (API :$(Port 'api'), charts :$(Port 'charts'), panel :$(Port 'panel'), GTO Wizard :$(Port 'gtow'))" })"
+Ok "written: local.env$(if (& $has 'CP_HERO') { ', CP_HERO set' })$(if ($curOffset) { ", PORT_OFFSET=$curOffset (API :$(Port 'api'), charts :$(Port 'charts'), panel :$(Port 'panel'), GTO Wizard :$(Port 'gtow'))" })"
 
 # ---------------------------------------------------------------- 6. services
 Step 6 'Services (study API, chart server, GTO Wizard watchdog)'
@@ -280,7 +280,7 @@ else {
   #     asked for or already set, in which case those ports are simply taken as they are.
   $held = @(); $ours = @()
   # every port this install would listen on: the main three, the GTO Wizard clients, the table browser, extra tables
-  function Install-Ports([int]$off) { @(2000, 8777, 7700, 9222, 9223, 9333 | ForEach-Object { $_ + $off }) + @(1..3 | ForEach-Object { 7700 + $off + 10 * $_ }) }
+  function Install-Ports([int]$off) { @(2000, 8777, 7700, 9222, 9333 | ForEach-Object { $_ + $off }) + @(1..3 | ForEach-Object { 7700 + $off + 10 * $_ }) }
   function Port-Free([int]$p) { -not (Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue) }
   if ($go -and $Installer) {
     foreach ($port in (Port 'api'), (Port 'charts'), (Port 'panel')) {
@@ -324,25 +324,11 @@ else {
   if ($go) {
     # (re)start: a service already running from this folder keeps the OLD code/config until it restarts
     foreach ($t in $TaskNames.Values) { Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue }
-    # open the GTO Wizard window VISIBLE first (a no-op when it is already up), so the sign-in page is in
-    # front of them; the watchdog would otherwise start it minimised. The DESKTOP APP when it is installed (the
-    # same places the account registry looks: services/gtowAccounts.ts desktopAppCandidates), else the Chrome window.
-    $app = $env:GTOW_CLIENT_PATH
-    if (-not $app -and $env:GTOW_CLIENT -ne 'chrome') {
-      foreach ($c in @("$env:USERPROFILE\GTO Wizard\GTO Wizard.exe", "$env:LOCALAPPDATA\Programs\GTO Wizard\GTO Wizard.exe",
-                       'C:\Program Files\GTO Wizard\GTO Wizard.exe', 'C:\Program Files\Chinese GTO Wizard\Chinese GTO Wizard.exe')) {
-        if (Test-Path -LiteralPath $c) { $app = $c; break }
-      }
-    }
-    if ($app) {
-      $up = $false; try { $null = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$(Port 'gtow')/json/version" -TimeoutSec 3; $up = $true } catch { }
-      if (-not $up) { Start-Process -FilePath $app -ArgumentList "--remote-debugging-port=$(Port 'gtow')" }
-      Todo "the GTO Wizard app opened ($app): sign in there and leave it open"
-    } else {
-      $env:GTOW_CDP_PORT = "$(Port 'gtow')"   # the launcher reads the port from the environment
-      & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\start_gtow_chrome.ps1') -Foreground
-      Todo 'a Chrome window opened on GTO Wizard: sign in there and leave it open'
-    }
+    # open the GTO Wizard Chrome window VISIBLE first (a no-op when it is already up), so the sign-in page is in
+    # front of them; the watchdog would otherwise start it minimised.
+    $env:GTOW_CDP_PORT = "$(Port 'gtow')"   # the launcher reads the port from the environment
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\start_gtow_chrome.ps1') -Foreground
+    Todo 'a Chrome window opened on GTO Wizard: sign in there and leave it open'
     & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'install_tasks.ps1') -Start
     Ok 'registered and started (they start by themselves at every logon)'
   } elseif ($held.Count) {

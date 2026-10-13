@@ -10,13 +10,12 @@ describe("ports: one offset moves every port", () => {
     expect(apiUrl(env)).toBe("http://127.0.0.1:2000");
   });
 
-  test("PORT_OFFSET shifts all six; junk reads as 0", () => {
+  test("PORT_OFFSET shifts all of them; junk reads as 0", () => {
     const env = { PORT_OFFSET: "50" };
     expect(port("api", env)).toBe(2050);
     expect(port("charts", env)).toBe(8827);
     expect(port("panel", env)).toBe(7750);
     expect(port("gtow", env)).toBe(9272);
-    expect(port("gtowSecondary", env)).toBe(9273);
     expect(port("tableCdp", env)).toBe(9383);
     for (const junk of ["", "abc", "-5", "1e3", "99999"]) expect(portOffset({ PORT_OFFSET: junk })).toBe(0);
   });

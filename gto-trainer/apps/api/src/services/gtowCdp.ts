@@ -1,11 +1,12 @@
 /**
- * GtowCdp — drives the GTO Wizard desktop app (Electron/Chromium) over the
- * Chrome DevTools Protocol for the classroom teaching aid.
+ * GtowCdp — drives app.gtowizard.com in a dedicated Chrome profile over the
+ * Chrome DevTools Protocol.
  *
- * GTO Wizard must be launched with remote debugging enabled:
- *   open -a "GTO Wizard" --args --remote-debugging-port=9222
+ * Chrome must be launched with remote debugging enabled
+ * (scripts/start_gtow_chrome.ps1, or launchApp() below):
+ *   chrome --user-data-dir=<profile> --remote-debugging-port=9222
  *
- * We attach to its renderer page (app.gtowizard.com) and read/click the DOM
+ * We attach to its page (app.gtowizard.com) and read/click the DOM
  * directly — sub-50ms, exact, no OCR. Selectors are the app's own stable
  * `data-tst` test IDs where available, else structural classes.
  */
@@ -36,66 +37,29 @@ const DEBUG_HOST = "127.0.0.1";
 const DEBUG_PORT = port("gtow");   // GTOW_CDP_PORT, else 9222 + PORT_OFFSET (services/ports.ts)
 const TARGET_MATCH = "app.gtowizard.com";
 
-/**
- * Which desktop client to drive. Two builds can sit side by side: the
- * international one at "GTO Wizard", and the Chinese regional build — renamed
- * (folder AND exe) to "Chinese GTO Wizard" on 2026-09-18, because Windows takes
- * a process's name from the exe, so two installs called "GTO Wizard.exe" are
- * indistinguishable to Get-Process and a relaunch would kill the wrong one.
- * GTOW_CLIENT_PATH pins a build; otherwise the international one wins when
- * installed and we fall back to the Chinese build.
- */
-// the official desktop app installs PER USER (%USERPROFILE%\GTO Wizard, measured 1.0.9 on 2026-09-29); the Program Files
-// builds are older ones — the same list the account registry seeds from (services/gtowAccounts.ts desktopAppCandidates)
-const CLIENT_CANDIDATES = [
-  `${process.env.USERPROFILE ?? ""}\\GTO Wizard\\GTO Wizard.exe`,
-  `${process.env.LOCALAPPDATA ?? ""}\\Programs\\GTO Wizard\\GTO Wizard.exe`,
-  "C:\\Program Files\\GTO Wizard\\GTO Wizard.exe",
-  "C:\\Program Files\\Chinese GTO Wizard\\Chinese GTO Wizard.exe",
-];
-
 const CHROME_CANDIDATES = [
   "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
   "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
 ];
 
 /**
- * Two ways to hold a GTO Wizard session we can sniff a token from:
- *  - `electron`: a desktop client exe (what we used until 2026-09-18).
- *  - `chrome`:   app.gtowizard.com in a DEDICATED Chrome profile. GTO Wizard
- *                ships no native client — their own "install on PC" is a PWA —
- *                so this is the fallback when no Electron build is installed.
- *                A dedicated --user-data-dir is required: Chrome refuses
- *                --remote-debugging-port on an already-running profile.
- * `scripts/start_gtow_chrome.ps1` is the manual twin of the chrome branch.
+ * The GTO Wizard session we sniff a token from is app.gtowizard.com in a DEDICATED Chrome profile (GTO Wizard ships no
+ * client of ours to drive). A dedicated --user-data-dir is required: Chrome refuses --remote-debugging-port on an
+ * already-running profile. `scripts/start_gtow_chrome.ps1` is the manual twin.
  */
-type WinClient =
-  | { kind: "electron"; exe: string }
-  | { kind: "chrome"; exe: string; profileDir: string };
+type WinClient = { exe: string; profileDir: string };
 
 function resolveWinClient(): WinClient | null {
-  const pinned = process.env.GTOW_CLIENT_PATH?.trim();
-  if (pinned) return { kind: "electron", exe: pinned };
-  const electron = CLIENT_CANDIDATES.find((c) => existsSync(c));
-  if (electron) return { kind: "electron", exe: electron };
   const chrome = CHROME_CANDIDATES.find((c) => existsSync(c));
-  if (chrome) {
-    const profileDir =
-      process.env.GTOW_CHROME_PROFILE?.trim() ||
-      `${process.env.LOCALAPPDATA ?? "C:\\Users\\Brady\\AppData\\Local"}\\gtow-cdp-profile`;
-    return { kind: "chrome", exe: chrome, profileDir };
-  }
-  return null;
+  if (!chrome) return null;
+  const profileDir =
+    process.env.GTOW_CHROME_PROFILE?.trim() ||
+    `${process.env.LOCALAPPDATA ?? "C:\\Users\\Brady\\AppData\\Local"}\\gtow-cdp-profile`;
+  return { exe: chrome, profileDir };
 }
 
 /** PowerShell selecting ONLY this client's processes — never anything else's. */
 function scopedProcPs(c: WinClient): string {
-  if (c.kind === "electron") {
-    // Windows names a process after its exe, so two installs both called
-    // "GTO Wizard.exe" are indistinguishable by name — match the full path.
-    const name = (c.exe.split("\\").pop() ?? c.exe).replace(/\.exe$/i, "");
-    return `Get-Process -Name '${name}' -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq '${c.exe}' }`;
-  }
   // NEVER match chrome.exe by name or path: that is the user's entire browser,
   // and a relaunch would close every tab they have open. The dedicated
   // --user-data-dir on the command line is the only safe discriminator.
@@ -107,9 +71,6 @@ function scopedProcPs(c: WinClient): string {
 }
 
 function launchClientPs(c: WinClient): string {
-  if (c.kind === "electron") {
-    return `Start-Process -FilePath '${c.exe}' -ArgumentList '--remote-debugging-port=${DEBUG_PORT}' -WindowStyle Minimized`;
-  }
   const args = [
     `--user-data-dir=${c.profileDir}`,
     `--remote-debugging-port=${DEBUG_PORT}`,
@@ -396,26 +357,6 @@ export class GtowCdp {
     }
   }
 
-  /** Minimize GTO Wizard's window (Windows). Electron ignores the launcher's
-   *  minimized-start hint, so an unattended (re)launch minimizes explicitly
-   *  once the renderer is up — the solver is a background service here; its
-   *  window must never cover the table or the study panel. Fire-and-forget. */
-  private minimizeAppWindow(): void {
-    Bun.spawn(
-      [
-        "powershell",
-        "-NoProfile",
-        "-Command",
-        "Add-Type -Namespace U -Name W -MemberDefinition " +
-          "'[DllImport(\"user32.dll\")] public static extern bool ShowWindow(IntPtr h, int n);'; " +
-          "Get-Process 'GTO Wizard' -ErrorAction SilentlyContinue | " +
-          "Where-Object { $_.MainWindowHandle -ne 0 } | " +
-          "ForEach-Object { $null = [U.W]::ShowWindow($_.MainWindowHandle, 6) }",
-      ],
-      { stdout: "ignore", stderr: "ignore" },
-    );
-  }
-
   /** True once the debug port is serving the GTO Wizard page target. */
   private async debugPortReady(): Promise<boolean> {
     try {
@@ -431,12 +372,11 @@ export class GtowCdp {
   }
 
   /**
-   * Launch GTO Wizard with remote debugging enabled — the one-click version of
-   * `open -a "GTO Wizard" --args --remote-debugging-port=9222`.
+   * Launch GTO Wizard (app.gtowizard.com in its dedicated Chrome profile) with remote debugging enabled — the
+   * one-click version of scripts/start_gtow_chrome.ps1.
    *
-   * macOS won't apply new `--args` to an already-running app, so if it's up
-   * WITHOUT the debug port we must quit it first (its own Quit, escalating to a
-   * kill) and relaunch. If the port is already live we do nothing — UNLESS
+   * Windows won't apply new args to an already-running Chrome profile, so if it's up WITHOUT the debug port we must
+   * quit it first (its own Quit, escalating to a kill) and relaunch. If the port is already live we do nothing — UNLESS
    * `force` is set, which skips that shortcut and always quits+relaunches.
    * `force` exists because "debug port reachable" only proves the CDP
    * connection is alive, not that GTO Wizard is actually processing
@@ -453,22 +393,18 @@ export class GtowCdp {
 
     let relaunched = false;
     if (process.platform === "win32") {
-      // Windows: same quit-then-relaunch-with-CDP dance via PowerShell
-      // (scripts/start_gtow_ai.ps1 at the repo root is the manual twin).
+      // Windows: quit-then-relaunch-with-CDP via PowerShell
+      // (scripts/start_gtow_chrome.ps1 is the manual twin).
       const ps = (cmd: string) =>
         Bun.spawn(["powershell", "-NoProfile", "-Command", cmd], { stdout: "pipe", stderr: "ignore" });
-      // Scope every process lookup to OUR exe's full path: with both the
-      // international and the Chinese build installed, a name-only match would
-      // quit whichever one the user happens to have open.
+      // Scope every process lookup to OUR profile's --user-data-dir: a name-only match would close the whole browser.
       const client = resolveWinClient();
       if (!client) {
         return {
           ok: false,
           connected: false,
           relaunched: false,
-          error:
-            "no GTO Wizard client available: install a desktop build at " +
-            "C:\\Program Files\\GTO Wizard, or install Chrome for the dedicated-profile fallback",
+          error: "no GTO Wizard client available: install Chrome (app.gtowizard.com runs in a dedicated profile)",
         };
       }
       const scoped = scopedProcPs(client);
@@ -487,40 +423,10 @@ export class GtowCdp {
         await q.exited;
         await this.sleep(1200);
       }
-      // Minimized ≈ macOS `open -g`: unattended relaunch must never cover
-      // what the user is looking at (Ignition, the study panel) mid-session.
+      // Minimized: an unattended relaunch must never cover what the user is looking at (Ignition, the study panel).
       ps(launchClientPs(client));
     } else {
-      const running = async () => {
-        const p = Bun.spawn(["pgrep", "-x", "GTO Wizard"], { stdout: "pipe", stderr: "ignore" });
-        await p.exited;
-        return (await new Response(p.stdout).text()).trim().length > 0;
-      };
-
-      if (await running()) {
-        relaunched = true;
-        // Ask it to quit cleanly, then wait for the process to actually exit.
-        Bun.spawn(["osascript", "-e", 'quit app "GTO Wizard"'], { stdout: "ignore", stderr: "ignore" });
-        let waited = 0;
-        while ((await running()) && waited < 8000) {
-          await this.sleep(400);
-          waited += 400;
-        }
-        // Still alive after 8s → force it, then give the OS a moment to reap it.
-        if (await running()) {
-          Bun.spawn(["pkill", "-x", "GTO Wizard"], { stdout: "ignore", stderr: "ignore" });
-          await this.sleep(1200);
-        }
-      }
-
-      // -g: don't bring GTO Wizard to the foreground — it can now relaunch
-      // itself unattended (the study poller's auto-connect/wedge-recovery),
-      // and doing that with focus would cover whatever the user is actually
-      // looking at (Ignition, the assistive-play panel) mid-session.
-      Bun.spawn(["open", "-g", "-a", "GTO Wizard", "--args", `--remote-debugging-port=${DEBUG_PORT}`], {
-        stdout: "ignore",
-        stderr: "ignore",
-      });
+      return { ok: false, connected: false, relaunched: false, error: "launching the GTO Wizard client is Windows-only" };
     }
 
     // The renderer needs a few seconds to boot and open its debug target.
@@ -530,7 +436,6 @@ export class GtowCdp {
       waited += 700;
       if (await this.debugPortReady()) {
         const connected = await this.isConnected();
-        if (process.platform === "win32") this.minimizeAppWindow();
         return { ok: true, connected, relaunched };
       }
     }

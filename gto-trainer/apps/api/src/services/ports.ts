@@ -13,7 +13,7 @@
  * (rewritePorts). The explicit names still win, one launch at a time — PORT=2001 for a verify API, --panel-port for a
  * second rig — which is why `livePort` (what the install is MEANT to run on) and `port` (this process's) differ.
  *
- * config/env.ps1 derives the same six variables for PowerShell (the supervisors, the watchdog, setup, doctor); keep the
+ * config/env.ps1 derives the same port variables for PowerShell (the supervisors, the watchdog, setup, doctor); keep the
  * two tables identical.
  */
 
@@ -22,7 +22,6 @@ export const PORT_DEFAULTS = {
   charts: 8777,        // the chart server (HRC_UI_PORT)
   panel: 7700,         // the wrapper's panel; extra tables at +10, +20, +30 (PANEL_PORT)
   gtow: 9222,          // the primary GTO Wizard client's DevTools port (GTOW_CDP_PORT)
-  gtowSecondary: 9223, // the second GTO Wizard account's (GTOW_SECONDARY_CDP_PORT)
   tableCdp: 9333,      // the wrapper's table browser DevTools port (CDP_PORT, --cdp-port)
 } as const;
 export type PortName = keyof typeof PORT_DEFAULTS;
@@ -30,7 +29,7 @@ export type PortName = keyof typeof PORT_DEFAULTS;
 /** The environment variable that overrides each port for one launch. */
 export const PORT_ENV: Record<PortName, string> = {
   api: "PORT", charts: "HRC_UI_PORT", panel: "PANEL_PORT",
-  gtow: "GTOW_CDP_PORT", gtowSecondary: "GTOW_SECONDARY_CDP_PORT", tableCdp: "CDP_PORT",
+  gtow: "GTOW_CDP_PORT", tableCdp: "CDP_PORT",
 };
 
 /** PORT_OFFSET, a non-negative integer (anything else reads as 0). */
@@ -66,7 +65,7 @@ export const panelUrl = (env: NodeJS.ProcessEnv = process.env) => `http://127.0.
  */
 export function rewritePorts(text: string, env: NodeJS.ProcessEnv = process.env): string {
   const map = new Map<string, string>();
-  for (const name of ["api", "charts", "panel", "gtow", "gtowSecondary"] as PortName[]) {
+  for (const name of ["api", "charts", "panel", "gtow"] as PortName[]) {
     const now = port(name, env);
     if (now !== PORT_DEFAULTS[name]) map.set(String(PORT_DEFAULTS[name]), String(now));
   }

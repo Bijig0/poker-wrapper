@@ -2,6 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { writeEliteUltraRegistry } from "../test/eliteUltraRegistry";
 
 /**
  * POST /api/gtow/accounts/:id/probe (probeAccount, 2026-09-28): a WALLED account still accepts tree + solution POSTs —
@@ -33,7 +34,8 @@ const prevPath = process.env.GTOW_ACCOUNTS_PATH;
 const realFetch = globalThis.fetch;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "gtow-probe-"));
-  process.env.GTOW_ACCOUNTS_PATH = join(dir, "gtow-accounts.json");   // the seeded defaults: no probe solve yet
+  process.env.GTOW_ACCOUNTS_PATH = join(dir, "gtow-accounts.json");   // an Elite + Ultra registry: no probe solve yet
+  writeEliteUltraRegistry(process.env.GTOW_ACCOUNTS_PATH);
   verdicts.length = 0;
 });
 afterEach(() => {
