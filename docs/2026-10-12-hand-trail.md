@@ -189,3 +189,40 @@ code and fixed:
 
 After the fixes (last 100 hands, real env): build p50 4.5 ms, p90 35 ms, p99 76 ms (was 226); 179/179 decisions with
 their node; chips with a chart 616/949 (was 584). Full API suite and wrapper unit suite green on the merged result.
+
+## 8. The full view — dashboard `/live` (2026-10-15, branch claude/trail-full)
+
+Brady, 2026-10-14: the card shows "slivers"; he wants, per street that has happened and is happening, stacked, per
+seat: his range, his action, "super complete … a professional live can have all this info when analysing a hand live",
+with "the same UI for the ranges as … the exact node". Decisions (Q&A 2026-10-14/15):
+
+| # | Question | Answer |
+|---|---|---|
+| F1 | Where | **A full-width dashboard page per table** (`/live`, tab "Live"); the panel card stays as the compact twin and links to it |
+| F2 | Layout | Every reached street stacked, all open; one card per seat still in when the street began, hero's highlighted |
+| F3 | Per seat | **His range arriving on the street + his action chart at each action** (no "range after") |
+| F4 | EV | **Shown**, labelled the solve's: range EV per action and hero's combo EV (postflop; HRC charts carry none) |
+| F5 | Numbers | **All**: pot, to call, behind, effective stack, SPR, size as % pot, pot odds, MDF — at every action |
+| F6 | Equity | **No** (none computed; the page is the hand page's data, live) |
+| F7 | Density | Small grids; hero's latest decision full size; any grid one click to full size |
+| F8 | Outside the tree | A seat the street's solve does not hold is kept, labelled — never fetched |
+| F9 | Sites | Ignition only (CoinPoker has no row until the hand ends) |
+
+As built:
+- **API** `GET /api/dashboard/live-trail?hand=&full=1`: the same trail plus, per postflop node, the per-combo rows with
+  each combo's split and EV (`combos`), the range EV per action (`evs`, Σ w·s·ev / Σ w·s over the combos), hero's own
+  row (`heroRow`), the tree's pot; per street `seats` (every seat in when it began: the table's stack there, and — the
+  street's own solve — his range entering it with its combos) and `potIn`. Every chip carries `math` (TrailMath) from
+  the hand's own record (`startStacksOf` + `roundContributions`), light reply too. Pot odds / MDF only facing a bet,
+  raise or all-in on the street — the blinds are not one. `&since=<sig>` answers `{unchanged}` when the reply has not
+  moved (the page polls every 1.5 s while the hand is live). Full expansions are cached apart (16, by answer row).
+- `GET /api/dashboard/live-trail/tables`: per table its live row's hand and its hands answered in the last 12 h (one
+  indexed scan, `answerLog.recentHandsByTable`).
+- **Page** `dashboard.html` view `live` (`/live?table=N[&hand=ID]`): table tabs, "follow the table" (the hand in play,
+  else its last answered one), the table's recent hands, newest-street-first toggle; per street the line with each
+  action's size as % pot (hover: the full situation), the seat cards (exact-node `classGrid` with combos, the
+  `weightGrid` look for ranges, hero's mix + EV + the answer), and the inputs block per street (chart setup and line read
+  vs captured / AI tree / the stored solve, the rake sent, `sentBlock` — "Sent to GTO Wizard").
+- **Panel card**: the situation line under hero's decision and "open the full view ↗" (`:2000/live?table=&hand=`).
+- Measured (`liveTrailBench.ts --hands 100 --full`, real data): build p50 5 ms, p90 33 ms, p99 120 ms; reply p50
+  41 KB, p90 394 KB, max 1.3 MB; light reply unchanged (p99 73 ms, max 137 KB).

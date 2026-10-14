@@ -104,7 +104,7 @@ app.get("/dashboard.css", () =>
 // is not swallowed by the dashboard's one-page routing; read per request like the dashboard, so an edit is live
 app.get("/sources/charts-review", () =>
   new Response(rewritePorts(nodeFs.readFileSync(`${import.meta.dir}/charts-review.html`, "utf-8")), { headers: { "Content-Type": "text/html; charset=utf-8" } }));
-for (const p of ["/", "/home", "/hands", "/hands/*", "/analytics", "/coverage", "/sources", "/sources/*", "/sessions", "/sessions/*", "/profiles", "/profiles/*", "/gtow", "/review", "/playthrough", "/playthrough/*"]) {
+for (const p of ["/", "/home", "/hands", "/hands/*", "/analytics", "/coverage", "/sources", "/sources/*", "/sessions", "/sessions/*", "/profiles", "/profiles/*", "/gtow", "/live", "/review", "/playthrough", "/playthrough/*"]) {
   app.get(p, dashboardPage);
 }
 // the chart factory's pages (ledger, runbook, proposals, tasks) are the poker repo's: an old bookmark lands home

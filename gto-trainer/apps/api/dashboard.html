@@ -21,6 +21,7 @@
   <div class="tabs">
     <button id="tab-home" class="on" title="the overall situation: results for one account over one window, and whether the machinery that answers a spot is up">Home</button>
     <button id="tab-hands">Hands</button>
+    <button id="tab-live" title="the hand being played on each table, every street stacked: each seat's range arriving and his action chart at every action, the situation at it, and the inputs exactly as used">Live</button>
     <button id="tab-sessions">Sessions</button>
     <button id="tab-profiles" title="the accounts hands are played on: the money in them, and whether it adds up to what poker did">Profiles</button>
     <button id="tab-gtow" title="the GTO Wizard accounts answering spots: which are connected, what each has spent in the last hour and day against the 2,250 limit, walls, when each plan renews">GTO Wizard</button>
@@ -53,6 +54,7 @@
     </table>
   </div>
   <div id="view-detail" style="display:none"></div>
+  <div id="view-live" style="display:none"><div class="card" id="lv-bar"></div><div id="lv-body"></div></div>
   <div id="view-sessions" style="display:none"></div>
   <div id="view-profiles" style="display:none"></div>
   <div id="view-gtow" style="display:none"></div>
@@ -5153,7 +5155,259 @@ async function gaDelete(id) {
 }
 
 let PATH = { view: "hands", pane: null, id: null };
-const TABS = { home: "tab-home", hands: "tab-hands", sessions: "tab-sessions", profiles: "tab-profiles", gtow: "tab-gtow", analytics: "tab-analytics", coverage: "tab-coverage", sources: "tab-sources", review: "tab-replay", playthrough: "tab-play" };
+/* ================= LIVE: the hand trail, full width (2026-10-15) =================
+   Brady: "per street, that has occurred, and is occurring, cleanly have like stacked stuff that shows per street, per
+   person in each seat, whats their ranges etc what was the action, and make it super complete, to the point that a
+   professional live can have all this info when analysing a hand live" — "the same UI for the ranges as … the exact
+   node". One table's current hand (or any of its recent ones), every street stacked, one card per seat still in: his
+   range arriving on the street (postflop: the street's own solve) and his action chart at each action he took, with
+   the per-combo panels and the solve's EVs; above each action the situation at it from the hand's own record (pot,
+   price, stacks, SPR, size, pot odds, MDF). Read from GET /api/dashboard/live-trail?full=1 — never a GTO Wizard
+   request; a node nothing read is said, not fetched. Nothing is graded (docs/2026-10-12-hand-trail.md D5). */
+const LV = { table: null, hand: null, follow: true, data: null, sig: null, timer: null, tables: null, err: null, big: new Set(),
+  newestFirst: (() => { try { return localStorage.getItem("lv_newest") === "1"; } catch { return false; } })() };
+const LV_ST = { preflop: "Preflop", flop: "Flop", turn: "Turn", river: "River" };
+/** the exact node's weightGrid, except hero's class does not open its combo list by itself (a click still does): a
+ *  page of thirty grids each with a twelve-row panel open is unreadable */
+const lvWeight = (agg, heroKey, combos, heroCombo, board) => {
+  const cls = {}; for (const k in agg) cls[k] = { w: agg[k].w, acts: [agg[k].w] };
+  const mass = Object.values(agg).reduce((s, x) => s + x.w, 0);
+  return classGrid(cls, ["in range"], heroKey, { single: true, small: true, board, heroCombo, openHero: false, foot: `${mass.toFixed(1)} combos · fill height = share of the class still in range`, ...(combos ? { combos } : {}) });
+};
+function loadLive() {
+  if (PATH.table != null) LV.table = PATH.table;
+  if (PATH.hand) { if (PATH.hand !== LV.hand) { LV.hand = PATH.hand; LV.data = null; LV.sig = null; } LV.follow = false; }
+  else LV.follow = true;
+  lvTick();
+}
+async function lvTick() {
+  clearTimeout(LV.timer);
+  if (PATH.view !== "live") return;
+  if (document.hidden) { LV.timer = setTimeout(lvTick, 2000); return; }
+  try {
+    const t = await (await fetch("/api/dashboard/live-trail/tables")).json();
+    LV.tables = t.ok ? (t.tables.some((x) => x.table != null) ? t.tables.filter((x) => x.table != null) : t.tables) : null;
+    LV.err = t.ok ? null : t.error || "the study API gave no table list";
+    const tabs = LV.tables || [];
+    if (LV.table == null && tabs.length) LV.table = String((tabs.find((x) => x.live && !x.live.stale) || tabs[0]).table);
+    const cur = tabs.find((x) => String(x.table) === String(LV.table));
+    if (LV.follow && cur) {
+      const want = cur.live && !cur.live.stale ? cur.live.hand : cur.answered[0]?.hand ?? null;
+      if (want && want !== LV.hand) { LV.hand = want; LV.data = null; LV.sig = null; }
+    }
+    lvBar();
+    if (LV.hand) {
+      const r = await (await fetch(`/api/dashboard/live-trail?hand=${encodeURIComponent(LV.hand)}&full=1${LV.sig ? `&since=${encodeURIComponent(LV.sig)}` : ""}`)).json();
+      if (!r.unchanged) { LV.data = r; LV.sig = r.ok ? r.sig : null; lvDraw(); }
+    } else lvDraw();
+  } catch (e) { LV.err = `the study API did not answer (${e})`; lvBar(); }
+  if (PATH.view === "live") LV.timer = setTimeout(lvTick, LV.data && LV.data.ok && !LV.data.live ? 4000 : 1500);
+}
+const lvAgo = (ms) => { if (!ms) return ""; const s = Math.max(0, Math.round((Date.now() - ms) / 1000)); return s < 90 ? `${s} s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : fmtT(ms); };
+function lvBar() {
+  const host = $("lv-bar");
+  if (!host) return;
+  const tabs = LV.tables || [];
+  const cur = tabs.find((x) => String(x.table) === String(LV.table));
+  const tabBtns = tabs.map((x) => `<button data-lvt="${esc(x.table)}" class="${String(x.table) === String(LV.table) ? "on" : ""}" title="${x.live ? `hand ${esc(x.live.hand)} in play, written ${lvAgo(x.live.updatedAt)}` : "no hand in play"}">${x.table == null ? "the table" : `table ${esc(x.table)}`}${x.live && !x.live.stale ? " ●" : ""}</button>`).join("");
+  const recent = cur ? cur.answered.map((h) => `<span class="chip${h.hand === LV.hand ? " on" : ""}" data-lvh="${esc(h.hand)}" title="answered ${lvAgo(h.ts)}">#${esc(h.hand.slice(-5))}</span>`).join("") : "";
+  const live = cur?.live && !cur.live.stale && !cur.answered.some((h) => h.hand === cur.live.hand) ? `<span class="chip${cur.live.hand === LV.hand ? " on" : ""}" data-lvh="${esc(cur.live.hand)}" title="in play now — no answer yet">#${esc(cur.live.hand.slice(-5))} ●</span>` : "";
+  host.innerHTML = `<div class="lv-bar">
+      ${tabs.length ? `<span class="seg">${tabBtns}</span>` : `<span class="sub">${LV.err ? esc(LV.err) : "no table has played a hand in the last 12 hours"}</span>`}
+      <label class="sub"><input type="checkbox" id="lv-follow"${LV.follow ? " checked" : ""}> follow the table <span class="sub">(the hand in play, else its last answered one)</span></label>
+      <label class="sub"><input type="checkbox" id="lv-newest"${LV.newestFirst ? " checked" : ""}> newest street first</label>
+      ${LV.data?.ok ? `<a class="ev-link" href="/hands/${LV.data.dbId}" onclick="go('/hands/${LV.data.dbId}');return false">open the hand page ↗</a>` : ""}
+    </div>${recent || live ? `<div class="lv-hands"><span class="sub">hands on this table:</span> ${live}${recent}</div>` : ""}`;
+  host.querySelectorAll("[data-lvt]").forEach((b) => b.onclick = () => { LV.table = b.dataset.lvt; LV.follow = true; LV.hand = null; LV.data = null; LV.sig = null; go(`/live?table=${encodeURIComponent(LV.table)}`); });
+  host.querySelectorAll("[data-lvh]").forEach((b) => b.onclick = () => go(`/live?table=${encodeURIComponent(LV.table ?? "")}&hand=${encodeURIComponent(b.dataset.lvh)}`));
+  $("lv-follow").onchange = (e) => { if (e.target.checked) go(`/live?table=${encodeURIComponent(LV.table ?? "")}`); else { LV.follow = false; if (LV.hand) history.replaceState({}, "", `/live?table=${encodeURIComponent(LV.table ?? "")}&hand=${encodeURIComponent(LV.hand)}`); } };
+  $("lv-newest").onchange = (e) => { LV.newestFirst = e.target.checked; try { localStorage.setItem("lv_newest", LV.newestFirst ? "1" : "0"); } catch { /* private mode */ } lvDraw(); };
+}
+/** the situation at an action, in words (the hand's own numbers) */
+function lvMath(m, opt = {}) {
+  if (!m) return "";
+  const bits = [`pot <b>${m.pot}bb</b>`];
+  if (m.toCall > 0) bits.push(`to call <b>${m.toCall}bb</b>`);
+  if (m.potOdds != null) bits.push(`pot odds <b>${m.potOdds}%</b>`, `MDF <b>${m.mdf}%</b>`);
+  if (opt.size !== false && m.sizePctPot != null) bits.push(`size <b>${m.sizePctPot}%</b> pot`);
+  if (m.behind != null) bits.push(`behind ${m.behind}bb`);
+  if (m.eff != null) bits.push(`eff <b>${m.eff}bb</b>`);
+  if (m.spr != null) bits.push(`SPR <b>${m.spr}</b>`);
+  if (m.live > 2) bits.push(`${m.live} players`);
+  return bits.join(" · ");
+}
+const lvMathTip = (m) => !m ? "" : [`pot ${m.pot}bb`, m.toCall > 0 ? `to call ${m.toCall}bb` : null, m.potOdds != null ? `pot odds ${m.potOdds}% · MDF ${m.mdf}%` : null, m.sizePctPot != null ? `${m.sizePctPot}% pot` : null, m.eff != null ? `eff ${m.eff}bb` : null, m.spr != null ? `SPR ${m.spr}` : null].filter(Boolean).join(" · ");
+function lvAnswer(a) {
+  if (!a) return "";
+  const bits = [a.source, a.tier && a.tier !== a.source ? a.tier : null].filter(Boolean).map(esc).join(" · ");
+  return `<div class="lv-ans">answer <b>${esc(a.text || "—")}</b> <span class="sub">${bits}${a.latencyMs != null ? ` · ${fmtLatency(a.latencyMs)}` : ""}${a.verdict ? ` · path ${esc(a.verdict)}` : ""}${a.chart ? ` · <span data-chartname="${esc(a.chart)}">${esc(chartName(a.chart))}</span>` : ""}</span>`
+    + (a.warning ? `<div class="ans-note" style="margin-top:4px">⚠ ${esc(a.warning)}</div>` : "") + `</div>`;
+}
+const lvPoolTag = (inp, pos) => {
+  const p = (inp?.poolSeats || []).find((x) => String(x.pos).toUpperCase() === String(pos).toUpperCase());
+  if (p) return ` <span class="chip warn" title="measured pool data replaces GTO's range for this seat (${p.how === "lock" ? "his node is LOCKED to it" : "his flop range is FLOORED to it"}) — register entry ${esc(p.id)}">POOL RANGE — ${esc(p.badge)}</span>`;
+  return (inp?.poolSeats || []).length ? ` <span class="chip dim" title="the solver's own range (base GTO)">GTO range</span>` : "";
+};
+/** a seat's action chart at one node — the exact node's grid, small unless opened (or hero's latest decision) */
+function lvNodeHtml(j, st, n, chip, d) {
+  const heroKey = classOfCardsJs(j.heroCards);
+  const heroCombo = (j.heroCards || []).join("");
+  const big = LV.big.has(n.id) || (d && d.__latest);
+  const took = n.pending ? "<b>to act</b>" : n.taken ? `took <b>${esc(n.taken)}</b>${n.takenPct != null ? ` <span class="sub">(${n.takenPct}% of ${n.hero ? "your" : "his"} range does this)</span>` : ""}` : "acted";
+  let html = `<div class="lv-sec"><span class="grow" data-lvbig="${esc(n.id)}" title="${big ? "smaller grid" : "full-size grid"}">${big ? "⤡ smaller" : "⤢ larger"}</span>${took}`
+    + (chip?.math ? `<div class="lv-math">${lvMath(chip.math)}</div>` : "") + `</div>`;
+  if (!n.strategy) return html + `<div class="sub">no strategy was read at this node</div>`;
+  html += classGrid(n.strategy, n.actions, n.hero ? heroKey : null, {
+    small: !big, combos: n.combos || null, board: n.board || (st.board || []).join("") || null, heroCombo: n.hero ? heroCombo : null, openHero: !!(d && d.__latest),
+    foot: n.hero ? "your range at this decision, split by action · your class outlined · hover for the mix" : "his range at this decision, split by action · hover for the mix" });
+  if (n.evs && n.evs.some((x) => x != null)) {
+    html += `<div class="lv-ev" title="the solve's EV of each action over the whole range that takes it (bb, this street's pot share)">solve EV over the range: ${n.actions.map((a, i) => n.evs[i] == null ? null : `${esc(a)} <b>${Number(n.evs[i]).toFixed(2)}</b>`).filter(Boolean).join(" · ")}</div>`;
+  }
+  if (n.hero) {
+    const row = (n.heroRow || []).filter((h) => h.pct >= 0.5).sort((a, b) => b.pct - a.pct);
+    const mix = row.length ? row.map((h) => `<b>${esc(h.action)}</b> ${Number(h.pct).toFixed(1)}%${h.ev != null ? ` <span class="sub">ev ${Number(h.ev).toFixed(2)}</span>` : ""}`).join(" · ") : lvClassMix(n, heroKey);
+    html += `<div class="nv-hero"><span class="big">${(j.heroCards || []).map(cardHtml).join("")}</span> <span class="sub">${n.pending ? "the solve has you playing" : "you were given"}</span> ${mix}</div>`;
+    if (d?.answer) html += lvAnswer(d.answer);
+  }
+  if (n.snapped) html += `<div class="sub" style="margin-top:4px">size read on the tree: ${esc(n.snapped)}</div>`;
+  if (n.note) html += `<div class="sub" style="margin-top:4px">${esc(n.note)}</div>`;
+  return html;
+}
+function lvClassMix(n, heroKey) {
+  const e = heroKey && n.strategy ? n.strategy[heroKey] : null;
+  if (!e || !(e.w > 0)) return `<span class="warn">${esc(heroKey || "your hand")} has no weight in the range here</span>`;
+  return n.actions.map((a, i) => ({ a, p: (100 * (e.acts[i] || 0)) / e.w })).filter((x) => x.p >= 0.5).sort((x, y) => y.p - x.p)
+    .map((x) => `<b>${esc(x.a)}</b> ${x.p.toFixed(0)}%`).join(" · ") + ` <span class="sub">(your class — preflop has no per-combo split)</span>`;
+}
+function lvSeatCard(j, st, seat) {
+  const heroKey = classOfCardsJs(j.heroCards);
+  const heroCombo = (j.heroCards || []).join("");
+  const board = (st.board || []).join("") || null;
+  const byId = (id) => st.nodes.find((n) => n.id === id) || null;
+  const chips = st.chips.filter((c) => c.pos === seat.pos);
+  let html = `<div class="card lv-seat${seat.hero ? " hero" : ""}${seat.inTree === false ? " out" : ""}"><h2>${esc(seat.pos)} <span class="sub">${seat.hero ? "you · " : ""}${seat.stack != null ? `${seat.stack}bb ${st.street === "preflop" ? "dealt" : "at the start of the street"}` : ""}</span>${st.street !== "preflop" ? lvPoolTag(st.inputs, seat.pos) : ""}</h2>`;
+  // HIS RANGE ARRIVING on the street — postflop the street's own solve; preflop every seat starts with every hand
+  if (st.street !== "preflop") {
+    if (seat.range) html += `<div class="lv-sec">range arriving <span class="sub">— ${seat.rangeCombos ?? "?"} combos, as this street's solve had it</span></div>`
+      + lvWeight(seat.range, seat.hero ? heroKey : null, seat.combos || null, seat.hero ? heroCombo : null, board);
+    else if (seat.inTree === false) html += `<div class="lv-sec sub">not in the solved tree — no range read for him on this street (the multiway tree collapsed him out, or the street was solved without him)</div>`;
+    else html += `<div class="lv-sec sub">no solve holds this street — no range to show</div>`;
+  }
+  // every action he took on the street, each with the chart it was read on
+  const decs = st.decisions || [];
+  for (const ch of chips) {
+    const n = ch.node ? byId(ch.node) : null;
+    const d = n ? decs.find((x) => x.node === n.id) : null;
+    if (n) html += lvNodeHtml(j, st, n, ch, d);
+    else html += `<div class="lv-sec">${ch.pending ? "<b>to act</b>" : `took <b>${esc(ch.label)}</b>`} <span class="sub">— no chart was read for this action${ch.pending ? "" : " (after your last decision, or outside the solved tree — never fetched)"}</span>${ch.math ? `<div class="lv-math">${lvMath(ch.math)}</div>` : ""}</div>`;
+    if (!n && ch.hero) { const dd = decs.find((x) => x.actionIndex === ch.actionIndex); if (dd?.answer) html += lvAnswer(dd.answer); }
+  }
+  // preflop, a seat yet to act at your decision: his range arriving there (the AI tree's, or every hand)
+  if (st.street === "preflop" && !chips.length) {
+    const o = decs.flatMap((dd) => dd.others || []).find((x) => x.pos === seat.pos && x.range);
+    const whole = !o || !Object.keys(o.range).length;
+    html += `<div class="lv-sec">yet to act <span class="sub">— ${whole ? "every hand" : "his range arriving at your node"}</span></div>`
+      + (whole ? "" : lvWeight(o.range, null, null, null, null));
+  }
+  if (!chips.length && st.street !== "preflop") html += `<div class="lv-sec sub">no action yet on this street</div>`;
+  return html + `</div>`;
+}
+function lvInputs(j, st) {
+  const inp = st.inputs;
+  if (!inp) return "";
+  let body = "";
+  if (st.street === "preflop") {
+    const c = inp.chart;
+    if (c) {
+      const su = c.setup;
+      body += `<div class="lv-sec"><b>HRC chart</b> ${c.answered?.length && (inp.ai || []).length ? `<span class="sub">— answered your decision${c.answered.length > 1 ? "s" : ""} #${c.answered.join(", #")}</span>` : ""}</div><div class="nv-facts">`
+        + fact("chart", su ? `<b data-chartname="${esc(su.id)}">${esc(chartName(su.id))}</b> <span class="mono">${esc(su.id)}</span>` : esc(c.chart ?? "—"))
+        + (su ? fact("solver", esc(su.solver ?? "")) + fact("format", su.format ? esc(su.format) : null)
+          + fact("stacks", (su.seats || []).map((x) => `${esc(x.pos)} ${x.stackBb ?? "?"}`).join(" · ") + (su.even === false ? ' <span class="sub">(uneven)</span>' : ""))
+          + fact("blinds / ante", `${su.blinds ? `${su.blinds.sb} / ${su.blinds.bb}` : "—"} · ante ${su.anteBb == null ? "not stated" : su.anteBb === 0 ? "none" : su.anteBb + "bb"}`)
+          + fact("rake", su.rake ? `${su.rake.pct}%, cap ${su.rake.capBb}bb${su.rake.nfnd === true ? ", no flop no drop" : su.rake.nfnd === false ? ", flop or not" : ""}` : "not stated")
+          + fact("sizes", (su.sizes || []).map(esc).join(" · ")) + fact("generation", su.generation ? esc(su.generation) : null)
+          + fact("notes", (su.notes || []).length ? su.notes.map(esc).join(" · ") : null) : "")
+        + fact("line read", c.lineRead != null ? crumb(c.lineRead) : null)
+        + fact("line captured", c.lineCaptured != null ? `<span class="mono">${esc(c.lineCaptured || "root")}</span>` : null)
+        + fact("sizes moved onto the tree", c.snapped?.length ? c.snapped.map(esc).join(" · ") : "none")
+        + fact("walk", c.walkNote ? esc(c.walkNote) : null)
+        + (c.decisions || []).map((r) => fact(`decision #${r.actionIndex}`, `${esc(r.chart)} · depth ${esc(r.depth)} · read <span class="mono">${esc(r.line || "root")}</span> (captured <span class="mono">${esc(r.rawLine || "root")}</span>)${r.sizeSnaps.length ? ` · snapped: ${r.sizeSnaps.map(esc).join("; ")}` : ""}${r.foldedSeats.length ? ` · folded out: ${r.foldedSeats.map(esc).join(", ")}` : ""}`)).join("")
+        + `</div>`;
+    }
+    for (const a of inp.ai || []) {
+      const t = a.tree;
+      body += `<div class="lv-sec"><b>GTO Wizard AI preflop</b> <span class="sub">— decision #${a.actionIndex}</span></div><div class="nv-facts">`
+        + (t ? fact("tree", `<span class="mono">${esc(t.solId)}</span>${t.cacheKey ? ' <span class="sub">(read back from the solve cache)</span>' : ""}`)
+          + fact("line read", crumb(t.line)) + fact("line captured", `<span class="mono">${esc(t.rawLine || "root")}</span>`)
+          + fact("folded out of the tree", t.reduced?.length ? t.reduced.map(esc).join(", ") : null)
+          + fact("pool locks", t.poolLocks?.length ? t.poolLocks.map((l) => `${esc(l.pos)} (${esc(l.key)})`).join(" · ") : null)
+          + fact("last resort", t.lastResort ? esc(typeof t.lastResort === "string" ? t.lastResort : JSON.stringify(t.lastResort)) : null)
+          + fact("hero self-lock", t.heroSelfLock ? esc(typeof t.heroSelfLock === "string" ? t.heroSelfLock : JSON.stringify(t.heroSelfLock)) : null) : "")
+        + fact("note", a.view ? esc(a.view) : null) + `</div>`
+        + (t?.shape ? `<details><summary class="sub">the tree shape as built</summary><pre class="mono" style="white-space:pre-wrap;font-size:11px">${esc(JSON.stringify(t.shape, null, 1))}</pre></details>` : "");
+    }
+  } else if (inp.kind === "ai-chain") {
+    const s = inp.street || {}, sp = inp.spec || {};
+    const w = { spec: sp, streets: [{ ...s, street: st.street.toUpperCase() }] };
+    body += depChips(inp.departures) + `<div class="nv-facts">`
+      + fact("stored solve", `#${esc(inp.solveId)}${inp.solveOfStreet && inp.solveOfStreet !== st.street ? ` <span class="sub">(the ${esc(inp.solveOfStreet)} answer's — this street's own solve held nothing)</span>` : ""}`)
+      + fact("cloud solution", `<span class="mono" title="${esc(s.solId ?? "")}">${esc(String(s.solId ?? "—").slice(0, 8))}</span> <span class="chip ${s.created ? "good" : "dim"}">${s.created ? "fresh solve" : "cached tree"}</span>${s.solveMs != null ? ` ${fmtLatency(s.solveMs)}` : ""}${s.account ? ` · ${esc(GTOW_ACCOUNT[s.account] ?? s.account)}` : ""}`)
+      + fact("entering the street", `pot ${s.potIn != null ? r2(s.potIn) : "?"}bb · stack ${s.stackIn != null ? r2(s.stackIn) : "?"}bb · board <span class="mono">${esc(s.board ?? "")}</span>`)
+      + fact("seats in the tree", (s.players || []).map((p) => `<b>${esc(String(p).toUpperCase())}</b> ${s.combosIn?.[String(p).toUpperCase()] != null ? `${Number(s.combosIn[String(p).toUpperCase()]).toFixed(0)} combos` : ""}${lvPoolTag(inp, p)}`).join(" · "))
+      + fact("sizes pinned", s.fixedLevels?.length ? `<span class="mono">${esc(s.fixedLevels.join(" · "))}</span>` : null)
+      + fact("rake sent to GTO Wizard", sentRakeHtml(w))
+      + fact("flop-entry ranges", sp.rangeSource ? `<span data-chartname="${esc(sp.rangeSource)}">${esc(chartName(sp.rangeSource))}</span> <span class="mono">${esc(sp.rangeSource)}</span>` : null)
+      + fact("your combo", sp.heroCombo ? `<span class="mono">${esc(sp.heroCombo)}</span>` : null)
+      + `</div>` + (s.sent || s.sentFrom ? sentBlock(w, false) : "");
+  } else {
+    body += `<div class="sub">answered by ${esc(inp.kind)} — no stored solve tree to show</div>`;
+  }
+  const open = LV.openInputs?.has(st.street);
+  return `<details class="lv-inputs" data-lvin="${esc(st.street)}"${open ? " open" : ""}><summary>Inputs · ${esc(LV_ST[st.street] || st.street)} <span class="sub">— what produced the charts on this street, exactly as used</span></summary>${body}</details>`;
+}
+function lvDraw() {
+  const host = $("lv-body");
+  if (!host) return;
+  lvBar();
+  const j = LV.data;
+  if (!LV.hand) { host.innerHTML = `<div class="card sub">waiting for a hand on this table…</div>`; return; }
+  if (!j) { host.innerHTML = `<div class="card sub">loading hand ${esc(LV.hand)}…</div>`; return; }
+  if (!j.ok) { host.innerHTML = `<div class="card warn">${esc(j.error || "no trail for this hand")}</div>`; return; }
+  // hero's latest decision draws full size; the rest small, one click from full
+  const lastDec = [...j.streets].reverse().flatMap((s) => [...(s.decisions || [])].reverse()).find((d) => d.node);
+  for (const s of j.streets) for (const d of s.decisions || []) d.__latest = d === lastDec;
+  const head = `<div class="card"><div class="nv-head">
+      <span class="big" style="font-size:18px">${(j.heroCards || []).map(cardHtml).join("")}</span>
+      <span><span class="sub">you</span> <b>${esc(j.heroPos || "?")}</b></span>
+      <span><span class="sub">board</span> ${(j.board || []).length ? j.board.map(cardHtml).join("") : '<span class="sub">none yet</span>'}</span>
+      <span><span class="sub">hand</span> <span class="mono">${esc(j.hand)}</span></span>
+      <span>${j.live ? (j.pending ? '<span class="chip warn">your turn</span>' : '<span class="chip good">in play</span>') : '<span class="chip dim">hand over</span>'}</span>
+      <span class="sub">built in ${j.builtMs} ms · read from the stored answers and solves — no GTO Wizard request</span>
+    </div></div>`;
+  const streets = LV.newestFirst ? [...j.streets].reverse() : j.streets;
+  const cur = j.streets[j.streets.length - 1]?.street;
+  const body = streets.map((st) => {
+    const line = st.chips.map((c) => `<span class="lv-act${c.hero ? " hero" : ""}${c.pending ? " pending" : ""}${c.node ? "" : " nochart"}" title="${esc(lvMathTip(c.math))}"><b>${esc(c.pos)}</b> ${esc(c.label)}${c.math?.sizePctPot != null ? `<span class="m">${c.math.sizePctPot}% pot</span>` : ""}</span>`).join("");
+    const stacks = (st.seats || []).map((x) => `${esc(x.pos)} ${x.stack ?? "?"}`).join(" · ");
+    return `<div class="card lv-street${st.street === cur && j.live ? " cur" : ""}">
+      <h2>${esc(LV_ST[st.street] || st.street)} ${(st.board || []).length ? `<span>${st.board.map(cardHtml).join("")}</span>` : ""}<span class="sub">${st.potIn != null ? `pot ${st.potIn}bb · ` : ""}${stacks ? `stacks ${stacks}` : ""}${(st.seats || []).length ? ` · ${st.seats.length} players` : ""}</span></h2>
+      <div class="lv-line">${line || '<span class="sub">no action yet</span>'}</div>
+      ${st.note ? `<div class="sub" style="margin-bottom:8px">${esc(st.note)}</div>` : ""}
+      <div class="lv-seats">${(st.seats || []).map((seat) => lvSeatCard(j, st, seat)).join("")}</div>
+      ${lvInputs(j, st)}
+    </div>`;
+  }).join("");
+  // a redraw keeps where you were: the open combo panels and inputs re-open, the scroll stays
+  const y = window.scrollY;
+  host.innerHTML = head + body;
+  host.querySelectorAll("[data-lvbig]").forEach((el) => el.onclick = () => { const id = el.dataset.lvbig; if (LV.big.has(id)) LV.big.delete(id); else LV.big.add(id); lvDraw(); });
+  host.querySelectorAll("details[data-lvin]").forEach((el) => el.ontoggle = () => { LV.openInputs ??= new Set(); if (el.open) LV.openInputs.add(el.dataset.lvin); else LV.openInputs.delete(el.dataset.lvin); });
+  csFill(host);
+  window.scrollTo(0, y);
+}
+
+const TABS = { home: "tab-home", hands: "tab-hands", live: "tab-live", sessions: "tab-sessions", profiles: "tab-profiles", gtow: "tab-gtow", analytics: "tab-analytics", coverage: "tab-coverage", sources: "tab-sources", review: "tab-replay", playthrough: "tab-play" };
 const SRC_PANES = ["strategies", "pieces", "matrix", "grading", "approx"];
 $("tab-play").onclick = () => go("/playthrough");
 
@@ -5178,9 +5432,11 @@ function parsePath() {
   if (view === "review") return { view, pane: null, id: null };
   if (view === "profiles") return { view, pane: null, id: seg[1] ? decodeURIComponent(seg[1]) : null };
   if (view === "gtow") return { view, pane: null, id: null };
+  if (view === "live") { const q = new URLSearchParams(location.search); return { view, pane: null, id: null, table: q.get("table"), hand: q.get("hand") }; }
   return { view: "home", pane: null, id: null, profile: "all", window: "7d" };
 }
 function canonical(p) {
+  if (p.view === "live") { const q = new URLSearchParams(); if (p.table != null) q.set("table", p.table); if (p.hand) q.set("hand", p.hand); const s = q.toString(); return `/live${s ? `?${s}` : ""}`; }
   if (p.view === "home") return "/" + hmQuery(p.profile, p.window);
   if (p.view === "hands") return p.id ? (p.node != null ? `/hands/${p.id}/node/${p.node}` : `/hands/${p.id}`) : "/hands";
   if (p.view === "sources") return p.id ? `/sources/${p.pane === "strategies" ? "strategies" : "pieces"}/${encodeURIComponent(p.id)}` : `/sources/${p.pane}`;
@@ -5238,6 +5494,8 @@ function route() {
   $("view-analytics").style.display = PATH.view === "analytics" ? "" : "none";
   $("view-coverage").style.display = PATH.view === "coverage" ? "" : "none";
   $("view-sessions").style.display = PATH.view === "sessions" ? "" : "none";
+  $("view-live").style.display = PATH.view === "live" ? "" : "none";
+  if (PATH.view !== "live") clearTimeout(LV.timer);
   $("view-profiles").style.display = PATH.view === "profiles" ? "" : "none";
   $("view-sources").style.display = PATH.view === "sources" ? "" : "none";
   $("view-replay").style.display = PATH.view === "review" ? "" : "none";
@@ -5249,6 +5507,7 @@ function route() {
     : PATH.view === "hands" && PATH.id ? `Hand #${PATH.id} · Study Dashboard`
     : PATH.view === "sources" ? `Sources · ${PATH.id ?? PATH.pane} · Study Dashboard`
     : PATH.view === "gtow" ? "GTO Wizard accounts · Study Dashboard"
+    : PATH.view === "live" ? `Live${LV.table != null ? ` · table ${LV.table}` : ""} · Study Dashboard`
     : PATH.view === "sessions" ? `${PATH.id ? `Session ${PATH.id}` : "Sessions"} · Study Dashboard`
     : `${PATH.view[0].toUpperCase()}${PATH.view.slice(1)} · Study Dashboard`;
   if (PATH.view === "hands") {
@@ -5264,6 +5523,7 @@ function route() {
   if (PATH.view === "coverage") loadCheckCoverage();
   if (PATH.view === "sessions") { if (PATH.id) loadSession(PATH.id); else loadSessions(); }
   if (PATH.view === "profiles") loadProfiles();
+  if (PATH.view === "live") loadLive();
   if (PATH.view === "sources") { srcPane = PATH.pane; if (SRC) showSrcPane(PATH.pane, PATH.id); else loadSources(); }
   if (PATH.view === "review" && !$("replay-frame").src) $("replay-frame").src = "/replay"; // lazy, same origin
 }

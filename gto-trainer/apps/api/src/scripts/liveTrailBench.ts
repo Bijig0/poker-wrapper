@@ -4,7 +4,7 @@
  * costs (build ms, reply KB) — before the panel asks it under every live answer. Read-only: the hands row, the answer
  * log, the stored solves, the hand facts and the GTO Wizard solve cache are only read; nothing is ever requested.
  *
- *   HAND_FACTS_DB_PATH=<central poker.sqlite> bun src/scripts/liveTrailBench.ts [--hands 200] [--dump <clientHandId>]
+ *   HAND_FACTS_DB_PATH=<central poker.sqlite> bun src/scripts/liveTrailBench.ts [--hands 200] [--full] [--dump <clientHandId>]
  *
  * Do not run while a session is live (it reads the central database the live API writes).
  */
@@ -26,7 +26,7 @@ const tally = { hands: 0, failed: 0, streets: 0, chips: 0, chipsWithChart: 0, de
 const misses: string[] = [];
 for (const id of ids) {
   const t0 = performance.now();
-  const r = await app.request(`/live-trail?hand=${id}`);
+  const r = await app.request(`/live-trail?hand=${id}${process.argv.includes("--full") ? "&full=1" : ""}`);
   const text = await r.text();
   ms.push(performance.now() - t0);
   kb.push(text.length / 1024);
@@ -65,7 +65,7 @@ if (!dump) {
   console.log(`reply KB        p50 ${q(kb, 0.5).toFixed(1)}  p90 ${q(kb, 0.9).toFixed(1)}  max ${Math.max(...kb).toFixed(1)}`);
   // the cached second ask: what the panel's re-render costs
   const t1 = performance.now();
-  for (const id of ids.slice(0, 50)) await (await app.request(`/live-trail?hand=${id}`)).text();
+  for (const id of ids.slice(0, 50)) await (await app.request(`/live-trail?hand=${id}${process.argv.includes("--full") ? "&full=1" : ""}`)).text();
   console.log(`cached re-ask ms/hand ${((performance.now() - t1) / Math.min(50, ids.length)).toFixed(2)}`);
   console.log(`\nwithout a node (${misses.length}):\n${misses.slice(0, 40).join("\n")}`);
 }
