@@ -277,7 +277,9 @@ function fresh() {
     /** The connection guard (netguard.ts). `drop` = the link went bad during session `sid`: the session ends at the hand's
      *  end (session.ts maybeEndForNetDrop) and hero is never sat back in; `handled` once it has been ended (or passed on). */
     net: { last: null as any, bad: 0, good: 0, sitout: null as any, history: [] as any[],
-           drop: null as null | { sid: string; at: number; why: string; via: string; handled: boolean } },
+           drop: null as null | { sid: string; at: number; why: string; via: string; handled: boolean },
+           // a bad stretch the session chose only to be WARNED about (setup "Slow link" off, the default since 2026-10-14)
+           slow: null as null | { at: number; why: string } },
     stackReset: freshStackReset(),
     shadow: { hand: null as number | null, rc: null as any, seq: 0, done: new Map<number, any>(), agree: 0, differ: 0, last: null as any },
     // the screen checking the protocol's line (ignition/shadow.ts screenPotCheck): consecutive disagreeing ticks, and why

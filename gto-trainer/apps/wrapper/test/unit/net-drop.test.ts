@@ -20,7 +20,7 @@ const BAD = { ok: false, why: ["round trip 290 ms (max 200)"], rttMs: 290 };
 const GOOD = { ok: true, why: [], rttMs: 120 };
 
 /** One wrapper in a live session; every outside effect recorded. */
-function rig(slot: number | null, tellLeader: (b: any) => Promise<any> = async () => ({ ok: true })) {
+function rig(slot: number | null, tellLeader: (b: any) => Promise<any> = async () => ({ ok: true }), netGuard = true) {
   const tmp = scratchDirs("net-drop-");
   if (slot === null) {
     delete process.env.TABLE_SLOT;
@@ -36,7 +36,9 @@ function rig(slot: number | null, tellLeader: (b: any) => Promise<any> = async (
   S.fakeMode = false;
   S.sessions = new SessionStore(join(tmp, "data", "sessions.sqlite"));
   const sid = "session_20260925_netdrop_test";
-  const rec = S.sessions.start(sid, "strategy:test", null, null, { tables: slot ? 4 : 1, answers: true }, { ok: true }, {});
+  // netGuard = the session's "Slow link" choice (2026-10-14): true = sit out and end (the behaviour these tests were
+  // written for), false / absent = warn only, the default since
+  const rec = S.sessions.start(sid, "strategy:test", null, null, { tables: slot ? 4 : 1, answers: true, ...(netGuard ? { netGuard: true } : {}) }, { ok: true }, {});
   Object.assign(S.session, { id: sid, rec, started: time() });
   Object.assign(S.study, { on: true, sitBackIn: true, sitBackTurn: null });
   const out = { sid, sitouts: 0, backs: 0, told: [] as any[] };
@@ -195,6 +197,41 @@ test("a drop noted in one session never ends the next", async () => {
     await maybeEndForNetDrop();
     check("the next session is left running", S.session.id === sid2, J(S.session.id));
     check("  ... and the stale drop is cleared", S.net.drop === null, J(S.net.drop));
+  } finally {
+    undo();
+  }
+  expect(fails).toEqual([]);
+});
+
+test("Slow link OFF (the default since 2026-10-14): two bad probes warn, tick nothing, end nothing; the link coming back is said once", async () => {
+  const { fails, check } = checker();
+  const eq = (label: string, got: unknown, want: unknown) => check(label, J(got) === J(want), `got ${J(got)}, want ${J(want)}`);
+  const { out, inHand, later, ended, undo } = rig(null, undefined, false);
+  const feed = () => S.feed.map((f) => f.line as string);
+  const kinds = () => ((S.sessions.get(out.sid)?.events || []) as any[]).map((e) => e.kind);
+  try {
+    inHand(true);
+    await netStep(BAD);
+    check("one bad probe: the panel says it only warns", feed().some((f) => f.includes("Connection slow") && f.includes("only warns")), J(feed()));
+    await netStep(BAD);
+    eq("two in a row: no sit-out, no drop", [out.sitouts, S.net.drop, S.net.sitout], [0, null, null]);
+    check("  ... the panel says the link is slow and that it does not sit out", feed().some((f) => f.includes("CONNECTION SLOW") && f.includes("does not sit out")), J(feed()));
+    eq("  ... one net-slow event, no net-sitout / net-drop", [kinds().filter((k) => k === "net-slow").length, kinds().some((k) => k === "net-sitout" || k === "net-drop")], [1, false]);
+    await netStep(BAD);
+    eq("a third bad probe: still nothing on the table, the stretch recorded once", [out.sitouts, kinds().filter((k) => k === "net-slow").length], [0, 1]);
+    await maybeEndForNetDrop();
+    inHand(false);
+    later(5);
+    await maybeEndForNetDrop();
+    eq("the hand is over and the session goes on", [S.session.id, ended()?.ended_at ?? null], [out.sid, null]);
+    await netStep(GOOD);
+    eq("one good probe: not yet said", feed().filter((f) => f.includes("Connection is good again")).length, 0);
+    await netStep(GOOD);
+    eq("two good probes: said once, the stretch forgotten", [feed().filter((f) => f.includes("Connection is good again")).length, S.net.slow], [1, null]);
+    eq("  ... net-recovering then net-ok recorded", [kinds().includes("net-recovering"), kinds().includes("net-ok")], [true, true]);
+    await netStep(BAD);
+    await netStep(BAD);
+    eq("the next bad stretch warns again (a second net-slow), still touching nothing", [kinds().filter((k) => k === "net-slow").length, out.sitouts, S.net.drop], [2, 0, null]);
   } finally {
     undo();
   }
