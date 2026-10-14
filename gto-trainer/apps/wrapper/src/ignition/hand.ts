@@ -13,7 +13,7 @@ import { C } from "../config";
 import * as TABLES from "../tables";
 import { TOL } from "../reconcile";
 import { potVal } from "./dom";
-import { domBoardRefused, voluntaryActed, withoutRabbit } from "./ws";
+import { dealtCents, domBoardRefused, voluntaryActed, withoutRabbit } from "./ws";
 import { potAgrees, wsHand, type WsHand } from "./wsLine";
 import { seatWords, undealtStatus } from "./roster";
 
@@ -491,12 +491,18 @@ export function handStateIgnition(): Record<string, any> | null {
     const v = stackBb((s || {}).stack ?? null);
     if (v !== null) stacks.set(num, v);
   }
-  // each dealt seat's stack AS DEALT, off the table's own account on its first frame this hand (ws.ts noteAccount) —
-  // `stacks` above stay the screen's readings; the API prefers these for every seat they cover
+  // each dealt seat's stack AS DEALT: off the table's own account on its first frame this hand (ws.ts noteAccount,
+  // source "frame"), and until that frame the figure carried from the table's last word on the seat — the previous
+  // hand's result, a buy, a seat word (ws.ts dealtCents, 2026-10-14) — so every dealt seat is covered from the deal.
+  // `stacks` above stay the screen's readings; the API prefers these for every seat they cover, and
+  // `startStacksSource` says per seat whether the figure is the seat's own frame or carried
   const startStacks = new Map<number, number>();
-  for (const [s, c] of (w.startCents as Map<number, number> | undefined) ?? []) {
-    const v = toBb(c);
-    if (v !== null && dealt.includes(s)) startStacks.set(s, v);
+  const startStacksSource = new Map<number, string>();
+  for (const [s, { cents, source }] of dealtCents()) {
+    const v = toBb(cents);
+    if (v === null || !dealt.includes(s)) continue;
+    startStacks.set(s, v);
+    startStacksSource.set(s, source);
   }
   // EVERY DEALT SEAT'S CHIPS AS THE WEBSOCKET REPORTS THEM (round 3, ws.ts wsChips): chips behind now, chips in front
   // this street, dead blinds — to 4 decimals of a BB, exact at every Ignition stake. Only once the WS has reported
@@ -568,7 +574,7 @@ export function handStateIgnition(): Record<string, any> | null {
     // every seat of the table and why it was or was not dealt, the button seat, a dead button / small blind (seatRoster)
     ...(roster ? { roster } : {}),
     stacks: stacks.size ? stacks : null,
-    ...(startStacks.size ? { startStacks } : {}),
+    ...(startStacks.size ? { startStacks, startStacksSource } : {}),
     ...(wsStack.size ? { wsStack } : {}),
     ...(wsInFront.size ? { wsInFront } : {}),
     ...(wsDead.size ? { wsDead } : {}),

@@ -55,7 +55,7 @@ const UPDATE = process.env.GOLDEN_UPDATE === "1";
  *  2026-10-04: the seat roster (the dead-button fix) — S.ws.seatWords (each seat's latest PLAY_SEAT_INFO /
  *  PLAY_SEAT_RESERVATION / CO_TABLE_INFO word, ignition/roster.ts) and /hand `roster`, verified on their own against
  *  hands 4922296152 / 4922299303's frames in test/unit/dead-button.test.ts. */
-const POST_RECORDING = new Set(["startStacks", "startCents", "moneyIn", "wsStack", "wsInFront", "wsDead", "wsAccount", "wsFront", "wsStale",
+const POST_RECORDING = new Set(["startStacks", "startStacksSource", "startCents", "moneyIn", "tableCents", "tableCentsAt", "dealCents", "readRid", "wsStack", "wsInFront", "wsDead", "wsAccount", "wsFront", "wsStale",
                                 "tableFrame", "frames", "frameFilter", "rakeCents", "rakeByStreet", "rake", "potRake", "seatWords", "roster"]);
 /** POST-INS are recorded since 2026-09-25 (CO_BLIND_INFO btn 8 → a `post` action; hands 4920414446 / 4920414607):
  *  the Python recording never filed them. Compared WITHOUT them — a post-in is an extra entry in the action lists and
