@@ -159,7 +159,7 @@ export function recordServed(handKey: string, s: ServedHero): void {
 
 // ── the stored answers (a restart, the offline replays of old rows) ─────────────────────────────────────────────────
 type StoredTrace = {
-  spec?: { firstStreet?: number; planTag?: string | null; heroSeat?: string; oopPos?: string; midPos?: string; ipPos?: string; streetSeats?: (string | null)[][] };
+  spec?: { firstStreet?: number; planTag?: string | null; heroSeat?: string; oopPos?: string; midPos?: string; ipPos?: string; streetSeats?: (string | null)[][]; heroDecisionN?: number };
   streets?: { si: number; solId: string | null }[];
   nodes?: { si: number; ti: number; actor: number; heroNode: boolean; actions: { name: string; code: string; betsize: number | null; strategy: number[] }[] }[];
   served?: ServedMix;
@@ -173,6 +173,8 @@ export function heroAtOfTrace(t: StoredTrace): { k: number; n: number } | null {
   if (!h) return null;
   const sp = t.spec ?? {};
   const k = (sp.firstStreet ?? 0) + h.si;
+  // a dead-money plan's spec says hero's real action number (aiChain heroDecisionN): its line's count is not it
+  if (sp.heroDecisionN != null) return { k, n: sp.heroDecisionN };
   const heroPos = sp.heroSeat === "oop" ? sp.oopPos : sp.heroSeat === "mid" ? sp.midPos : sp.ipPos;
   const seats = sp.streetSeats?.[h.si];
   if (heroPos && seats && seats.length >= h.ti) {
