@@ -125,7 +125,7 @@ export const CHECKS: readonly CheckDef[] = [
   { id: 13, group: "process", name: "Replay determinism",
     spec: "Same capture ⇒ same trees and mix (a script/nightly job).",
     build: "built",
-    how: "Once a day, when no answer has been computed for 10 minutes, every live postflop decision of the last 2 days is replayed in a process of its own (scripts/replayDeterminism.ts) against a GTO Wizard that answers only from that decision's recorded trace — its trees, its nodes, and the cache state the live walk saw (a size-free tree it reused). The replay must ask for the same trees (pot, stack, board, sizes, rake; range weights within the trace's 4-decimal rounding), walk the same line on every street and reach the same hero node. No GTO Wizard quota. POST /api/dashboard/coverage/replay starts one now." },
+    how: "Once a day, when no answer has been computed for 10 minutes, every live postflop decision of the last 2 days is replayed in a process of its own (scripts/replayDeterminism.ts) against a GTO Wizard that answers only from that decision's recorded trace — its trees, its nodes, and the cache state the live walk saw (a size-free tree it reused). The replay must ask for the same trees (pot, stack, board, sizes, rake; range weights within the trace's 4-decimal rounding), walk the same line on every street and reach the same hero node. The replay runs under the rules the live walk recorded (the trace's policy: hero's class floor, the off-tree range, the menus …) and seeds hero's own narrowing from the trace (his earlier action multiplied by the strategy he was answered or served with — state of the live hand's key, 2026-10-14); a request that differs in its menu alone is `menu-rule-changed`, not replayable rather than a fail. No GTO Wizard quota. POST /api/dashboard/coverage/replay starts one now." },
   { id: 14, group: "output", name: "Answer at hero's node, legal actions",
     spec: "Answer is at hero's node and its actions ⊆ the table's offered buttons.",
     build: "built",
@@ -679,12 +679,14 @@ export function checkTrees(a: {
   if (a.leak?.code === "tree:recreated") return fail(9, a.leak.why, "tree:recreated");
   const plain = [...new Set(a.trees.filter((t) => t.sizeFree && !t.reroute).map((t) => t.solId))];
   const pinned = new Set(a.trees.filter((t) => !t.sizeFree && !t.reroute).map((t) => t.solId)).size;
-  const reroutes = a.trees.filter((t) => t.reroute).length;
+  // a tree re-created on another account after a 429 or a hung poll (handFacts carries the mark onto the same tree
+  // when a later decision finds it in the cache, 2026-10-14): the same request, allowed
+  const reroutes = new Set(a.trees.filter((t) => t.reroute).map((t) => t.solId)).size;
   if (plain.length > 1) {
     return fail(9, `the ${a.street}'s default tree was created ${plain.length} times in this hand (${plain.map((x) => x.slice(0, 8)).join(", ")}) — its ranges, pot or stack changed between walks`);
   }
   const now = a.tree === "none" ? "a memo hit on this decision" : a.tree === "created" ? "created on this decision" : "cached on this decision";
-  const parts = [`${plain.length} default tree`, ...(pinned ? [`${pinned} with a pinned size`] : []), ...(reroutes ? [`${reroutes} re-created after a 429 (allowed)`] : [])];
+  const parts = [`${plain.length} default tree`, ...(pinned ? [`${pinned} with a pinned size`] : []), ...(reroutes ? [`${reroutes} re-created on another account after a 429 or a hung poll (allowed)`] : [])];
   return pass(9, `${parts.join(" + ")} for the ${a.street} in this hand; ${now}`);
 }
 
@@ -698,11 +700,18 @@ export function checkNodeReads(a: { leak?: { code: string; why: string } | null;
 }
 
 // ── #11 warm-up tree = live tree ────────────────────────────────────────────────────────────────────────────────
-export function checkWarmTree(a: { street: string; origin: string | null; solId: string | null; fixed: string[] | null; warm: string[] }): CheckResult {
+export function checkWarmTree(a: {
+  street: string; origin: string | null; solId: string | null; fixed: string[] | null; warm: string[];
+  /** the trees this hand re-created on another account after a 429 or a hung poll (the tree ledger's `reroute` marks) */
+  reroutes?: string[];
+}): CheckResult {
   if (a.origin === "warm") return na(11, "this is the warm-up itself");
   if (!a.warm.length) return na(11, `no warm-up tree recorded for the ${a.street} (it warmed another street, or did not run)`);
   if (a.solId && a.warm.includes(a.solId)) return pass(11, `the live walk used the warm-up's tree (${a.solId.slice(0, 8)})`);
   if (a.fixed?.length) return pass(11, `a size was pinned since the warm-up (fixed [${a.fixed.join(",")}]) — a tree of its own, by design`);
+  // the same request re-posted on another account (a 429 or a hung poll since the warm-up, 2026-10-14): the warm-up's
+  // tree, solved again — 4924409838 (9164: warm 2a920ee3, live 515950a2 after a hung poll on primary)
+  if (a.solId && a.reroutes?.includes(a.solId)) return pass(11, `the warm-up's tree ${a.warm.map((x) => x.slice(0, 8)).join("/")} was re-created on another account after a 429 or a hung poll — the live walk used that re-creation (${a.solId.slice(0, 8)})`);
   return fail(11, `the warm-up solved tree ${a.warm.map((x) => x.slice(0, 8)).join("/")}, the live walk ${a.solId?.slice(0, 8) ?? "?"} — with no size pinned`);
 }
 

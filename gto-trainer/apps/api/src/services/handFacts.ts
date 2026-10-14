@@ -95,7 +95,9 @@ export interface TreeRecord {
   seats: string[];
   rake?: { pct_of_pot: number; cap_in_chips: number } | null;
   created: boolean;
-  /** re-created on another account after a 429 mid-walk (allowed by #9) */
+  /** re-created on another account after a 429 or a hung poll mid-walk (allowed by #9). Carried: a later decision that
+   *  finds that re-created tree in the cache records it with the mark too (2026-10-14) — it is the re-route's tree, not
+   *  a second default tree (54 false #9 and 2 false #11 in 14 days: 4924409838 9162→9164, 4923405062 7615/7616) */
   reroute?: boolean;
   at: number;
 }
@@ -322,11 +324,16 @@ class HandFacts {
 
   // ── the trees the chain asked for (TreeRecord) ───────────────────────────────────────────────────────────────
   trees(key: string): TreeRecord[] { return this.get(key)?.trees ?? []; }
-  /** One per tree, street, plan and origin — a cached tree asked for again changes nothing. */
+  /** One per tree, street, plan and origin — a cached tree asked for again changes nothing. A tree this hand recorded as
+   *  a RE-ROUTE (re-created on another account after a 429 or a hung poll) keeps that mark when a later decision finds it
+   *  in the cache and records it plain: checks #9 and #11 read the mark, and without it the re-created tree counted as a
+   *  second default tree ("created 2 times … ranges, pot or stack changed" over byte-identical requests). */
   recordTree(key: string, rec: TreeRecord): void {
-    const same = (x: TreeRecord) => x.solId === rec.solId && x.k === rec.k && x.first === rec.first && (x.plan ?? null) === (rec.plan ?? null)
-      && (x.origin ?? null) === (rec.origin ?? null) && !!x.reroute === !!rec.reroute;
-    if (this.trees(key).some(same)) return;
+    const had = this.trees(key);
+    const sameTree = (x: TreeRecord) => x.solId === rec.solId && x.k === rec.k && x.first === rec.first && (x.plan ?? null) === (rec.plan ?? null);
+    if (!rec.reroute && had.some((x) => sameTree(x) && x.reroute)) rec = { ...rec, reroute: true };
+    const same = (x: TreeRecord) => sameTree(x) && (x.origin ?? null) === (rec.origin ?? null) && !!x.reroute === !!rec.reroute;
+    if (had.some(same)) return;
     this.update(key, (d) => { d.trees = [...(d.trees ?? []), rec].slice(-TREES_MAX); });
   }
 

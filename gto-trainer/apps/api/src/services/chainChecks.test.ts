@@ -307,6 +307,33 @@ describe("#9 no unnecessary trees, #10 no node fetched twice, #11 warm-up tree =
     expect(checkWarmTree({ street: "flop", origin: "warm", solId: "w1", fixed: null, warm: ["w1"] }).status).toBe("na");
     expect(checkWarmTree({ street: "flop", origin: "live", solId: "x", fixed: null, warm: [] }).status).toBe("na");
   });
+  // THE HUNG-POLL RE-ROUTE (2026-10-14 audit finding 7; handFacts.recordTree carries the mark): 4923405062's flop ledger —
+  // the warm-up solved 0322e5a9; the live decision 7615 hung on it and re-posted 6514cb7e; 7616 found 6514cb7e in the
+  // cache (recorded plain before the fix), hung again and re-posted 2c2afa0e. #9 read "created 2 times (0322e5a9,
+  // 6514cb7e)", #11 "the warm-up solved tree 0322e5a9/6514cb7e, the live walk 2c2afa0e" — over byte-identical requests.
+  it("a tree re-created after a hung poll, found in the cache by the next decision, is not a second default tree (#9) and is the warm-up's tree (#11)", () => {
+    const ledger = [
+      { solId: "0322e5a9", sizeFree: true, origin: "warm" },
+      { solId: "0322e5a9", sizeFree: true, origin: "live" },
+      { solId: "6514cb7e", sizeFree: true, origin: "live", reroute: true },
+      { solId: "6514cb7e", sizeFree: true, origin: "warm", reroute: true },
+      { solId: "6514cb7e", sizeFree: true, origin: "live", reroute: true },   // 7616's cached find, the mark carried
+      { solId: "2c2afa0e", sizeFree: true, origin: "live", reroute: true },
+    ];
+    const nine = checkTrees({ street: "flop", tree: "cached", trees: ledger });
+    expect(nine.status).toBe("pass");
+    expect(nine.text).toContain("1 default tree + 2 re-created on another account after a 429 or a hung poll (allowed)");
+    const reroutes = [...new Set(ledger.filter((t) => t.reroute).map((t) => t.solId))];
+    const warm = [...new Set(ledger.filter((t) => t.origin === "warm").map((t) => t.solId))];
+    const eleven = checkWarmTree({ street: "flop", origin: "live", solId: "2c2afa0e", fixed: null, warm, reroutes });
+    expect(eleven.status).toBe("pass");
+    expect(eleven.text).toContain("re-created on another account");
+    // 4924409838 (9164): the warm-up's 2a920ee3, the live walk's re-creation 515950a2
+    expect(checkWarmTree({ street: "flop", origin: "live", solId: "515950a2", fixed: null, warm: ["2a920ee3"], reroutes: ["515950a2"] }).status).toBe("pass");
+    // a tree that is NOT a re-route — ranges, pot or stack really changed — still fails both
+    expect(checkTrees({ street: "flop", tree: "created", trees: [...ledger, { solId: "d0d0d0d0", sizeFree: true, origin: "live" }] }).status).toBe("fail");
+    expect(checkWarmTree({ street: "flop", origin: "live", solId: "d0d0d0d0", fixed: null, warm, reroutes }).status).toBe("fail");
+  });
 });
 
 describe("#12 solve time bounded", () => {

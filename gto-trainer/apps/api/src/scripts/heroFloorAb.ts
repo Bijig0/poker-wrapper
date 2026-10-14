@@ -309,7 +309,7 @@ if (existsSync(WALKS)) {
   for (const p of sample.plan) for (const m of MODES) { const s = seen.get(`${m}|${p.hand}`); if (s && p.decisions.every((d) => s.has(d.answer))) done.add(`${m}|${p.hand}`); }
 }
 
-const { solveAiChain, answeredHeroNode, recordAnsweredHeroNode } = await import("../services/aiChain");
+const { solveAiChain, seedAnsweredHeroNodes } = await import("../services/aiChain");
 const { withRequestScope, totalRequests } = await import("../services/requestScope");
 const { gtowSolveCache } = await import("../services/gtowSolveCache");
 const { gtowRequests } = await import("../services/gtowRequestLog");
@@ -357,16 +357,9 @@ for (const p of plans) {
       const sp = tr.spec;
       const first = sp.firstStreet ?? 0;
       // SEED the live walk's hero narrowing (heroAnswered) where this mode's own walk has not answered the point yet
-      let seeded = 0;
-      for (const n of tr.nodes ?? []) {
-        const ha = n.heroAnswered;
-        if (!ha?.strategy || n.taken == null || n.fromCheckpoint) continue;
-        const at = { handKey, plan: sp.planTag ?? null, first, k: n.si + first, earlier: (sp.streets as string[][]).slice(0, n.si), prefix: (sp.streets[n.si] as string[]).slice(0, n.ti) };
-        if (answeredHeroNode(at)) continue;
-        const taken = n.actions[n.taken];
-        recordAnsweredHeroNode(at, `seed:${ha.src}:${ha.solId}`, { action_solutions: [{ action: { code: taken.code, display_name: taken.name, betsize: taken.betsize ?? "" }, strategy: ha.strategy }] });
-        seeded++;
-      }
+      // (aiChain.seedAnsweredHeroNodes — shared with the replay check since 2026-10-14; the checkpoint's nodes are this
+      // mode's own earlier walk, not seeded)
+      const seeded = seedAnsweredHeroNodes(tr, handKey);
       const spec = { ...sp, handKey };
       delete (spec as any).checkpointOnly; delete (spec as any).walkThrough;
       const t0 = Date.now();

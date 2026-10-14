@@ -7,19 +7,26 @@
  *   bun src/scripts/replayDeterminism.ts                 the last 2 days, decisions not replayed yet
  *   bun src/scripts/replayDeterminism.ts --days 30 --redo    replay again
  *   bun src/scripts/replayDeterminism.ts --dry           print, write nothing
+ *   bun src/scripts/replayDeterminism.ts --ids 8441,8793 --redo   only these solves (any age)
+ *   --show N   print up to N results that were not identical (15)
  */
 process.env.GTOW_PREFETCH = "0";
 import { openStore, solvesDbPath } from "../services/storePaths";
 import { replayChecks, replayText, replayTrace } from "../services/replayCheck";
 
 const arg = (name: string, dflt: number) => { const i = process.argv.indexOf(name); return i >= 0 ? Number(process.argv[i + 1]) || dflt : dflt; };
-const days = arg("--days", 2), limit = arg("--limit", 2000);
+const days = arg("--days", 2), limit = arg("--limit", 2000), show = arg("--show", 15);
 const redo = process.argv.includes("--redo"), dry = process.argv.includes("--dry");
+const idsAt = process.argv.indexOf("--ids");
+const ids = idsAt >= 0 ? String(process.argv[idsAt + 1] ?? "").split(",").map((x) => Number(x.trim())).filter((x) => Number.isInteger(x) && x > 0) : [];
 
+type Row = { id: number; ts: number; client_hand_id: string | null; session_id: string | null; street: string; trace: Uint8Array<ArrayBuffer> };
 const db = openStore(solvesDbPath());
-const rows = db.query(`SELECT id, ts, client_hand_id, session_id, street, trace FROM solves
+const rows = ids.length
+  ? db.query(`SELECT id, ts, client_hand_id, session_id, street, trace FROM solves WHERE id IN (${ids.map(() => "?").join(",")}) ORDER BY id DESC`).all(...ids) as Row[]
+  : db.query(`SELECT id, ts, client_hand_id, session_id, street, trace FROM solves
   WHERE origin = 'live' AND street IN ('flop','turn','river') AND ok = 1 AND ts >= ? ORDER BY id DESC LIMIT ?`)
-  .all(Date.now() - days * 86_400_000, limit) as { id: number; ts: number; client_hand_id: string | null; session_id: string | null; street: string; trace: Uint8Array<ArrayBuffer> }[];
+  .all(Date.now() - days * 86_400_000, limit) as Row[];
 const done = redo || dry ? new Set<number>() : replayChecks.done(rows.map((r) => r.id));
 const t0 = Date.now();
 let same = 0, differ = 0, skipped = 0;
@@ -32,7 +39,7 @@ for (const r of rows) {
   if (res.ok) same++; else if (res.ok === false) differ++; else skipped++;
   const row = { solveId: r.id, ts: r.ts, replayedAt: Date.now(), clientHandId: r.client_hand_id, sessionId: r.session_id, street: r.street, ...res };
   if (!dry) replayChecks.save(row);
-  if (res.ok !== true && shown.length < 15) shown.push(`  solve ${r.id} hand ${r.client_hand_id} ${r.street}: ${replayText(row)}`);
+  if (res.ok !== true && shown.length < show) shown.push(`  solve ${r.id} hand ${r.client_hand_id} ${r.street}: ${replayText(row)}`);
 }
 console.log(`[replay] ${same + differ + skipped} decisions replayed in ${((Date.now() - t0) / 1000).toFixed(1)} s — ` +
   `${same} identical, ${differ} DIFFER, ${skipped} not replayable${dry ? " (dry run: nothing written)" : ""}`);
