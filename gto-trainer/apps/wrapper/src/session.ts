@@ -589,13 +589,37 @@ async function followSession(cfg: Record<string, any>, sid: string): Promise<voi
 export function startRouter(cfg: Record<string, any>, sid: string): void {
   S.router.cancel = true;
   const route = TABLES.isLeader() ? routeSession : followSession;
-  later(0.1, () => route(cfg, sid));
+  routerCrashed = null;
+  later(0.1, async () => {
+    try {
+      await route(cfg, sid);
+    } catch (e: any) {
+      // a router that throws is gone for the session — say so on the setup page / panel (Retry starts it again), never
+      // a lone [bg] line with the state left "idle" (2026-10-14: no table was seated and nothing said why)
+      if (S.session.id === sid) {
+        routerSet("failed", `the table router stopped: ${e?.message ?? e} — press Retry`);
+        S.sessions.event(sid, "router-crashed", { error: String(e?.message ?? e) });
+      }
+      routerCrashed = { sid, error: String(e?.message ?? e) };
+      log(`[router] crashed: ${e?.stack ?? e}`);
+    }
+  });
 }
 
+/** The session whose router threw (startRouter's catch) — Retry starts it again; a router that ENDED (session over, the
+ *  test rig's "no routing") is not one. */
+let routerCrashed: { sid: string; error: string } | null = null;
+export const routerDied = (): boolean => !!routerCrashed && routerCrashed.sid === S.session.id;
+
+/** Recording is never worth the router: a failure to start it is logged and the routing goes on. */
 export function resumeRecordingIfPending(): void {
   if (S.recPending.on) {
     S.recPending.on = false;
-    setDebug(true);
+    try {
+      setDebug(true);
+    } catch (e: any) {
+      log(`[debug] recording did not start: ${e?.message ?? e}`);
+    }
   }
 }
 

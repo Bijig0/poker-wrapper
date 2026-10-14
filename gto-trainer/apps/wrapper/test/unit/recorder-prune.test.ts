@@ -5,7 +5,7 @@
 import { expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { pruneSessions } from "../../src/ignition/recorder";
+import { dirSize, pruneSessions } from "../../src/ignition/recorder";
 import { scratchDirs } from "./helpers";
 
 const HOUR_AGO = (Date.now() - 3600 * 1000) / 1000;
@@ -53,4 +53,11 @@ test("0 turns the count limit off", () => {
   for (let i = 1; i <= 3; i++) folder(base, `session_2026100${i}_000000`, null);
   expect(pruneSessions(base, left(base), 0, null)).toEqual([]);
   expect(left(base).length).toBe(3);
+});
+
+test("a folder removed under the scan sizes as 0, never a throw (2026-10-14: the other table's prune killed the router)", () => {
+  const base = join(scratchDirs("recorder-prune-"), "debug");
+  folder(base, "session_20261010_044206", null);
+  expect(dirSize(join(base, "session_20261010_044206"))).toBeGreaterThan(0);
+  expect(dirSize(join(base, "session_20261010_044207"))).toBe(0);   // gone: the other wrapper's rmSync won
 });
