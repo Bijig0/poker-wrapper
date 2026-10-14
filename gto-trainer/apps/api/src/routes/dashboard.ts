@@ -2099,8 +2099,34 @@ interface TrailNode {
   id: string; pos: string; hero: boolean; actionIndex: number | null; pending?: boolean;
   actions: string[]; strategy: TrailGrid | null; taken: string | null; takenPct: number | null;
   snapped?: string | null; note?: string | null;
+  // ?full=1 (the live trail page, 2026-10-15): what the hand page's exact node draws beside the grid
+  /** each class's combos with their own split and EV (the solve's per-combo rows; postflop only) */
+  combos?: Record<string, ComboRow[]> | null;
+  /** the solve's EV of each action over the actor's whole range, in bb (null where the solve gave no EVs) */
+  evs?: (number | null)[] | null;
+  /** hero's own combo at his node: frequency and EV per action (postflop) */
+  heroRow?: { action: string; pct: number; ev: number | null }[] | null;
+  /** the pot at this node as the TREE had it (the solve's own number, bb) */
+  treePot?: number | null;
+  board?: string | null;
 }
-interface TrailChip { actionIndex: number | null; pos: string; hero: boolean; label: string; node: string | null; pending?: boolean }
+/** THE SITUATION AT AN ACTION, from the hand's own record (never the tree): the pot before it, what the actor owed, his
+ *  chips behind, the effective stack against the deepest live opponent, SPR, the action's size as a share of the pot,
+ *  and — facing a bet — the pot odds he was laid and the defence frequency the bet asks for. bb throughout. */
+interface TrailMath {
+  pot: number; toCall: number; behind: number | null; eff: number | null; spr: number | null; live: number;
+  /** a bet / raise: the chips added beyond the call, as % of the pot after calling */
+  sizePctPot: number | null;
+  /** facing a bet: call / (pot + call), and 1 − bet / pot — the share of his range that must continue */
+  potOdds: number | null; mdf: number | null;
+}
+interface TrailChip { actionIndex: number | null; pos: string; hero: boolean; label: string; node: string | null; pending?: boolean; math?: TrailMath | null }
+/** a seat at the start of a street: his stack there (the table's), and — postflop, ?full=1 — his range entering the street
+ *  as the street's own solve had it (null outside the solved tree: a multiway collapse, a street nothing solved) */
+interface TrailSeat {
+  pos: string; hero: boolean; stack: number | null; inTree: boolean | null;
+  range: Record<string, { w: number; combos: number }> | null; combos?: Record<string, ComboRow[]> | null; rangeCombos: number | null;
+}
 /** another seat at hero's node: his action chart there (node) or, yet to act, his range arriving (range; {} = every hand) */
 interface TrailOther { pos: string; node: string | null; range: TrailRange | null }
 interface TrailDecision {
@@ -2109,7 +2135,11 @@ interface TrailDecision {
   /** hero's own combo at the node, per action (postflop: the solve's per-combo row) */
   heroMix: { action: string; pct: number }[] | null;
 }
-interface TrailStreet { street: string; board: string[]; chips: TrailChip[]; nodes: TrailNode[]; decisions: TrailDecision[]; inputs: any; note: string | null }
+interface TrailStreet {
+  street: string; board: string[]; chips: TrailChip[]; nodes: TrailNode[]; decisions: TrailDecision[]; inputs: any; note: string | null;
+  /** the pot when the street began, and every seat still in then (the table's numbers) */
+  potIn?: number | null; seats?: TrailSeat[];
+}
 
 export const panelTrailOn = (): boolean => !/^off$/i.test(process.env.PANEL_TRAIL?.trim() ?? "");
 const TRAIL_STREETS = ["preflop", "flop", "turn", "river"] as const;
@@ -2160,6 +2190,69 @@ interface TrailCtx {
   acts: TrailAct[];
   answers: any[];
   pending: { idx: number; street: string } | null;
+  /** ?full=1: per-combo rows, EVs and the ranges entering each street (the live trail page); off = the panel's card */
+  full: boolean;
+}
+
+const r2t = (x: number) => Math.round(x * 100) / 100;
+/** The situation before hand action `i` (or hero's decision in front of him, i = actions.length) — see TrailMath. */
+function trailMathAt(hand: ParsedHand, i: number, start: Record<number, number>): TrailMath | null {
+  const a = hand.actions[i];
+  const seatOfAct = (x: ParsedHand["actions"][number]) => (x.hero ? hand.heroSeatId : x.seatId);
+  const street = a ? String(a.street) : String(hand.street ?? "preflop");
+  const seat = a ? seatOfAct(a) : hand.heroSeatId;
+  if (seat == null) return null;
+  const per = roundContributions(hand, i);
+  const order = TRAIL_STREETS.indexOf(street as (typeof TRAIL_STREETS)[number]);
+  if (order < 0) return null;
+  const putIn: Record<number, number> = {};
+  let earlier = 0;
+  for (const [st, m] of per) {
+    if (TRAIL_STREETS.indexOf(st as (typeof TRAIL_STREETS)[number]) >= order) continue;
+    for (const [s, v] of m) { earlier += v; putIn[s] = (putIn[s] ?? 0) + v; }
+  }
+  const round = per.get(street) ?? new Map<number, number>();
+  let inRound = 0, maxBet = 0;
+  for (const v of round.values()) { inRound += v; maxBet = Math.max(maxBet, v); }
+  const pot = earlier + inRound;
+  const mine = round.get(seat) ?? 0;
+  const toCall = Math.max(0, maxBet - mine);
+  const behindOf = (s: number) => (start[s] == null ? null : Math.max(0, start[s]! - (putIn[s] ?? 0) - (round.get(s) ?? 0)));
+  const folded = new Set(hand.actions.slice(0, i).filter((x) => x.type === "fold").map(seatOfAct));
+  const dealt = (hand.liveSeats?.length ? hand.liveSeats : Object.keys(hand.positions ?? {}).map(Number)).filter((s) => !folded.has(s));
+  const opp = dealt.filter((s) => s !== seat).map(behindOf).filter((x): x is number => x != null);
+  const behind = behindOf(seat);
+  // effective = what can still go in between him and the deepest opponent still in, measured before this action
+  const eff = behind != null && opp.length ? Math.min(behind, Math.max(...opp)) : behind;
+  let sizePctPot: number | null = null;
+  if (a && /^(bet|raise|all-in)$/.test(a.type) && Number(a.amount) > 0) {
+    const added = Number(a.amount) - maxBet;                     // beyond matching the bet in front of him
+    const after = pot + toCall;
+    if (added > 0 && after > 0) sizePctPot = Math.round((100 * added) / after);
+  }
+  // facing a BET: a bet / raise / all-in on this street before him — the blinds alone are not one (first in preflop)
+  const facing = toCall > 0 && hand.actions.slice(0, i).some((x) => String(x.street) === street && /^(bet|raise|all-in)$/.test(x.type));
+  return {
+    pot: r2t(pot), toCall: r2t(toCall), behind: behind == null ? null : r2t(behind), eff: eff == null ? null : r2t(eff),
+    spr: eff != null && pot > 0 ? Math.round((eff / pot) * 10) / 10 : null, live: dealt.length,
+    sizePctPot,
+    potOdds: facing ? Math.round((1000 * toCall) / (pot + toCall)) / 10 : null,
+    mdf: facing && pot > 0 ? Math.round(1000 * (1 - toCall / pot)) / 10 : null,
+  };
+}
+/** a node's EV per action over the actor's whole range, from its per-combo rows (Σ w·s·ev / Σ w·s) */
+function rangeEvs(combos: Record<string, ComboRow[]> | null | undefined, nActs: number): (number | null)[] | null {
+  if (!combos) return null;
+  const num = new Array(nActs).fill(0), den = new Array(nActs).fill(0);
+  let any = false;
+  for (const rows of Object.values(combos)) for (const r of rows) {
+    if (!r.s || !r.ev) continue;
+    for (let k = 0; k < nActs; k++) {
+      const f = r.w * (r.s[k] ?? 0), ev = r.ev[k];
+      if (f > 0 && ev != null) { num[k] += f * ev; den[k] += f; any = true; }
+    }
+  }
+  return any ? num.map((n, k) => (den[k] > 0 ? Math.round((n / den[k]) * 1000) / 1000 : null)) : null;
 }
 
 const isAiPreflopRow = (a: any): boolean => !!a && (a.tier === "ai-preflop" || /^gtow-ai/.test(a.chart ?? ""));
@@ -2325,14 +2418,18 @@ async function trailPreflop(x: TrailCtx): Promise<TrailStreet> {
  *  Keyed by the answer row (its solve never changes). A miss is not kept: it may be a store that was busy. */
 const trailSolves = new Map<number, { v: any; row: any }>();
 const TRAIL_SOLVES_MAX = 64;
-function trailSolveOf(cid: string, a: any): { v: any; row: any } | null {
-  const hit = trailSolves.get(a.id);
+/** the full expansions (?full=1, per-combo rows: a few MB each) are kept apart and fewer — four tables' current hands */
+const trailSolvesFull = new Map<number, { v: any; row: any }>();
+const TRAIL_SOLVES_FULL_MAX = 16;
+function trailSolveOf(cid: string, a: any, full = false): { v: any; row: any } | null {
+  const store = full ? trailSolvesFull : trailSolves;
+  const hit = store.get(a.id);
   if (hit) return hit;
   const got = solveStore.forAnswer(a.solve_id ?? null, cid, a.decision_key ?? null);
   if (!got.ok) return null;
-  const sv = { v: expandTrace(got.trace, { lite: true }), row: got.row };
-  trailSolves.set(a.id, sv);
-  if (trailSolves.size > TRAIL_SOLVES_MAX) trailSolves.delete(trailSolves.keys().next().value as number);
+  const sv = { v: expandTrace(got.trace, { lite: !full }), row: got.row };
+  store.set(a.id, sv);
+  if (store.size > (full ? TRAIL_SOLVES_FULL_MAX : TRAIL_SOLVES_MAX)) store.delete(store.keys().next().value as number);
   return sv;
 }
 
@@ -2350,12 +2447,13 @@ function trailPostflop(x: TrailCtx, street: string): TrailStreet {
   const onStreet = x.answers.filter((a) => a.street === street && a.text);
   const byIdx = new Map<number, any>(onStreet.map((a) => [a.__idx, a] as [number, any]));
   const onThis = (sv: { v: any } | null): any[] => (sv?.v.nodes ?? []).filter((n: any) => String(n.street ?? "").toLowerCase() === street);
-  const ownAns = [...onStreet].reverse().find((a) => onThis(trailSolveOf(x.cid, a)).length) ?? null;
-  const own = ownAns ? trailSolveOf(x.cid, ownAns) : null;
+  const solveOf = (a: any) => trailSolveOf(x.cid, a, x.full);
+  const ownAns = [...onStreet].reverse().find((a) => onThis(solveOf(a)).length) ?? null;
+  const own = ownAns ? solveOf(ownAns) : null;
   const ownRaws = onThis(own);
   let full: { v: any; row: any } | null = null, fullAns: any = null;
   for (const a of x.answers.filter((a2) => TRAIL_STREETS.indexOf(a2.street) > order && a2.text).reverse()) {
-    const sv = trailSolveOf(x.cid, a);
+    const sv = solveOf(a);
     if (onThis(sv).length > ownRaws.length) { full = sv; fullAns = a; break; }
   }
   const fullRaws = onThis(full);
@@ -2365,8 +2463,24 @@ function trailPostflop(x: TrailCtx, street: string): TrailStreet {
     id: `${street}-${src}${n.i}`, pos: String(n.actorPos ?? "?").toUpperCase(), hero: !!n.isHero, actionIndex: null,
     actions: (n.actions ?? []).map(solveActLabel), strategy: n.actorStrategy ?? null,
     taken: n.taken != null && n.actions?.[n.taken] ? solveActLabel(n.actions[n.taken]) : null, takenPct: n.takenOverallPct ?? null,
+    ...(x.full ? {
+      combos: n.actorCombos ?? null, evs: rangeEvs(n.actorCombos, (n.actions ?? []).length), treePot: n.potNode ?? null, board: n.board ?? null,
+      heroRow: Array.isArray(n.heroRow) ? n.heroRow.map((h: any) => ({ action: solveActLabel(h), pct: h.p, ev: h.ev ?? null })) : null,
+    } : {}),
     raw: n,
   });
+  // THE RANGES ENTERING THE STREET (?full=1): the street's first node in the solve that answered here, every seat of it
+  if (x.full && primary.length) {
+    const n0 = primary[0];
+    const players: string[] = (n0.players ?? []).map((pp: string) => String(pp).toUpperCase());
+    out.seats = players.map((pp, i) => {
+      const lab = seatLabel(i, players.length);
+      const range = n0.rangesIn?.[lab] ?? null;
+      return { pos: pp, hero: pp === (x.heroPos ?? "").toUpperCase(), stack: null, inTree: true, range,
+        combos: n0.rangesInCombos?.[lab] ?? null,
+        rangeCombos: range ? Math.round(Object.values(range as Record<string, { w: number }>).reduce((s, e) => s + e.w, 0) * 10) / 10 : null };
+    });
+  }
   // each action on the street → the next unread node of the same seat: from the own solve while it has one, then from
   // the later solve past the same point (a seat outside the solved tree — a multiway collapse — has none)
   let p = 0, pFull = 0;
@@ -2447,15 +2561,47 @@ function trailPostflop(x: TrailCtx, street: string): TrailStreet {
 const trailCache = new Map<string, { sig: string; body: any }>();
 const TRAIL_CACHE_MAX = 40;
 
+/**
+ * GET /live-trail/tables — THE LIVE TRAIL PAGE's table picker (2026-10-15, dashboard /live): per table, the hand being
+ * played (its live row) and the hands hero was answered on in the last 12 hours, newest first. Cheap on purpose — the
+ * page asks every 2 s: the live rows (at most one per table) and one indexed scan of the answer log's window.
+ */
+app.get("/live-trail/tables", (c) => {
+  if (!panelTrailOn()) return c.json({ ok: false, off: true, error: "the hand trail is off (PANEL_TRAIL=off)" }, 404);
+  const tables = new Map<number | null, { table: number | null; live: { hand: string; updatedAt: number | null; stale: boolean } | null; answered: { hand: string; ts: number; answerId: number }[] }>();
+  const slot = (t: number | null) => {
+    let x = tables.get(t);
+    if (!x) { x = { table: t, live: null, answered: [] }; tables.set(t, x); }
+    return x;
+  };
+  for (const r of liveRows()) {
+    let t: number | null = null, hand: string | null = null;
+    try {
+      const d = JSON.parse(r.data);
+      t = typeof d?.tableSlot === "number" ? d.tableSlot : null;
+      hand = d?.clientHandId != null ? String(d.clientHandId) : null;
+    } catch { /* unreadable row */ }
+    if (!hand) continue;
+    const x = slot(t);
+    if (!x.live || (r.updated_at ?? 0) > (x.live.updatedAt ?? 0)) x.live = { hand, updatedAt: r.updated_at ?? null, stale: r.stale };
+  }
+  for (const g of answerLog.recentHandsByTable(Date.now() - 12 * 3_600_000)) slot(g.table).answered = g.hands;
+  return c.json({ ok: true, now: Date.now(), tables: [...tables.values()].sort((a, b) => (a.table ?? 0) - (b.table ?? 0)) });
+});
+
 app.get("/live-trail", async (c) => {
   if (!panelTrailOn()) return c.json({ ok: false, off: true, error: "the hand trail is off (PANEL_TRAIL=off)" }, 404);
   const cid = c.req.query("hand") || null;
   if (!cid) return c.json({ ok: false, error: "hand (the client's hand id) is required" }, 400);
+  const full = c.req.query("full") === "1";
   const row = openDb()?.query<HandRow, [string]>(`SELECT ${HAND_COLS} FROM hands WHERE client_hand_id = ? ORDER BY rowid DESC LIMIT 1`).get(cid) ?? null;
   if (!row) return c.json({ ok: false, error: `no row for hand ${cid} yet — the wrapper writes it once the hand has an action` }, 404);
   const answers = (answerLog.forHand(cid) as any[]).map((a) => ({ ...a, __idx: answerIndexOf(a), street: String(a.street ?? "").toLowerCase() }));
   const sig = `${row.rowid}|${row.updated_at ?? ""}|${row.status ?? ""}|${answers.length}|${answers[answers.length - 1]?.id ?? ""}`;
-  const hit = trailCache.get(cid);
+  // ?since=<sig>: the page polls with the reply it holds — unchanged answers a few bytes, not the whole trail again
+  if (c.req.query("since") === sig) return c.json({ ok: true, unchanged: true, sig });
+  const cacheKey = full ? `${cid}|full` : cid;
+  const hit = trailCache.get(cacheKey);
   if (hit && hit.sig === sig) return c.json(hit.body);
   const t0 = performance.now();
   const e = enrichSync(row);
@@ -2470,7 +2616,7 @@ app.get("/live-trail", async (c) => {
   const open = [...answers].reverse().find((a) => a.text && a.__idx != null && a.__idx >= hand.actions.length);
   const pending = open ? { idx: open.__idx as number, street: open.street as string }
     : e.live && !hand.ended && hand.currentNode?.toActIsHero ? { idx: hand.actions.length, street: String(hand.street) } : null;
-  const ctx: TrailCtx = { e, hand, cid, heroPos, acts, answers, pending };
+  const ctx: TrailCtx = { e, hand, cid, heroPos, acts, answers, pending, full };
   // a street that cannot be built says why in its note — never a 500 the panel would ask again for
   const broken = (street: string, err: unknown): TrailStreet => {
     console.error(`[live-trail] hand ${cid} ${street}: ${err instanceof Error ? err.stack ?? err.message : err}`);
@@ -2482,12 +2628,54 @@ app.get("/live-trail", async (c) => {
   for (const s of TRAIL_STREETS.slice(1, reached)) {
     try { streets.push(trailPostflop(ctx, s)); } catch (err) { streets.push(broken(s, err)); }
   }
+  // THE SITUATION AT EVERY ACTION, and every street's seats with their stacks — the table's numbers (the hand's own
+  // record, not any tree's); a seat the street's solve does not hold is kept, marked outside the tree
+  try {
+    const start = startStacksOf(hand);
+    const seatByPos = new Map<string, number>();
+    for (const [s, p] of Object.entries(hand.positions ?? {})) seatByPos.set(String(p).toUpperCase(), Number(s));
+    if (heroPos && hand.heroSeatId != null) seatByPos.set(heroPos.toUpperCase(), hand.heroSeatId);
+    const firstOf = (st: string) => { const k = hand.actions.findIndex((a) => String(a.street) === st && !/^post/.test(a.type)); return k >= 0 ? k : hand.actions.length; };
+    for (const st of streets) {
+      for (const ch of st.chips) if (ch.actionIndex != null) ch.math = trailMathAt(hand, ch.actionIndex, start);
+      const at = firstOf(st.street);
+      const m0 = trailMathAt(hand, at, start);
+      st.potIn = st.street === "preflop" ? null : m0?.pot ?? null;
+      // seats still in when the street began, in the street's acting order (who acted first on it, then the rest)
+      const foldedBefore = new Set(hand.actions.slice(0, at).filter((a) => a.type === "fold").map((a) => posOfSeat(a.hero ? hand.heroSeatId : a.seatId)));
+      const order = [...new Set([...st.chips.map((ch) => ch.pos), ...(st.seats ?? []).map((x) => x.pos)])];
+      const dealt = (hand.liveSeats?.length ? hand.liveSeats : Object.keys(hand.positions ?? {}).map(Number)).map(posOfSeat);
+      for (const p of dealt) if (!order.includes(p)) order.push(p);
+      const tree = new Map((st.seats ?? []).map((x) => [x.pos, x] as [string, TrailSeat]));
+      const stackAt = (p: string) => {
+        const s = seatByPos.get(p);
+        if (s == null || start[s] == null) return null;
+        let putIn = 0;
+        for (const [rs, mm] of roundContributions(hand, at)) if (TRAIL_STREETS.indexOf(rs as (typeof TRAIL_STREETS)[number]) < TRAIL_STREETS.indexOf(st.street as (typeof TRAIL_STREETS)[number])) putIn += mm.get(s) ?? 0;
+        return r2t(start[s]! - putIn);
+      };
+      st.seats = order.filter((p) => p !== "?" && !foldedBefore.has(p)).map((p) => {
+        const t = tree.get(p);
+        return { pos: p, hero: p === (heroPos ?? "").toUpperCase(), stack: stackAt(p),
+          inTree: st.street === "preflop" ? null : t ? true : tree.size ? false : null,
+          range: t?.range ?? null, combos: t?.combos ?? null, rangeCombos: t?.rangeCombos ?? null };
+      });
+    }
+    if (pending) {
+      const pst = streets.find((s) => s.street === pending.street);
+      const ch = pst?.chips.find((x) => x.pending);
+      if (ch) ch.math = trailMathAt(hand, pending.idx, start);
+    }
+  } catch (err) {
+    console.error(`[live-trail] hand ${cid} situation: ${err instanceof Error ? err.stack ?? err.message : err}`);
+  }
   const body = {
     ok: true, hand: cid, dbId: row.rowid, live: e.live, ended: !!hand.ended, heroPos, heroCards: hand.heroCards, board: hand.board,
+    table: (e.raw as any)?.tableSlot ?? null, sig, full,
     pending, streets, builtMs: Math.round(performance.now() - t0),
   };
-  if (body.builtMs > 50) console.log(`[slow] live-trail ${cid} built in ${body.builtMs} ms`);
-  trailCache.set(cid, { sig, body });
+  if (body.builtMs > 50) console.log(`[slow] live-trail ${cid}${full ? " (full)" : ""} built in ${body.builtMs} ms`);
+  trailCache.set(cacheKey, { sig, body });
   if (trailCache.size > TRAIL_CACHE_MAX) trailCache.delete(trailCache.keys().next().value as string);
   return c.json(body);
 });

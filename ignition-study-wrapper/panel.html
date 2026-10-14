@@ -1747,6 +1747,17 @@
     return `<div class="rg-one"><div class="rg-h"><b>${esc(pos)}</b> <span class="sub">— ${whole ? "yet to act: his whole range" : "his range arriving at your node"}</span></div>`
       + classGrid(rgGrid(whole ? trWhole() : range, true), ["in range"], null, { single: true, combosOff: true, foot: "fill = share of the class in range · hover for the weight" }) + `</div>`;
   }
+  // the situation at a decision (2026-10-15): pot, price, stacks — from the hand's own record, never a tree
+  function trMathLine(m) {
+    if (!m) return "";
+    const b = [`pot <b>${m.pot}bb</b>`];
+    if (m.toCall > 0) b.push(`to call <b>${m.toCall}bb</b>`);
+    if (m.potOdds != null) b.push(`pot odds <b>${m.potOdds}%</b>`, `MDF <b>${m.mdf}%</b>`);
+    if (m.eff != null) b.push(`eff <b>${m.eff}bb</b>`);
+    if (m.spr != null) b.push(`SPR <b>${m.spr}</b>`);
+    if (m.live > 2) b.push(`${m.live} players`);
+    return `<div class="tr-ans" style="margin-top:2px">${b.join(" · ")}</div>`;
+  }
   function trAnswerLine(d) {
     const a = d && d.answer;
     if (!a) return "";
@@ -1773,7 +1784,8 @@
     }
     // hero's decision: his chart, the action he faces beside it (D3), every other seat at his node one click away
     const f = d.facing ? byId(d.facing) : null;
-    let html = trHeroBlock(n, d, j) + (f ? trSeatBlock(f, "the action you face — his action chart") : "") + trAnswerLine(d);
+    const ch = st.chips.find((x) => x.node === n.id) || null;
+    let html = trHeroBlock(n, d, j) + (f ? trSeatBlock(f, "the action you face — his action chart") : "") + trAnswerLine(d) + trMathLine(ch && ch.math);
     const others = d.others.filter((o) => !f || o.node !== f.id);
     if (others.length) {
       html += `<div class="tr-others">also at your node: ` + others.map((o) => o.node
@@ -1878,7 +1890,9 @@
     const line = cur ? cur.chips.map((c) => `${c.pos} ${c.label}`).join(", ") : "";
     $("tr-sub").innerHTML = `${rgCards(j.heroCards)} ${esc(j.heroPos || "")} · ${j.live ? (j.pending ? "your turn" : "in play") : "hand over"}`
       + ` · ${esc(TR_ST[trSel.street] || "")}: ${esc(line)}`;
-    $("tr-streets").innerHTML = j.streets.map((s) => {
+    const slot = LAST_STATE && LAST_STATE.tableSlot ? LAST_STATE.tableSlot : j.table;
+    const fullUrl = `${GTOW_API}/live?${slot != null ? `table=${encodeURIComponent(slot)}&` : ""}hand=${encodeURIComponent(j.hand)}`;
+    $("tr-streets").innerHTML = `<div class="tr-note"><a href="${esc(fullUrl)}" target="_blank" rel="noopener" style="color:#5ab0ff">open the full view ↗</a> — every street stacked, every seat's range and action chart, the situation at each action</div>` + j.streets.map((s) => {
       const chips = s.chips.map((c) => {
         const cls = ["tr-chip", c.hero ? "hero" : "", c.pending ? "pending" : "", c.node ? "" : "nochart",
           trSel.street === s.street && !trSel.other && c.node && c.node === trSel.node ? "sel" : ""].filter(Boolean).join(" ");

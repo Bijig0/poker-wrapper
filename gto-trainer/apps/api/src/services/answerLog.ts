@@ -758,6 +758,28 @@ class AnswerLog {
     }
   }
 
+  /** THE LIVE TRAIL PAGE's table picker (2026-10-15): per table slot, its hands answered since `since`, newest first
+   *  (at most `per` each) — one indexed scan of the window, not the whole log. */
+  recentHandsByTable(since: number, per = 12): { table: number | null; hands: { hand: string; ts: number; answerId: number }[] }[] {
+    try {
+      const rows = this.open()
+        .query<{ table_slot: number | null; client_hand_id: string; ts: number; id: number }, [number]>(
+          `SELECT table_slot, client_hand_id, max(ts) ts, max(id) id FROM answers
+             WHERE ts >= ? AND client_hand_id IS NOT NULL AND text IS NOT NULL
+             GROUP BY table_slot, client_hand_id ORDER BY ts DESC`)
+        .all(since);
+      const by = new Map<number | null, { hand: string; ts: number; answerId: number }[]>();
+      for (const r of rows) {
+        const l = by.get(r.table_slot) ?? [];
+        if (l.length < per) l.push({ hand: r.client_hand_id, ts: r.ts, answerId: r.id });
+        by.set(r.table_slot, l);
+      }
+      return [...by.entries()].map(([table, hands]) => ({ table, hands })).sort((a, b) => (a.table ?? 0) - (b.table ?? 0));
+    } catch {
+      return [];
+    }
+  }
+
   /** Every logged row of one declared session, oldest first. */
   forSession(sessionId: string): LoggedAnswer[] {
     try {

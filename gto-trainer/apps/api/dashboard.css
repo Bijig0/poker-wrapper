@@ -970,3 +970,33 @@ table.ckc-tbl td.num b.flag { color: var(--ev); }
 .ga-form .grid input:not([type=checkbox]), .ga-form .grid select { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg, transparent); color: var(--ink); font-size: 12.5px; }
 .ga-form .row, .ga-wrap > .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
 @media (max-width: 900px) { .ga-sum { grid-template-columns: 1fr; } .ga-form .grid { grid-template-columns: 1fr 1fr; } }
+
+/* LIVE — the hand trail, full width (2026-10-15, /live): every street stacked, one card per seat — his range arriving
+   and his action chart at each action he took, the hand page's exact-node grids. */
+.lv-bar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.lv-bar .seg button { white-space: nowrap; }
+.lv-hands { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.lv-hands .chip { cursor: pointer; }
+.lv-hands .chip.on { background: var(--chip-on); color: var(--chip-on-ink); }
+.lv-street.cur { border-color: var(--ev); }
+.lv-street > h2 { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; }
+.lv-line { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 2px 0 8px; }
+.lv-act { font-size: 13px; padding: 2px 9px; border-radius: 12px; background: var(--surface2); color: var(--ink); border: 1px solid var(--line); white-space: nowrap; }
+.lv-act.hero { background: var(--ev-soft); border-color: var(--ev); }
+.lv-act.pending { border-style: dashed; border-color: var(--ev); }
+.lv-act.nochart { opacity: .55; }
+.lv-act .m { color: var(--muted); font-size: 11.5px; margin-left: 4px; }
+.lv-seats { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 12px; align-items: start; }
+.lv-seats > .card { margin: 0; }
+.lv-seat.hero { border-color: var(--ev); }
+.lv-seat.out { opacity: .75; }
+.lv-sec { margin: 12px 0 2px; padding-top: 8px; border-top: 1px solid var(--line-soft); font-size: 13.5px; }
+.lv-sec:first-of-type { border-top: 0; padding-top: 0; }
+.lv-sec .grow { float: right; cursor: pointer; color: var(--muted); font-size: 12px; user-select: none; }
+.lv-math { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+.lv-math b { color: var(--ink); font-weight: 600; }
+.lv-ev { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+.lv-ev b { color: var(--ink); font-weight: 600; }
+.lv-ans { background: var(--surface2); border-radius: 8px; padding: 6px 10px; margin: 6px 0; font-size: 13.5px; }
+.lv-inputs { margin-top: 12px; }
+.lv-inputs > summary { cursor: pointer; font-weight: 600; }
