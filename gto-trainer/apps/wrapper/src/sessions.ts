@@ -305,7 +305,7 @@ export async function mergedConfig(preset: string, overrides: Record<string, any
       for (const [kk, vv] of Object.entries(v)) base.sources[kk] = truthy(vv);
     } else if (k === "budget" && v && typeof v === "object" && !Array.isArray(v)) {
       for (const [kk, vv] of Object.entries(v)) base.budget[kk] = emptyish(vv) ? null : pyInt(vv);
-    } else if (["answers", "recording", "autoExecute", "autoRealMoney", "autoTimeBank", "autoTopUp", "autoFoldNoAnswer", "autoSitBackIn", "keepPresent", "clearCache"].includes(k)) {
+    } else if (["answers", "recording", "autoExecute", "autoRealMoney", "autoTimeBank", "autoTopUp", "autoFoldNoAnswer", "autoSitBackIn", "keepPresent", "clearCache", "netGuard"].includes(k)) {
       base[k] = truthy(v);
     } else if (k === "gtowAccounts") {
       // the session's GTO Wizard allowlist (2026-09-27): registry slot ids this session may spend; null = every account

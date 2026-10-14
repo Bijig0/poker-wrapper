@@ -196,6 +196,9 @@
       <div class="field ign-only"><span class="k">Sat out</span>
         <div class="seg" id="autoSitBackIn"><button data-v="1" class="plain">Sit back in</button><button data-v="0" class="plain">Stay out</button></div>
         <span class="help">A few timed-out decisions and the table sits you out. With this on, the wrapper presses <b>I AM BACK</b> for you (after 2 s, up to 3 tries per sit-out), logged as a <b>sit-back-in</b> session event. It leaves you out while the connection guard has sat you out for a slow link. If you sit out on purpose, choose Stay out — it cannot tell your sit-out from the table's.</span></div>
+      <div class="field"><span class="k">Slow link</span>
+        <div class="seg" id="netGuard"><button data-v="0" class="plain">Warn only</button><button data-v="1" class="plain">Sit out and end the session</button></div>
+        <span class="help">Every 45 s the wrapper probes the path answers take (TCP round trip, lost connects and kept-alive requests to GTO Wizard). Two bad probes in a row: <b>Warn only</b> (the default) says so on the panel and in the log and leaves the table alone — answers may arrive late. <b>Sit out and end the session</b> is the connection guard as before 2026-10-14: it ticks <b>Sit out next hand</b> on your table and ends the session when the hand is over, and never sits you back in. Each bad probe is logged either way (<b>net-slow</b> / <b>net-drop</b> session events).</span></div>
       <div class="field"><span class="k">Presence</span>
         <div class="seg" id="keepPresent"><button data-v="1" class="plain">Keep Windows awake</button><button data-v="0" class="plain">Off</button></div>
         <span class="help">Windows calls this laptop <b>idle</b> after a few minutes without a keyboard or mouse, and then runs Automatic Maintenance (SSD retrim, Disk Cleanup, the search indexer), the idle Defender scan and the updaters — an unattended auto-play session looks exactly like that, and on 2026-10-09 the burst froze the study API for minutes and the tables timed you out. With this on, the leader wrapper sends one <b>zero-movement mouse event every 50 s</b> while the session runs: the cursor does not move, nothing is clicked, but Windows keeps counting you as present (no idle maintenance, no screen-off, no sleep). Logged once as a <b>presence-keeper</b> session event.</span></div>
@@ -537,6 +540,7 @@ function fillSettings() {
   seg("autoTopUp", cfg.autoTopUp === false ? 0 : 1);
   seg("autoFoldNoAnswer", cfg.autoFoldNoAnswer ? 1 : 0);
   seg("autoSitBackIn", cfg.autoSitBackIn ? 1 : 0);
+  seg("netGuard", cfg.netGuard ? 1 : 0);   // the connection guard's sit-out + end: off unless chosen (2026-10-14)
   seg("keepPresent", cfg.keepPresent === false ? 0 : 1);
   seg("stackReset", cfg.stackResetBb > 0 ? 1 : 0);
   $("stack-reset-row").style.display = cfg.stackResetBb > 0 ? "" : "none";
@@ -582,6 +586,7 @@ function readSettings() {
   cfg.autoTopUp = $("autoTopUp").querySelector("button.on")?.dataset.v !== "0";
   cfg.autoFoldNoAnswer = cfg.autoExecute && $("autoFoldNoAnswer").querySelector("button.on")?.dataset.v === "1";
   cfg.autoSitBackIn = $("autoSitBackIn").querySelector("button.on")?.dataset.v === "1";
+  cfg.netGuard = $("netGuard").querySelector("button.on")?.dataset.v === "1";
   cfg.keepPresent = $("keepPresent").querySelector("button.on")?.dataset.v !== "0";
   // the deep-stack reset: sent only when on (absent = off — the wrapper adds no default)
   if ($("stackReset").querySelector("button.on")?.dataset.v === "1") {
@@ -632,7 +637,7 @@ $("tables").querySelectorAll("button").forEach((b) => b.onclick = () => {
   schedulePreflight();
 });
 
-["recording", "autoExecute", "autoDelay", "autoFoldNoAnswer", "autoTimeBank", "autoTopUp", "autoSitBackIn", "stackReset"].forEach((id) => $(id).querySelectorAll("button").forEach((b) => b.onclick = () => {
+["recording", "autoExecute", "autoDelay", "autoFoldNoAnswer", "autoTimeBank", "autoTopUp", "autoSitBackIn", "netGuard", "stackReset"].forEach((id) => $(id).querySelectorAll("button").forEach((b) => b.onclick = () => {
   if (!cfg) return;
   $(id).querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
   readSettings(); fillSettings(); schedulePreflight();

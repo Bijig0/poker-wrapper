@@ -132,6 +132,8 @@ test("the connection guard: a link too slow for GTO Wizard answers sits us out",
     resetState();
     S.site.id = "ignition";
     S.session.id = null;
+    // the sit-out + end is the session's CHOICE since 2026-10-14 (setup "Slow link", config netGuard; off = warn only)
+    S.session.rec = { config: { netGuard: true } } as any;
     const calls: any[] = [];
     netSeams.sitout = async () => { calls.push({}); return { ok: true, clicked: true, state: "ticked" }; };
     const feed = () => S.feed.map((f) => f.line as string);

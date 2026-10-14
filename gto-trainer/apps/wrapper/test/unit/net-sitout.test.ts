@@ -161,7 +161,7 @@ test("through the guard: the second bad probe ticks the box on the table, the th
   S.fakeMode = false;
   S.sessions = new SessionStore(join(tmp, "data", "sessions.sqlite"));
   const sid = "session_20261008_netsitout_test";
-  const rec = S.sessions.start(sid, "strategy:test", null, null, { tables: 1, answers: true }, { ok: true }, {});
+  const rec = S.sessions.start(sid, "strategy:test", null, null, { tables: 1, answers: true, netGuard: true /* the sit-out is the session's choice since 2026-10-14 */ }, { ok: true }, {});
   Object.assign(S.session, { id: sid, rec, started: time() });
   const seams0 = { ...seams };
   seams.livePeers = async () => [];
