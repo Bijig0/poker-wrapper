@@ -580,6 +580,9 @@ export function pickReady(): Record<string, any> {
   };
   if (!st.on) return no("answers are off");
   if (isCgg()) return no("ClubGG is the reader only — nothing is pressed there");
+  // A HAND THE SOCKET JOINED MID-WAY (2026-10-14, ws.ts CO_TABLE_INFO): its earlier actions were never seen, so no
+  // answer for it can be trusted and nothing is pressed in it — the player plays the hand (steps.ts says so)
+  if (!isCp() && S.ws.joinedMidHand) return no("joined this hand mid-way — the table's earlier actions were not seen, nothing is pressed in it");
   const blocked = isCp() ? null : pressBlocked();
   if (blocked) return no(blocked);
   if (!st.text || !st.pick) return no("no pick yet");
@@ -1455,6 +1458,12 @@ export function unplayedAnswerWhy(key: string | null, age: number): string | nul
 export async function maybeFoldNoAnswer(): Promise<void> {
   const st = S.study;
   if (!(st.on && st.auto && st.foldNoAnswer) || isCgg()) {
+    st.noAnswerTurn = null;
+    return;
+  }
+  // A HAND THE SOCKET JOINED MID-WAY (2026-10-14, ws.ts CO_TABLE_INFO): there is no answer to wait for in it — the
+  // API refuses the hand and the player plays it himself — so the no-answer fold must never fire on it
+  if (!isCp() && S.ws.joinedMidHand) {
     st.noAnswerTurn = null;
     return;
   }

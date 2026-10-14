@@ -219,6 +219,9 @@ export const FAIL_KINDS = [
   // logs that when present and this classifier covers the history.
   "capture-fault", "no-hero-cards", "board-incomplete", "tree-gap", "ai-node-missing",
   "line-terminal", "table-shape", "size-too-far", "multiway-unsupported",
+  // the wrapper's socket joined the hand after it began (2026-10-14): its earlier actions were never seen, so the
+  // hand's decisions are refused unasked-for — availability, not a capture that went wrong (fastSolve.unsolvableCapture)
+  "joined-mid-hand",
   // the solver THREW (a bug, not the spot) — fastSolve turns it into this refusal instead of an HTTP 500 (2026-10-04)
   "solver-error",
   // GTO Wizard answered too late or refused for load: a solve / poll timed out, or its request limit (429) — 2026-10-10,
@@ -248,6 +251,7 @@ export function failKindOf(reason: string | null | undefined): FailKind {
   if (!r) return "unknown";
   if (r.includes("not hero's turn")) return "not-heros-turn";
   if (r.includes("hand is over")) return "hand-over";
+  if (r.includes("joined this hand mid-way")) return "joined-mid-hand";
   if (r.includes("isn't in the chart range") || r.includes("not in range")) return "not-in-range";
   if (r.includes("not offered (have")) return "off-tree";
   if (r.includes("no solution for this spot")) return "no-solution";

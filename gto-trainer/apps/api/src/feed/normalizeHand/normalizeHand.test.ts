@@ -115,4 +115,20 @@ describe("normalizeHand", () => {
     expect(() => normalizeHand({ board: "AdKc2h" })).toThrow(/array of card strings/);
     expect(() => normalizeHand({ street: "turnpike" })).toThrow(/street must be one of/);
   });
+
+  it("carries the client's own ask and the joined-mid-hand flag (2026-10-14), dropping malformed values alone", () => {
+    const { hand } = normalizeHand({ ...FULL_HAND, askedToCall: 1.6, askedSizes: { betPot: 11, halfPot: 5.6 }, joinedMidHand: true });
+    expect(hand!.askedToCall).toBe(1.6);
+    expect(hand!.askedSizes).toEqual({ betPot: 11, halfPot: 5.6 });
+    expect(hand!.joinedMidHand).toBe(true);
+    const zero = normalizeHand({ ...FULL_HAND, askedToCall: 0, askedSizes: { betPot: "x", halfPot: 3 }, joinedMidHand: "yes" }).hand!;
+    expect(zero.askedToCall).toBe(0);
+    expect(zero.askedSizes).toEqual({ halfPot: 3 });
+    expect(zero.joinedMidHand).toBeUndefined();
+    const none = normalizeHand({ ...FULL_HAND, askedToCall: -1, askedSizes: { betPot: null } }).hand!;
+    expect(none.askedToCall).toBeUndefined();
+    expect(none.askedSizes).toBeUndefined();
+    expect("joinedMidHand" in none).toBe(false);
+    expect(normalizeHand(FULL_HAND).hand!.askedToCall).toBeUndefined();
+  });
 });

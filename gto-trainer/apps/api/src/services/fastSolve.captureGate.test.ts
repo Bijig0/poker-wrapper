@@ -120,3 +120,21 @@ describe("preflopCaptureFaults", () => {
     expect(preflopCaptureFaults(h)).toEqual([]);
   });
 });
+
+describe("joined mid-hand (2026-10-14)", () => {
+  test("a hand the wrapper's socket joined after it began is refused with its own kind, before any piece, and the kind is one the log knows", async () => {
+    const r = unsolvableCapture(hand({ joinedMidHand: true }));
+    expect(r).not.toBeNull();
+    if (!r || r.ok) throw new Error("expected a refusal");
+    expect(r.kind).toBe("joined-mid-hand");
+    expect(r.reason).toContain("joined this hand mid-way — the table's earlier actions were not seen");
+    const { failKindOf, isFailKind } = await import("./answerLog");
+    expect(isFailKind(r.kind)).toBe(true);
+    expect(failKindOf(r.reason)).toBe("joined-mid-hand");
+    const { NEUTRAL_FAIL_KINDS } = await import("./chainPath");
+    expect(NEUTRAL_FAIL_KINDS.has("joined-mid-hand")).toBe(true);
+    // the flag absent or false: not a refusal
+    expect(unsolvableCapture(hand({ joinedMidHand: false }))).toBeNull();
+    expect(unsolvableCapture(hand())).toBeNull();
+  });
+});

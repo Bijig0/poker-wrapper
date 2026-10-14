@@ -229,8 +229,9 @@ export interface FitEmpties {
   ai?: "answered" | "failed" | "timeout"; aiWhy?: string; aiMs?: number;
 }
 
-/** The terminal refusal classes fastSolve itself emits — see FastSolveResult.kind. */
-export type RefusalKind = "capture-fault" | "no-hero-cards" | "board-incomplete";
+/** The terminal refusal classes fastSolve itself emits — see FastSolveResult.kind. `joined-mid-hand` (2026-10-14):
+ *  the wrapper's socket joined the hand after it began, so its line is not a capture at all. */
+export type RefusalKind = "capture-fault" | "no-hero-cards" | "board-incomplete" | "joined-mid-hand";
 
 /** Depth: explicit > hero's stack AS DEALT (else the shortest dealt stack) snapped to a library depth.
  *  AS DEALT (2026-09-22): the stack behind now plus everything put in this hand. The depth picks the chart rung
@@ -4665,6 +4666,13 @@ export function preflopCaptureFaults(hand: ParsedHand): string[] {
  */
 export function unsolvableCapture(hand: ParsedHand): FastSolveResult | null {
   const street = hand.currentNode.street;
+  // JOINED MID-HAND (2026-10-14, the answer-path audit's independent review): the wrapper's socket joined this hand
+  // after it began (its first frames were the join snapshot), so the table's earlier actions were never seen and the
+  // line is a guess at best — never a spot. ~5 hero decisions in 24 days. The wrapper presses nothing in it either.
+  if (hand.joinedMidHand === true) {
+    return { ok: false, kind: "joined-mid-hand", street,
+      reason: "joined this hand mid-way — the table's earlier actions were not seen, so its line cannot be trusted; play this hand yourself" };
+  }
   // EH-9 — hero's cards
   const known = (hand.heroCards ?? []).filter((c) => /^[2-9TJQKA][shdc]$/i.test(c));
   if (known.length < 2) {

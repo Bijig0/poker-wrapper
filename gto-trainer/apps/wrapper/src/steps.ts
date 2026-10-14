@@ -198,6 +198,14 @@ export function currentStep(): Step | null {
   if (S.disconnect) return mk({ id: "disconnected", phase: "seat", text: "Connection to the poker server lost — nothing is pressed on this table", level: "bad", at: num(S.disconnect.at) ?? now });
   if (L.feedStalled) return mk({ id: "reader-stalled", phase: "read", text: "Table reader stopped — not reading the table", level: "bad", at: num(L.feedStalled.since) ?? now, tick: true, detail: L.feedStalled.error ? [String(L.feedStalled.error).slice(0, 100)] : undefined });
 
+  // A HAND THE SOCKET JOINED MID-WAY (2026-10-14, ws.ts CO_TABLE_INFO): its earlier actions were never seen — no export
+  // (usually: no deal frame), or one the API refuses; nothing is pressed and no no-answer fold fires (relay.ts). Said
+  // here so the player knows this hand is his to play.
+  const joined = S.ws.joinedMidHand;
+  if (joined && (!h || h.joinedMidHand)) {
+    return mk({ id: "joined-mid-hand", phase: "read", level: "warn", at: num(joined.at) ? Math.trunc(joined.at * 1000) : now,
+                text: "Joined this hand mid-way — the table's earlier actions were not seen: play it yourself, nothing is answered or pressed in it" });
+  }
   if (!h) {
     if (L.hero === "sitting-out") return mk({ id: "sitting-out", phase: "seat", text: "Sitting out — press I AM BACK to rejoin", level: "warn" });
     if (L.hero === "waiting-for-bb") return mk({ id: "waiting-bb", phase: "seat", text: "Waiting for the big blind to be dealt in", level: "info" });
