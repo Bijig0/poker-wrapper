@@ -73,11 +73,25 @@ const FIRST_POLL_MS = Number(process.env.GTOW_FIRST_POLL_MS ?? 600);
  * on a walk read hands the tree to the next account (`hung`) only when a cold tree can be expected to be re-posted and
  * read there inside what is left (COLD_TREE_MS); otherwise the read keeps polling to its clock — no answer, as before.
  * Ledger 2026-10-01..08: ~1.4% of polls ended status 0 at ~8.8 s (the cap) — hangs, not slow replies.
+ *
+ * WHAT A "HUNG" POLL IS (2026-10-14, hand 4924409679: KsJd river vs a raise, no answer in 62 s, the time bank gone).
+ * GTO Wizard's spot-solution read of a custom solution that is still SOLVING does not answer 204 — it HOLDS the request
+ * until the solve is done (ledger 9-28..10-14: 93 polls sent before a solution's first 200, 0 answered 204, 93 "hung").
+ * So a hang is a solve slower than POLL_HANG_MS, not a lost request: that night's two cold river solves took 10.6 s and
+ * 11.1 s to their root (idle-account median 2.3 s, p90 6.5 s; 7.1% take over 8 s, 23.7% when the account already has
+ * a solve running — gtowSessions routeInFlightOn). The re-post above threw the running solve away and started a cold
+ * one on the other account, and the next attempt stacked a third. Hence THE HEDGE (aiChain, GTOW_HUNG_HEDGE): a hung
+ * walk read keeps polling its solve AND posts the same tree on another account (hedgeSolution — the tree's own solve is
+ * not forgotten); the first node to answer wins and that solve is adopted for the rest of the hand (adoptSolution).
+ * Measured odds at the hang (4 s left of a 12 s read): keep polling 43.5%, a cold re-post ~64%, both ~80%.
+ *   GTOW_HUNG_HEDGE=on (unset) | off (2026-10-08..14: forget the hung solve, re-post cold on another account)
  */
 export const pollHangMs = (env: Record<string, string | undefined> = process.env): number => {
   const n = Number(env.GTOW_POLL_HANG_MS);
   return Number.isFinite(n) && n > 0 ? n : 8_000;
 };
+export const hungHedgeOn = (env: Record<string, string | undefined> = process.env): boolean =>
+  !/^(off|0|false|no)$/i.test(env.GTOW_HUNG_HEDGE?.trim() ?? "");
 /**
  * A COLD TREE'S COST, tree + solution POSTs + its first node read, MEDIAN — the 40-hand core menus re-run of 2026-10-08
  * (721 requests, origin stress500-core-menus): two-seat 3.9 s (p90 6.3), three-seat 6.3 s (p90 11.5). A hung walk read
@@ -809,9 +823,7 @@ class GtowApi {
       let id: string | null = null;
       try { const j = JSON.parse(t); id = j?.id ?? j?.custom_solution_id ?? null; } catch { /* below */ }
       if (!id) return { ok: false, status: 502, error: `node lock: no solution id in the reply (${t.slice(0, 120)})` };
-      this.solOwner.set(String(id), owner);
-      this.solCreatedAt.set(String(id), Date.now());
-      if (this.solCreatedAt.size > READY_SET_MAX) this.solCreatedAt.delete(this.solCreatedAt.keys().next().value as string);
+      this.registerSolve(String(id), owner, this.solSeats.get(parent) ?? 2);
       return { ok: true, solId: String(id), created: true, session: owner, why: "node-locked child of the street's solve" };
     })();
     this.lockedPending.set(memoKey, p);
@@ -898,15 +910,70 @@ class GtowApi {
         return { ok: true, solId: made.solId, created: false, session: made.session, stored: true,
           why: `served from the persistent solve cache — no request (the in-process cache did not hold it: ${why})` };
       }
-      this.solOwner.set(made.solId, made.session);
-      this.solSeats.set(made.solId, input.mid ? 3 : 2);
-      this.solCreatedAt.set(made.solId, Date.now());
-      if (this.solCreatedAt.size > READY_SET_MAX) this.solCreatedAt.delete(this.solCreatedAt.keys().next().value as string);
+      this.registerSolve(made.solId, made.session, input.mid ? 3 : 2);
       tstepDetail("new tree");
       return { ok: true as const, solId: made.solId, created: true, session: made.session, why, ...(made.route ? { route: made.route } : {}) };
     })().finally(() => this.treePending.delete(key));
     this.treePending.set(key, p);
     return p;
+  }
+
+  /** A solve this process just POSTed: its owner, seats and age (the readiness probe), and routing's in-flight count. */
+  private registerSolve(solId: string, session: GtowSessionId, seats: number): void {
+    this.solOwner.set(solId, session);
+    this.solSeats.set(solId, seats);
+    this.solCreatedAt.set(solId, Date.now());
+    if (this.solCreatedAt.size > READY_SET_MAX) this.solCreatedAt.delete(this.solCreatedAt.keys().next().value as string);
+    gtowSessions.noteSolvePosted(session, solId);
+  }
+
+  /**
+   * THE HEDGE (2026-10-14, see the header "WHAT A HUNG POLL IS"): a SECOND solve of the same tree on another account,
+   * posted while the first keeps running. Unlike ensureCustomSolution it never answers from the tree cache or the store,
+   * never joins a pending solve and does not replace the tree's solve — the caller races the two reads and adopts the
+   * winner (adoptSolution). `avoid`: the account(s) whose solve hung. The hedge is a real solve like any other: owner,
+   * age, seats, in-flight count, and its node replies go to the persistent store under the same tree key.
+   */
+  async hedgeSolution(input: CustomTreeInput, opts: { avoid?: GtowSessionId[]; /** the solve this one hedges (hedgeSibling) */ of?: string } = {}): Promise<EnsureResult> {
+    const body = this.buildCustomTree(input);
+    const solution = { actions: "", board: input.board };
+    const made = await this.postCustomSolution(body, solution, { multiway: Boolean(input.mid) }, opts.avoid ?? []);
+    if (!made.ok) return made;
+    if (this.cache.enabled) {
+      const ck = cacheKeyOf("post", body, solution);
+      this.cache.noteTree(ck.key, "post", ck.body);
+      this.noteSolKey(made.solId, ck.key);
+    }
+    this.registerSolve(made.solId, made.session, input.mid ? 3 : 2);
+    if (opts.of) {
+      const real = isStoredSolId(opts.of) ? this.realOf.get(opts.of) ?? opts.of : opts.of;
+      for (const id of new Set([opts.of, real])) this.hedges.set(id, made.solId);
+      this.hedges.set(made.solId, real);
+      if (this.hedges.size > READY_SET_MAX) this.hedges.delete(this.hedges.keys().next().value as string);
+    }
+    return { ok: true, solId: made.solId, created: true, session: made.session, why: "hedge: a second solve of the tree on another account", ...(made.route ? { route: made.route } : {}) };
+  }
+
+  /** hedge pairs (hedgeSolution `of`): each solve → the one solved alongside it, both ways */
+  private hedges = new Map<string, string>();
+  /** The solve already running alongside `solId` as its hedge (a poller's later attempt races it again instead of posting a
+   *  third solve), or null. */
+  hedgeSibling(solId: string): string | null {
+    const s = this.hedges.get(solId) ?? (isStoredSolId(solId) ? this.hedges.get(this.realOf.get(solId) ?? "") : undefined);
+    return s ?? null;
+  }
+
+  /** Make `solId` the solve this process hands out for these tree params from now on (a hedge that answered first):
+   *  every later ensureCustomSolution of the tree returns it, and a stored tree's synthetic id resolves to it. */
+  adoptSolution(input: CustomTreeInput, solId: string): void {
+    const key = this.treeKey(input);
+    const prev = this.treeSolCache.get(key);
+    this.treeSolCache.set(key, solId);
+    if (prev && isStoredSolId(prev)) {
+      this.realOf.set(prev, solId);
+      const owner = this.solOwner.get(solId);
+      if (owner) this.solOwner.set(prev, owner);
+    }
   }
 
   /**
@@ -1051,9 +1118,7 @@ class GtowApi {
       if (!made.ok) return made;
       // the real solve is a solve like any other: its owner, its age for the readiness probe, its replies stored
       this.noteSolKey(made.solId, key);
-      this.solOwner.set(made.solId, made.session);
-      this.solCreatedAt.set(made.solId, Date.now());
-      if (this.solCreatedAt.size > READY_SET_MAX) this.solCreatedAt.delete(this.solCreatedAt.keys().next().value as string);
+      this.registerSolve(made.solId, made.session, seats);
       this.cache.noteMaterialised(key);
       // …and it stands for the stored tree unless a 429 reroute forgot this materialisation while it was in flight
       if (this.matPending.get(gcId) === p) {
@@ -1085,6 +1150,12 @@ class GtowApi {
     const deadline = t0 + timeoutMs;
     // anything but the chain's single-street shape keeps the old behaviour: poll until a strategy or the timeout
     if (!streetRooted(q)) return this.pollNode(solId, q, t0, deadline, "legacy", caller, repostMs);
+    // THE HEDGE TRIGGER IS THE SOLVE'S AGE (2026-10-14, live check of the hedge: the hang landed on the readiness probe the
+    // PREFETCH had started, the walk merely joined it and never saw a hang — so no hedge). A walk read (`repostMs` set) of
+    // a solve that has run for POLL_HANG_MS without serving its root, with a cold tree's cost still on its clock, comes
+    // back `hung` at that moment whichever read owns the probe; the probe runs on (the solve is still being polled — the
+    // caller's hedge reads it again and joins it). A solve this process did not create is aged from this read's start.
+    const hangAt = (this.solCreatedAt.get(solId) ?? t0) + pollHangMs();
     while (!this.solReady.has(solId)) {
       let probe = this.solProbe.get(solId);
       const mine = !probe;
@@ -1094,12 +1165,31 @@ class GtowApi {
       } else {
         tmark(`GTO Wizard node [${q.riverActions ?? q.turnActions ?? q.flopActions ?? "root"}] waits for the solve's readiness probe`, `solution ${solId.slice(0, 8)}`);
       }
-      // a probe another read started runs on ITS clock; this read waits no longer than its own (the hung-poll bound)
-      const pr = mine ? await probe : await within(probe, deadline - Date.now(),
-        (): NodeFetchResult => ({ ok: false, status: 504, error: `AI solve timed out — the solve's readiness probe (another read's) did not answer within this read's ${(timeoutMs / 1000).toFixed(1)} s` }));
+      // a probe another read started runs on ITS clock; this read waits no longer than its own (the hung-poll bound) —
+      // and a walk read waits no longer than the solve's hang age (above)
+      const until = repostMs != null ? Math.min(deadline, Math.max(hangAt, Date.now() + 1)) : deadline;
+      const late = (): NodeFetchResult => ({ ok: false, status: 504, error: `AI solve timed out — the solve's readiness probe${mine ? "" : " (another read's)"} did not answer within this read's ${(timeoutMs / 1000).toFixed(1)} s` });
+      const pr = mine && repostMs == null ? await probe : await within(probe, until - Date.now(), late);
       if (this.solReady.has(solId)) {
         if (isRootQuery(q)) return pr.ok ? { ...pr, solveSecs: (Date.now() - t0) / 1000, src: mine ? "fetched" : "joined" } : pr;
         break;
+      }
+      if (!pr.ok && (pr as { hung?: boolean }).hung) return pr;   // the probe's own poll hung with time to re-post: as before
+      if (repostMs != null && !pr.ok && Date.now() >= hangAt) {
+        const left = deadline - Date.now();
+        const owner = this.solOwner.get(solId) ?? "?";
+        const age = ((Date.now() - (this.solCreatedAt.get(solId) ?? t0)) / 1000).toFixed(1);
+        if (left >= repostMs) {
+          console.log(`[gtow-hung] ${owner} solve ${solId.slice(0, 8)} not served after ${age} s, ${(left / 1000).toFixed(1)} s left on the read — hedged on another account (a cold ${this.solSeats.get(solId) ?? "?"}-seat tree needs ~${(repostMs / 1000).toFixed(1)} s)`);
+          tmark("GTO Wizard solve slow", `${owner} solve ${solId.slice(0, 8)} not served after ${age} s — hedged on another account`);
+          return { ok: false, status: 0, hung: true, error: `GTO Wizard solve hung on ${owner} (not served after ${age} s) — ${(left / 1000).toFixed(1)} s left, hedged on another account` };
+        }
+        if (Date.now() >= deadline) return pr;
+        // too little left to hedge: wait for the probe to the clock, as before
+        const rest = mine ? await probe : await within(probe, deadline - Date.now(), late);
+        if (this.solReady.has(solId)) { if (isRootQuery(q)) return rest.ok ? { ...rest, solveSecs: (Date.now() - t0) / 1000, src: mine ? "fetched" : "joined" } : rest; break; }
+        if (rest.ok || rest.status !== 504 || Date.now() >= deadline) return rest;
+        continue;
       }
       // The probe ran on ITS creator's deadline. The chain's speculative prefetch fires first, with 6 s, and the
       // live walk (12 s) joins it — so a probe that merely timed out must not fail a caller who still has time:
@@ -1129,6 +1219,7 @@ class GtowApi {
     const line0 = () => line || "root";
     let empties = 0;
     const markReady = () => {
+      gtowSessions.noteSolveReady(solId);   // routing: this solve no longer runs on its account (every mode)
       if (mode === "legacy") return;
       this.solReady.add(solId);
       if (this.solReady.size > READY_SET_MAX) this.solReady.delete(this.solReady.values().next().value as string);

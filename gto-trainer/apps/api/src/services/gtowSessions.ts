@@ -111,10 +111,23 @@ export interface GtowSessionCfg {
  * Walls, plan refusals, signed-out holds and the session allowlist filter exactly as before; live-token-first stays
  * (a CDP sniff must never delay an answer while a signed-in account is ready). Counts come from services/gtowLoad (in
  * memory, every origin, no query per route).
+ *
+ * SOLVES IN FLIGHT FIRST (2026-10-14, hand 4924409679 — the KJ river that ran the time bank out). GTO Wizard runs an
+ * account's custom solves roughly one at a time: measured on 5,334 solves (ledger 9-28..10-14), a solve POSTed while the
+ * same account still had an unanswered one took 4.5 s to its first node (median) against 2.3 s on an idle account, and
+ * 23.7% took longer than 8 s against 7.1%. That night three cold solves were stacked on `primary` inside 27 s while
+ * `ultra-2` sat idle, and none of the last two answered. So, inside each group above, the accounts with NO solve of this
+ * process still running come first (then the trailing-hour count as before). A solve is "in flight" from its POST until
+ * its first answered node (or FLIGHT_MAX_MS, whichever comes first) — fed by gtowApi / gtowAiPreflop, never queried.
+ *   GTOW_ROUTE_INFLIGHT=on (unset) | off (the trailing-hour order alone, as 2026-10-08..14)
  */
 export type RouteMode = "balanced" | "priority";
 export const routeMode = (env: Record<string, string | undefined> = process.env): RouteMode =>
   /^priority$/i.test(env.GTOW_ROUTE?.trim() ?? "") ? "priority" : "balanced";
+export const routeInFlightOn = (env: Record<string, string | undefined> = process.env): boolean =>
+  !/^(off|0|false|no)$/i.test(env.GTOW_ROUTE_INFLIGHT?.trim() ?? "");
+/** a solve nobody has read a node of counts as running for at most this long (a lost read must not pin an account) */
+export const FLIGHT_MAX_MS = 45_000;
 const envNum = (v: string | undefined, d: number) => { const n = Number(v); return v != null && v.trim() !== "" && Number.isFinite(n) && n > 0 ? n : d; };
 export const hourBudget = (env: Record<string, string | undefined> = process.env): number => envNum(env.GTOW_HOUR_BUDGET, 1_800);
 export const dayBudget = (env: Record<string, string | undefined> = process.env): number => envNum(env.GTOW_DAY_BUDGET, 5_000);
@@ -131,6 +144,8 @@ export interface RouteExplained {
   overBudget: GtowSessionId[];
   hourBudget: number;
   dayBudget: number;
+  /** this process's solves still running on each account (GTOW_ROUTE_INFLIGHT) — the first ordering key when on */
+  flight: Record<GtowSessionId, number>;
 }
 
 /** Why a session is not taking work right now. */
@@ -286,6 +301,29 @@ class GtowSessions {
   private load: LoadView | null;
   /** env for the route switches (tests pass their own) */
   private env: Record<string, string | undefined>;
+  /** solves this process POSTed and has not yet read a node of: id → the account and when (see routeInFlightOn) */
+  private flight = new Map<string, { id: GtowSessionId; at: number }>();
+
+  /** A solve was just POSTed on `id` (gtowApi / gtowAiPreflop): it counts against the account until noteSolveReady. */
+  noteSolvePosted(id: GtowSessionId, solId: string, now = Date.now()): void {
+    this.flight.set(solId, { id, at: now });
+    if (this.flight.size > 500) this.flight.delete(this.flight.keys().next().value as string);
+  }
+
+  /** A node of the solve answered (any 200): it is no longer running. Unknown ids are ignored. */
+  noteSolveReady(solId: string): void {
+    this.flight.delete(solId);
+  }
+
+  /** This process's solves still running on `id`: POSTed within FLIGHT_MAX_MS and no node answered yet. */
+  inFlight(id: GtowSessionId, now = Date.now()): number {
+    let n = 0;
+    for (const [sol, f] of this.flight) {
+      if (now - f.at > FLIGHT_MAX_MS) { this.flight.delete(sol); continue; }
+      if (f.id === id) n++;
+    }
+    return n;
+  }
 
   constructor(opts: { load?: LoadView | null; env?: Record<string, string | undefined> } = {}) {
     this.load = opts.load ?? null;
@@ -435,15 +473,22 @@ class GtowSessions {
     const hb = hourBudget(this.env), db = dayBudget(this.env);
     const cands = this.ranked(need).filter((s) => s.cfg.enabled && this.allowed(s) && this.capable(s, need) && (ignoreBlocks || !this.blocked(s)));
     const loads: Record<GtowSessionId, RouteLoad> = {};
-    if (mode === "priority") return { mode, ids: cands.map((s) => s.cfg.id), loads, overBudget: [], hourBudget: hb, dayBudget: db };
+    const flight: Record<GtowSessionId, number> = {};
+    if (mode === "priority") return { mode, ids: cands.map((s) => s.cfg.id), loads, overBudget: [], hourBudget: hb, dayBudget: db, flight };
     const now = Date.now();
-    for (const s of cands) loads[s.cfg.id] = this.loadOf(s.cfg.id, now);
+    const useFlight = routeInFlightOn(this.env);
+    for (const s of cands) {
+      loads[s.cfg.id] = this.loadOf(s.cfg.id, now);
+      flight[s.cfg.id] = useFlight ? this.inFlight(s.cfg.id, now) : 0;
+    }
     const forKind = (s: SessionState) => !(need.multiway || need.preflop) || (s.cfg.multiway && !s.multiwayRefused);
     const over = (s: SessionState) => loads[s.cfg.id]!.overHour || loads[s.cfg.id]!.overDay;
     const rank = (s: SessionState) => (forKind(s) ? 0 : 2) + (over(s) ? 1 : 0);
-    // ranked() is in preference order and Array.sort is stable: equal loads keep it (round-robin as the counts level)
-    const ids = [...cands].sort((a, b) => rank(a) - rank(b) || loads[a.cfg.id]!.count - loads[b.cfg.id]!.count).map((s) => s.cfg.id);
-    return { mode, ids, loads, overBudget: cands.filter(over).map((s) => s.cfg.id), hourBudget: hb, dayBudget: db };
+    // ranked() is in preference order and Array.sort is stable: equal loads keep it (round-robin as the counts level).
+    // Inside a rank: the accounts with no solve of ours still running first (GTO Wizard queues an account's solves —
+    // routeInFlightOn), then the trailing-hour count.
+    const ids = [...cands].sort((a, b) => rank(a) - rank(b) || flight[a.cfg.id]! - flight[b.cfg.id]! || loads[a.cfg.id]!.count - loads[b.cfg.id]!.count).map((s) => s.cfg.id);
+    return { mode, ids, loads, overBudget: cands.filter(over).map((s) => s.cfg.id), hourBudget: hb, dayBudget: db, flight };
   }
 
   /**
@@ -854,12 +899,15 @@ export function routeWhy(id: GtowSessionId, ex: RouteExplained, order: GtowSessi
   const fmt = (x: GtowSessionId) => { const l = ex.loads[x]; return l ? `${x} ${l.h1}${l.pending ? `+${l.pending}` : ""}/h ${l.h24}/24h` : x; };
   const head = ex.ids[0];
   const ahead = ex.ids.slice(0, Math.max(0, ex.ids.indexOf(id)));
+  const busy = ex.ids.filter((x) => (ex.flight[x] ?? 0) > 0);
   const why = skipped.length ? `fallback (${skipped.join("; ")})`
     : id !== head && ahead.length ? `fallback (live token first: ${ahead.join(", ")} had none in hand)`
     : ex.overBudget.includes(id) ? `budget (every capable account is past a soft budget — hour ${ex.hourBudget} / day ${ex.dayBudget} — this one is the least loaded)`
+    : busy.length && !(ex.flight[id] ?? 0) ? "least-loaded (no solve of ours running on it)"
     : "least-loaded";
   const past = ex.overBudget.filter((x) => x !== id);
-  return `${why}; trailing hour: ${ex.ids.map(fmt).join(" · ")}${past.length ? `; past a soft budget: ${past.join(", ")}` : ""}`;
+  const inFlight = busy.length ? `; solves in flight: ${busy.map((x) => `${x} ${ex.flight[x]}`).join(" · ")}` : "";
+  return `${why}; trailing hour: ${ex.ids.map(fmt).join(" · ")}${inFlight}${past.length ? `; past a soft budget: ${past.join(", ")}` : ""}`;
 }
 
 /** The `[gtow-route]` line: api.log, and the answer's own trace (X-Answer-Trace) — which account took a tree and why,

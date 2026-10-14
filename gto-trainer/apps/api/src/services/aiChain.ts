@@ -1,4 +1,4 @@
-import { bbAmount, coldTreeMs, gtowApi, postflopNodeTimeoutMs, type CarriedMenus, type CarriedSeat, type CustomTreeInput, type NodeSource, type PlayedWager } from "./gtowApi";
+import { bbAmount, coldTreeMs, gtowApi, hungHedgeOn, postflopNodeTimeoutMs, type CarriedMenus, type CarriedSeat, type CustomTreeInput, type NodeSource, type PlayedWager } from "./gtowApi";
 import { solveStore } from "./solveStore";
 import { isDurableKey } from "./handFacts";
 import { servedActionIndex, servedHeroStrategy, type ServedMix } from "./servedStrategy";
@@ -16,9 +16,37 @@ import { chipsAfter, contestedChips, effectiveStack } from "../utils/tableMoney/
 import { handFacts, type StreetRecord } from "./handFacts";
 import type { RangeCheck, StreetPath } from "./chainPath";
 import {
-  OFF_TREE_DUST, blendOffTreeRange, isOffTreePostflop, offTreeBlendW, offTreeLock, offTreeLockOn, offTreeRangeMode, offTreeSoftT, offTreeStats, softOffTreeRange,
+  OFF_TREE_DUST, blendOffTreeRange, isOffTreePostflop, offTreeBlendW, offTreeLock, offTreeLockFallbackOn, offTreeLockOn, offTreeRangeMode, offTreeSoftT, offTreeStats, softOffTreeRange,
   type OffTreeLine, type OffTreeSoft,
 } from "./offTree";
+
+/** a solve POSTed for the hedge (gtowApi.hedgeSolution's reply) */
+type HedgeMade = Awaited<ReturnType<typeof gtowApi.hedgeSolution>>;
+/** one node read of the walk (readNode's reply), and one of the hedge's two reads (which solve it was on) */
+type WalkRead = { r: Awaited<ReturnType<typeof gtowApi.customNode>>; src: NodeSource | "failed"; ms: number };
+type HedgeRead = WalkRead & { made: HedgeMade | null };
+/** the parent's node clock when a locked child is late: its node is usually in hand already (the street's prefetch) */
+const LOCK_FALLBACK_MS = 4_000;
+
+/**
+ * The first of two node reads to answer OK wins; when both fail, the first one's failure (the hung solve's) is returned.
+ * Neither read is cancelled — each ends on its own clock (a few polls at most on the loser).
+ */
+export function firstOk<T extends { r: { ok: boolean } }>(a: Promise<T>, b: Promise<T>): Promise<T> {
+  return new Promise<T>((res) => {
+    const fails: (T | undefined)[] = [undefined, undefined];
+    let failed = 0;
+    const on = (p: Promise<T>, i: 0 | 1) => p.then((v) => {
+      if (v.r.ok) { res(v); return; }
+      fails[i] = v;
+      if (++failed === 2) res(fails[0] ?? fails[1]!);
+    }, (e) => {
+      fails[i] = { r: { ok: false, status: 0, error: `${e instanceof Error ? e.message : e}` } } as unknown as T;
+      if (++failed === 2) res(fails[0] ?? fails[1]!);
+    });
+    on(a, 0); on(b, 1);
+  });
+}
 import { currentRequestScope } from "./requestScope";
 import {
   checkHeroCombo, checkHeroNode, checkLine, checkMistakeLines, checkNodeReads, checkRangesSane, checkSeats, checkSolveTime, cumulativeOf, type CumulativeLine,
@@ -1490,12 +1518,13 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     const nodeSrc: { cache: number; joined: number; fetched: number; fetchMs: number; store?: number } = { cache: 0, joined: 0, fetched: 0, fetchMs: 0 };
     const nodeLeaks: string[] = [];
     // every node read is accounted for: the cache it came from, or how long its poll took
-    const readNode = async (solId: string, codesStr: string) => {
+    const readNode = async (solId: string, codesStr: string, clockMs?: number): Promise<WalkRead> => {
       const t = Date.now();
       // the node clock: 12 s heads-up, 15 s on a 3-player tree (menu C, 2026-10-08 — gtowApi.postflopNodeTimeoutMs)
       // a hung poll with a cold tree's cost still on the clock comes back `hung` (gtowApi, the hung-poll bound): the walk
-      // re-posts the tree on another account below
-      const r = await gtowApi.customNode(solId, { [QKEY[k]!]: codesStr, board: streetBoard }, postflopNodeTimeoutMs(n), "walk", { repostMs: coldTreeMs(n) });
+      // hedges (or re-posts) the tree on another account below. `clockMs`: a read on a clock of its own (the late lock's
+      // fallback, the hedge's two reads) — such a read never comes back `hung`, it polls its solve to the clock.
+      const r = await gtowApi.customNode(solId, { [QKEY[k]!]: codesStr, board: streetBoard }, clockMs ?? postflopNodeTimeoutMs(n), "walk", clockMs == null ? { repostMs: coldTreeMs(n) } : {});
       const ms = Date.now() - t;
       const src: NodeSource | "failed" = r.ok ? (r.src ?? (r.cached ? "cache" : "fetched")) : "failed";
       if (src === "fetched" && fetched) {
@@ -1673,6 +1702,10 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     /** an off-tree villain action on this street was node-locked (OFFTREE_LOCK=on): the rest of the street reads the
      *  locked child, so hero's node is not kept as a mid-street checkpoint (a resume would read the unlocked tree) */
     let lockedOnStreet = false;
+    /** the unlocked solve the lock forked from, and the villain node's record that holds the lock — the late lock's
+     *  fallback reads hero's node on it (offTreeLockFallbackOn) */
+    let lockParent: string | null = null;
+    let lockSoft: OffTreeSoft | null = null;
     let ti0 = 0;
     let heroDataAtTi0: any = null;
     if (resuming) {
@@ -1841,7 +1874,49 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       // cold tree's cost is still on the read's clock — the same tree is re-posted with that account LEFT OUT (no block:
       // its other solves go on), once; too little time left and gtowApi polls on to the clock, as before.
       const hung = !nq.ok && !!nq.hung;
-      if (!nq.ok && (nq.status === 429 || hung) && !rerouted) {
+      if (hung && !rerouted && hungHedgeOn()) {
+        // THE HEDGE (2026-10-14, hand 4924409679 — gtowApi header "WHAT A HUNG POLL IS"): the hung solve is still
+        // RUNNING on GTO Wizard (a read of an unfinished solve is held, not refused), so it is not thrown away: this
+        // read goes on polling it on a fresh node clock while the same tree is posted on another account (routing puts
+        // it on an idle one), and the first node to answer wins. The winner becomes the street's solve for the rest of
+        // the hand (adoptSolution); the loser's read ends on its own clock. GTOW_HUNG_HEDGE=off: the 2026-10-08 re-post.
+        rerouted = true;
+        const from: string | null = gtowApi.ownerOf(ens.solId) ?? ens.session;
+        const oldSol: string = String(ens.solId);
+        tstep("GTO Wizard slow on this account → a second solve on another account, first to answer wins", { limitMs: postflopNodeTimeoutMs(n) });
+        const tHedge = Date.now();
+        const clock = postflopNodeTimeoutMs(n);
+        const keep: Promise<HedgeRead> = readNode(oldSol, codes.join("-"), clock).then((x) => ({ ...x, made: null }));
+        // a hedge already running alongside this solve (the poller's earlier attempt posted it): race it again, no third solve
+        const sibling = gtowApi.hedgeSibling(oldSol);
+        const hedge: Promise<HedgeRead> = (async (): Promise<HedgeRead> => {
+          const made: HedgeMade = sibling
+            ? { ok: true, solId: sibling, created: false, session: gtowApi.ownerOf(sibling) ?? "?", why: "hedge: the second solve posted by an earlier attempt, still running" }
+            : await gtowApi.hedgeSolution(treeInput, { ...(from ? { avoid: [from] } : {}), of: oldSol });
+          if (!made.ok) return { r: made, src: "failed", ms: Date.now() - tHedge, made: null };
+          return { ...(await readNode(made.solId, codes.join("-"), clock)), made };
+        })();
+        const won: HedgeRead = await firstOk(keep, hedge);
+        const made = won.made;
+        const hedgeWon = !!made?.ok && won.r.ok;
+        const acct = made?.ok ? made.session : "?";
+        if (made && made.ok && won.r.ok) {
+          gtowApi.adoptSolution(treeInput, made.solId);
+          ens = made;
+          if (made.created) solves++;
+          streetRec.solId = String(made.solId);
+          streetRec.account = made.session;
+          if (made.route) streetRec.route = made.route;
+          streetRec.treeWhy = `${streetRec.treeWhy ? `${streetRec.treeWhy}; then ` : ""}a second solve on ${acct} answered first (hedge after a hung poll on ${from}; the first solve kept running${sibling ? "; the hedge was posted by an earlier attempt" : ""})`;
+          streetRec.leak = { code: "tree:hung-hedge", why: `the ${STREET[k]!.toLowerCase()} tree was solved a second time on ${acct} after a poll on ${from} hung — the second solve answered first` };
+          recordTree(true);
+        } else {
+          streetRec.treeWhy = `${streetRec.treeWhy ? `${streetRec.treeWhy}; then ` : ""}kept after a hung poll on ${from} (a hedge solve was posted${made?.ok ? ` on ${acct}` : ""}; ${won.r.ok ? "the first solve answered first" : "neither answered in time"})`;
+          streetRec.leak = { code: "tree:hung-hedge", why: `a poll on ${from} hung: the ${STREET[k]!.toLowerCase()} tree was solved a second time on another account as a hedge — ${won.r.ok ? "the first solve answered first" : "neither solve answered in time"}` };
+        }
+        tspan(`chain ${STREET[k]} hedge after a hung poll`, tHedge, hedgeWon ? `the hedge on ${acct} won` : won.r.ok ? `the first solve (${from}) won` : "no answer from either");
+        ({ r: nq, src: nodeSrc, ms: nodeMs } = won);
+      } else if (!nq.ok && (nq.status === 429 || hung) && !rerouted) {
         tstep("GTO Wizard account busy → trying another account", { limitMs: postflopNodeTimeoutMs(n) });
         rerouted = true;
         const from = gtowApi.ownerOf(ens.solId) ?? ens.session;
@@ -1860,6 +1935,22 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
             : { code: "tree:429-reroute", why: `the ${STREET[k]!.toLowerCase()} tree was re-created on another GTO Wizard account after a 429 mid-walk` };
           recordTree(true);
           ({ r: nq, src: nodeSrc, ms: nodeMs } = await readNode(ens.solId, codes.join("-")));
+        }
+      }
+      // THE LATE LOCK'S FALLBACK (2026-10-14, offTree.offTreeLockFallbackOn): a read on the node-locked child that failed
+      // — its solve still running at the clock, a hang, any error but a wall — is answered from the unlocked PARENT, the
+      // tree the hand had before the lock; its node is usually in hand already (the street's prefetch read it). The
+      // trace says so (offTree.soft.lock.late, leak lock:late-parent); the answer is the pre-2026-10-13 one, not none.
+      if (!nq.ok && lockedOnStreet && lockParent && lockSoft && nq.status !== 429 && offTreeLockFallbackOn()) {
+        const childWhy = nq.error.slice(0, 160);
+        tstep("the locked solve is late → answering from the unlocked tree", { limitMs: LOCK_FALLBACK_MS });
+        const fb = await readNode(lockParent, codes.join("-"), LOCK_FALLBACK_MS);
+        tmark(`chain ${STREET[k]} node [${codes.join("-") || "root"}] from the unlocked parent (the locked child was late)`,
+          fb.r.ok ? `parent ${lockParent.slice(0, 8)}; child: ${childWhy}` : `parent failed too: ${fb.r.error.slice(0, 120)}`);
+        if (fb.r.ok) {
+          lockSoft.lock = { ...(lockSoft.lock ?? { ok: true }), late: { why: childWhy, parent: lockParent } };
+          streetRec.leak = { code: "lock:late-parent", why: `the node-locked child of the ${STREET[k]!.toLowerCase()} solve did not answer [${codes.join("-") || "root"}] in time (${childWhy}) — hero's node came from the unlocked parent` };
+          ({ r: nq, src: nodeSrc, ms: nodeMs } = fb);
         }
       }
       if (!nq.ok) return fail(`node: ${nq.error}`);
@@ -2102,6 +2193,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         tstep(`Villain's ${kind === "Check" ? "check" : kind === "Call" ? "call" : kind === "Raise" ? "raise" : kind === "AllIn" ? "all-in" : "bet"} is off the solver's tree → locking his range`);
         const lk = await gtowApi.lockedCustomSolution(String(ens.solId), lock);
         if (lk.ok) {
+          lockParent = String(ens.solId);
+          lockSoft = nodeRec.offTree.soft;
           ens = { ...ens, solId: lk.solId };
           lockedOnStreet = true;
           nodeRec.offTree.soft.lock = { ok: true, solId: String(lk.solId) };

@@ -319,6 +319,81 @@ function noteAccount(seat: number | null, account: unknown): void {
   if (!start.has(seat)) start.set(seat, account + ((w.moneyIn as Map<number, number> | undefined)?.get(seat) ?? 0));
 }
 
+/**
+ * EVERY DEALT SEAT'S STACK AT THE DEAL (2026-10-14, the answer-path audit's finding 1). The first-frame rule above
+ * covers a seat only once it has sent a frame this hand, so at hero's FIRST decision with no blind posted (an HJ / CO /
+ * BTN first-in) his own stack and every seat behind him were the SCREEN'S readings — which still show the previous
+ * hand's END stack while a top-up or a reload is landing (4923624883: the HJ read 77.4bb, dealt 149.2 → the D75 chart
+ * instead of D150; 4923399415: the BTN read 50.4 after a reload to 166.8; 4924193800: no reading at all, 100bb assumed).
+ *
+ * No frame at the deal carries every seat's account (CO_CARDTABLE_INFO is cards only; CO_TABLE_INFO's accounts come
+ * only mid-hand, on a join). What does, measured over 20,774 dealt seat-hands in the socket dumps of 2026-09-26 ..
+ * 10-14 against the exact first-frame figure: the PREVIOUS hand's CO_RESULT_INFO `account[seat − 1]` (after the pot
+ * went out), overwritten per seat by PLAY_ACCOUNT_CASH_RES type 2 {seat, cash} — `cash` IS the seat's new stack
+ * (341 of 341 type-2 frames; the 09-24 note's "amount asked for" case is not among them) — and PLAY_SEAT_INFO {seat,
+ * account}. 18,099 of 18,111 agree; the 12 that do not are three hands whose preceding result frame was never read on
+ * that socket (a bind-replay gap), so the snapshot is STAMPED with the hand it ended and used only for the very next
+ * one. A buy that lands mid-hand reads the same as the result that follows it (264 of 264), so the order is harmless.
+ * A seat the result gives 0 (empty, busted) has no figure until its own first frame — a new player posts to be dealt,
+ * and his post is that frame.
+ *
+ * `tableCents` is the live snapshot between hands; `dealCents` is its copy frozen when the hand began, per seat with
+ * its source ("result" / "buy" / "seat"). The export (ignition/hand.ts) fills `startStacks` from `startCents` first
+ * (exact, the seat's own frame) and `dealCents` for the rest, and says which in `startStacksSource` ("frame" or the
+ * snapshot's source) — so a carried figure can always be told from a confirmed one, and the confirmed one REPLACES it
+ * the moment the seat's first frame arrives.
+ */
+export type DealSource = "result" | "buy" | "seat";
+export interface DealCents { cents: number; source: DealSource }
+
+/** The pre-deal snapshot: a fresh CO_RESULT_INFO replaces it whole; a buy or a seat word updates one seat. */
+function tableSnapshot(): Map<number, DealCents> {
+  const w = ws();
+  return (w.tableCents ??= new Map<number, DealCents>()) as Map<number, DealCents>;
+}
+function noteResultAccounts(accounts: unknown[]): void {
+  const w = ws();
+  const m = new Map<number, DealCents>();
+  accounts.forEach((c, i) => {
+    if (typeof c === "number" && Number.isFinite(c) && c > 0) m.set(i + 1, { cents: c, source: "result" });
+  });
+  w.tableCents = m;
+  w.tableCentsAt = { hand: S.handNo, rid: readRid() };   // the hand this result ended, on which socket
+}
+/** The socket the frame being read came from (readFrames), else the bound one: a result carried across sockets is
+ *  another table's (every one of the 15 disagreements with Ignition's records over 4,059 deals was a new socket). */
+const readRid = (): string | null => (ws().readRid as string | null | undefined) ?? S.tapBound ?? null;
+function noteSeatCents(seat: unknown, cents: unknown, source: Exclude<DealSource, "result">): void {
+  if (typeof seat !== "number" || !Number.isInteger(seat) || seat < 1) return;
+  const w = ws();
+  if (!w.tableCentsAt) return;             // nothing to update: no result has been read on this socket yet
+  if (typeof cents === "number" && Number.isFinite(cents) && cents > 0) tableSnapshot().set(seat, { cents, source });
+  else tableSnapshot().delete(seat);       // 0 = the seat emptied / busted: no figure until its own frame
+}
+/** The snapshot frozen for the hand that begins now (beginHand, before the hand counter moves): only when it ended
+ *  the hand just closed, on the socket we read — a result the tap never read (a bind-replay gap, a socket change) is
+ *  a stale table, and no figure beats a wrong one. */
+function freezeDealCents(): Map<number, DealCents> {
+  const w = ws();
+  const at = w.tableCentsAt as { hand: number; rid: string | null } | undefined;
+  if (!at || at.hand !== S.handNo || at.rid !== readRid()) return new Map();
+  return new Map(tableSnapshot());
+}
+/** Every dealt seat's stack as dealt, in cents, with its source — the seat's own first frame first, the pre-deal
+ *  snapshot for the rest. */
+export function dealtCents(): Map<number, { cents: number; source: "frame" | DealSource }> {
+  const w = ws();
+  const out = new Map<number, { cents: number; source: "frame" | DealSource }>();
+  const start = (w.startCents as Map<number, number> | undefined) ?? new Map<number, number>();
+  const deal = (w.dealCents as Map<number, DealCents> | undefined) ?? new Map<number, DealCents>();
+  for (const s of (w.dealt as number[] | undefined) ?? []) {
+    const exact = start.get(s);
+    if (exact !== undefined) out.set(s, { cents: exact, source: "frame" });
+    else if (deal.has(s)) out.set(s, { ...deal.get(s)! });
+  }
+  return out;
+}
+
 // ---- the chips as the table reports them -------------------------------------------------------------------
 /**
  * EVERY SEAT'S CHIPS, AS THE WEBSOCKET REPORTS THEM (2026-09-25, round 3 of the input-mutation harness; Brady: "we
@@ -713,9 +788,11 @@ export function boardContradicts(d: Record<string, any>): boolean {
 export function beginHand(hid: string | null): void {
   hid = hid || "";
   wsSeams.archiveHand();
+  const dealCents = freezeDealCents();   // the pre-deal snapshot for this hand, judged against the hand just closed
   S.handNo += 1;
   S.handIds.set(S.handNo, hid);
   const w = ws();
+  w.dealCents = dealCents;         // every seat's stack at the deal, carried from the table's last word (dealtCents)
   S.tapPrevHero = [...(w.heroCards || [])];
   S.tapDealtAt = 0.0;
   S.tapDealDrawn = false;
@@ -992,6 +1069,20 @@ export function onGameMsg(d: Record<string, any>): void {
         log(`[ws] top-up refused on the socket: PLAY_ACCOUNT_CASH_RES type 5 seat ${pyStr(seat)} cash 0`);
       }
     }
+  } else if (pid === "PLAY_ACCOUNT_CASH_RES" && d.type === 2) {
+    // a buy that went through: the seat's NEW stack, for the next deal (the pre-deal snapshot, dealtCents)
+    noteSeatCents(d.seat, d.cash, "buy");
+  } else if (pid === "PLAY_SEAT_INFO") {
+    // a seat's word between hands (roster.ts reads the state): its account is its stack for the next deal, 0 = gone
+    noteSeatCents(d.seat, d.account, "seat");
+  } else if (pid === "CO_RESULT_INFO" && Array.isArray(d.account)) {
+    // every seat's stack once the pot went out: the next deal's figure for every seat with no frame of its own yet
+    noteResultAccounts(d.account);
+  } else if (pid === "CO_TABLE_INFO") {
+    // a table snapshot (our socket joined it, or Zone moved hero): whatever result was carried was another table's,
+    // and the snapshot's own accounts are mid-hand readings — the next result frame starts the ledger again
+    w.tableCents = new Map<number, DealCents>();
+    delete w.tableCentsAt;
   }
 }
 
@@ -1016,6 +1107,7 @@ function readFrames(batch: [Record<string, any>, string | null, boolean][]): voi
   for (const [fd, frid, replayed] of batch) {
     const e = dumpBegin(fd, frid);
     if (replayed) e.replayed = true;
+    S.ws.readRid = frid;   // the socket this frame came from (the pre-deal snapshot's stamp, readRid)
     try {
       onGameMsg(fd);
     } catch (ex: any) {

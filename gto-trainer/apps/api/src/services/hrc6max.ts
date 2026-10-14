@@ -11,6 +11,7 @@ import { type GetNode, type HrcNode } from "./hrc3max";
 import { fetchNode6max, hrc6maxDb } from "./hrc6maxDb";
 import { patchBase, patchKeys } from "./patchKey";
 import { withinFirstStackBound } from "./treeGap";
+import { stackNotConfirmedNote, unconfirmedStacks, type UnconfirmedStack } from "./stackSource";
 
 /**
  * Chart picker for the 6-max NL200 ring set (ledger proposal `sixmax-nl200`).
@@ -363,6 +364,10 @@ export interface Chart6Choice {
   /** a three-limper line picked onto a pool3 tree: the chart to read instead when that tree cannot hold the line or
    *  its node is not trusted (hrc6max.limp3Reroute) — the wide tree */
   limp3Fallback?: string;
+  /** THE STACKS THE TABLE DID NOT CONFIRM (services/stackSource, 2026-10-14): hero's and the opponent the rung was measured
+   *  against, when they are the screen's reading or the 100bb default — present only when there are any, never with
+   *  pinned `dealt` stacks. The rung is what it was; `note` and the path (preflop:stack-not-confirmed) say so. */
+  unconfirmed?: UnconfirmedStack[];
 }
 
 /**
@@ -611,6 +616,20 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
   const relevantStack = relevant ? oppStack(relevant)! : DEEP6;
   if (!relevant) notes.push("no opponent's stack readable — taken as 100bb");
   else if (aggressor && aggressor !== me && !readableAgg && !folded.has(aggressor)) notes.push(`the ${aggressor}'s stack is unreadable — measured against the ${relevant}`);
+  // THE STACKS THE TABLE DID NOT CONFIRM (services/stackSource, 2026-10-14): hero's own and the opponent the rung is
+  // measured against, when `startStacks` does not cover them — the screen's reading (the previous hand's end stack while
+  // a top-up or reload lands: 4923624883 HJ 77.4 read, 149.2 dealt → D75 for D150) or the 100bb default. Said, not changed.
+  const seatOfPos = (pos: Seat6): number | null => {
+    if (pos === me) return hand.heroSeatId;
+    const hit = Object.entries(hand.positions ?? {}).find(([, p]) => String(p).toUpperCase() === pos);
+    return hit ? Number(hit[0]) : null;
+  };
+  const unconfirmed: UnconfirmedStack[] = dealt ? [] : unconfirmedStacks(hand,
+    ([me, ...(relevant && relevant !== me ? [relevant] : [])] as Seat6[])
+      .filter((p) => SEATS6.includes(p) && seatOfPos(p) != null)
+      .map((p) => ({ pos: p, seat: seatOfPos(p)!, bb: Number.isFinite(Number(byPos[p])) && Number(byPos[p]) > 0 ? Number(byPos[p]) : null })));
+  const stackNote = stackNotConfirmedNote(unconfirmed);
+  if (stackNote) notes.push(stackNote);
 
   const effective = Math.min(hero, relevantStack);
   const rung = snapRung6(effective);
@@ -623,6 +642,7 @@ function chartFor6maxGrid(hand: ParsedHand, heroPos: string | null, tokens: stri
     candidates: cands.filter((x, i, a) => a.indexOf(x) === i), id, site: SITE_6MAX, depth, shortDepth, shortSeat,
     openSize: o, note: notes.join(" · ") || null, beyondLadder, effective: Math.round(effective), relevant,
     approx: approx.slice(),
+    ...(unconfirmed.length ? { unconfirmed } : {}),
   });
   const evenLadder = (depth: number, o: number | "limp"): string[] => {
     // A LIMPED POT ONLY EVER FALLS BACK TO ANOTHER LIMP CHART (2026-09-16): no raise tree contains a limp. AND ONLY

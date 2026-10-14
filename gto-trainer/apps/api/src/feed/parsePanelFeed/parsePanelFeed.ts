@@ -15,6 +15,10 @@
  */
 
 export type Street = "preflop" | "flop" | "turn" | "river" | "showdown";
+/** where a seat's `startStacks` figure came from (the wrapper's export, 2026-10-14): the seat's own frame this hand, or
+ *  carried from the previous hand's result / a buy / a seat word — see ParsedHand.startStacksSource */
+export type StartStackSource = "frame" | "result" | "buy" | "seat";
+export const START_STACK_SOURCES: readonly StartStackSource[] = ["frame", "result", "buy", "seat"];
 export type ActionType =
   | "post-sb"
   | "post-bb"
@@ -97,8 +101,15 @@ export interface ParsedHand {
   stacks?: Record<number, number>;
   /** Each seat's stack AS DEALT (BB), when the source records it — the exact answer an archived row's end-of-hand
    *  `stacks` can only estimate (utils/archivedHand.startStacksOf). Exported by the wrapper since 2026-09-24 for every
-   *  seat that has acted in the hand; live, the API reads those seats' money from it (utils/archivedHand.withStartStacks). */
+   *  seat that has acted in the hand — and since 2026-10-14 for EVERY dealt seat once the socket has read a hand's end:
+   *  the previous hand's result, a buy or a seat word carried per seat until the seat's own first frame replaces it
+   *  (wrapper ignition/ws.ts dealtCents). Live, the API reads those seats' money from it (utils/archivedHand.withStartStacks). */
   startStacks?: Record<number, number>;
+  /** per seat of startStacks, where the figure came from (the wrapper's export since 2026-10-14): "frame" = the seat's own
+   *  frame this hand (exact); "result" / "buy" / "seat" = carried from the table's last word on the seat before the deal
+   *  (exact in 10,976 of 10,976 seat-hands against Ignition's records). Absent on older rows and on CoinPoker. A seat
+   *  NOT in startStacks has a screen reading at best (services/stackSource). */
+  startStacksSource?: Record<number, StartStackSource>;
   /** EVERY SEAT'S CHIPS AS THE TABLE'S OWN FEED REPORTS THEM (Ignition WebSocket, round 3 2026-09-25; live exports only,
    *  never archived rows): chips behind NOW, chips in front THIS STREET, and a dead blind posted (bb). With startStacks
    *  they let the capture gate check each seat's captured line against its money to the cent

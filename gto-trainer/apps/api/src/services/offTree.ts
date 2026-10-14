@@ -87,7 +87,9 @@ export interface OffTreeSoft {
   /** why it was not computable (no per-combo EVs, no pot) */
   why?: string;
   /** a mid-street node lock that made the rest of the street read the soft range (OFFTREE_LOCK=on) */
-  lock?: { ok: boolean; solId?: string; why?: string };
+  lock?: { ok: boolean; solId?: string; why?: string;
+    /** the child was late (its read failed) and hero's node came from the unlocked parent (offTreeLockFallbackOn) */
+    late?: { why: string; parent: string } };
 }
 
 export interface OffTreeLine extends OffTreeStats {
@@ -173,6 +175,15 @@ export function offTreeSoftT(): number {
  *  (hero's node included) is solved against the range carried (the blend). ON unless set off (2026-10-13, after the EV
  *  test: hero's answer on that street is where the blend measured best); each lock is one GTO Wizard POST + its reads. */
 export const offTreeLockOn = (): boolean => !/^(off|0|false|no)$/.test(String(process.env.OFFTREE_LOCK ?? "on").trim().toLowerCase());
+/**
+ * THE LATE LOCK'S FALLBACK (2026-10-14, hand 4924409679: the river lock's child never answered in 11 s while the unlocked
+ * parent had answered hero's node 0.6 s earlier — the hand folded with no answer). A node read on the locked child that
+ * fails (its solve still running when the clock ran out, a hang, any non-429 error) is answered from the PARENT, the
+ * unlocked tree — the answer the hand would have had before 2026-10-13 — and the trace says so (offTree.soft.lock.late,
+ * leak lock:late-parent). The parent's node is usually already in hand (the street's prefetch read it before the lock).
+ *   OFFTREE_LOCK_FALLBACK=on (unset) | off (a failed child read fails the answer, as 2026-10-13)
+ */
+export const offTreeLockFallbackOn = (): boolean => !/^(off|0|false|no)$/.test(String(process.env.OFFTREE_LOCK_FALLBACK ?? "on").trim().toLowerCase());
 
 /**
  * THE SOFT RANGE after an off-tree action: range(h) x exp(-dEV_h / (t x pot)), dEV_h = the hand's best action's EV minus
