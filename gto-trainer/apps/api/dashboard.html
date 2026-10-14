@@ -689,6 +689,7 @@ async function showDetail(dbId) {
       ${j.nav?.sessionId ? `<span class="hand-nav"><button class="mini" id="nav-prev" ${j.nav.prev == null ? "disabled" : ""} title="previous hand in this session (←)">← prev</button><a class="sub" href="/sessions/${encodeURIComponent(j.nav.sessionId)}" onclick="go('/sessions/${encodeURIComponent(j.nav.sessionId)}');return false" title="the session review">hand ${j.nav.position} of ${j.nav.hands}</a><button class="mini" id="nav-next" ${j.nav.next == null ? "disabled" : ""} title="next hand in this session (→)">next →</button></span>` : ""}
       <h2 style="margin:0">Hand #${j.dbId} · ${cardsHtml(j.hand.heroCards)} ${esc(s.heroPos ?? "?")} · ${esc(j.stakes ?? "?")} · ${fmtT(j.playedAt)}</h2>
       <span class="sub">${esc(j.clientHandId ?? "no site id")}${j.resultText ? " · " + esc(j.resultText) : ""}</span>
+      ${j.endedUnseen ? `<span class="badge b-minor" title="${esc(j.endedUnseen.why)}">ended unseen</span><span class="sub">the recording stops on the ${esc(j.endedUnseen.street)} after ${plural(j.endedUnseen.actions, "action")}: ${esc(j.endedUnseen.why)} — no result; Ignition's history has the rest (Actual tab)</span>` : ""}
     </div>
     ${sessionLine(j)}
     ${autoExecCard(j)}
@@ -752,7 +753,11 @@ const hhDataHtml = (data) => {
 function hhVerdictHtml(check) {
   if (!check) return '<div class="hh-verdict sub">this hand is not in the archive, so there is nothing to check it against</div>';
   const when = check.checkedAt ? `<span class="sub">· checked ${fmtT(check.checkedAt)}</span>` : "";
-  const badge = check.status === "match"
+  // the record ended unseen (the wrapper's stamp, /hand endedUnseen): Ignition's record was compared as far as ours goes
+  const unseen = DETAIL?.endedUnseen;
+  const badge = check.status === "match" && unseen
+    ? `<span class="badge b-info">✓ matches Ignition's hand history as far as the recording goes</span><span class="sub">the hand's end was never seen (${esc(unseen.why)}): ${plural(unseen.actions, "action")} on the ${esc(unseen.street)} compared, nothing after them</span>`
+    : check.status === "match"
     ? `<span class="badge b-info">✓ matches Ignition's hand history</span><span class="sub">seats, stacks as dealt, cards, board and every action</span>`
     : check.throughOk
       ? `<span class="badge b-minor">matches up to your last action</span><span class="sub">${plural(check.diffs.length, "difference")} after it — what the answers saw was right</span>`

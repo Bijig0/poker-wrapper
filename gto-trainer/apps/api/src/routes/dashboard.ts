@@ -34,6 +34,8 @@ import { adoptionReport, dataLayout, describeLayout, handsDbPath, openStore, res
 import { ensureHandsSchema, FINISHED } from "../../../../packages/data-root/handsSchema";
 import { drewNode, handNodeStore, handNodesOn, loadedCommit, nodeKeyOf } from "../services/handNodeStore";
 import { FinishedHandsFeed } from "../services/hhCheckFeed";
+import { ownActionCount } from "../utils/archivedHand/ownLine";
+import { endedUnseenOf } from "../utils/archivedHand/endedUnseen";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
 import { readFileSync } from "node:fs";
 import { buildPreflopTokens3max } from "../feed/buildSolutionUrl/buildSolutionUrl";
@@ -566,11 +568,13 @@ export function decisionIndexOf(a: LoggedAnswer): number | null {
   } catch { return null; }
 }
 
-/** Hero's own decisions in the archive: every hero action bar the blinds. */
+/** Hero's own decisions in the archive: every hero action bar the blinds — within the record's OWN line only
+ *  (utils/archivedHand/ownLine): a merged tail (the hand's actions read twice after its socket closed, 4923409614)
+ *  holds no decision of this hand, and a record that ended unseen holds nothing past what it saw. */
 function heroDecisionsOf(e: Enriched): DecisionRef[] {
   const acts = e.hand.actions as { hero?: boolean; type?: string; street?: string }[];
   const out: DecisionRef[] = [];
-  acts.forEach((a, index) => {
+  acts.slice(0, ownActionCount(acts)).forEach((a, index) => {
     if (a.hero && a.type !== "post-sb" && a.type !== "post-bb" && a.type !== "post-ante") out.push({ index, street: a.street ?? null, kind: null, reason: null });
   });
   return out;
@@ -1083,6 +1087,10 @@ app.get("/hand/:dbId", async (c) => {
     rake: recordedRake(e.raw),
     // did auto-execute play the hand, and how many presses it took (utils/autoExec)
     autoExec: autoExecOf(e.raw),
+    // THE RECORD ENDED UNSEEN (2026-10-14, wrapper ignition/ws.ts endUnseenNote): closed before the table's end-of-hand
+    // frame — its socket closed, the next hand opened on it, the session ended mid-hand — so what it holds is all that
+    // was seen; { why, street, actions }, or null for a hand whose end came
+    endedUnseen: endedUnseenOf(e),
     answers,
     session,
     nav,
