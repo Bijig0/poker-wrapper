@@ -36,7 +36,6 @@
   <select id="table-filter" style="display:none" title="which of the session's tables the hand was played on — a session opens 1, 2 or 4 and each table's hands are stamped with its slot"><option value="">all tables</option></select>
   <select id="sess-filter" title="show only the hands of one session — declared sessions first, then the undeclared gap clusters from before sessions were declared (same partition as the Sessions tab)"><option value="">all sessions</option></select>
   <label class="sub"><input id="only-flop" type="checkbox"> saw flop</label>
-  <label class="sub"><input id="only-disc" type="checkbox"> has discrepancy</label>
   <label class="sub" title="hands with a decision left unanswered: partly answered, failed, never logged, or no hero decision seen"><input id="only-unanswered" type="checkbox"> unanswered</label>
   <div id="theme-seg" title="light and dark follow the OS unless pinned; legacy is the palette the dashboard had before the restyle, kept to compare"><button data-t="auto">Auto</button><button data-t="light">Light</button><button data-t="dark">Dark</button><button data-t="legacy">Legacy</button></div>
 </header>
@@ -48,7 +47,7 @@
         <th data-k="playedAt">time</th><th data-k="stakes">stakes</th><th data-k="pos">pos</th>
         <th data-k="cards">cards</th><th data-k="street">street</th><th data-k="strategy">strategy</th><th data-k="pot">pot</th>
         <th data-k="table" title="which table of the session (1-4); — for a single-table session, which has no slot by design">tbl</th>
-        <th data-k="net">net bb</th><th data-k="ans">answers</th><th>flags</th><th>disc</th>
+        <th data-k="net">net bb</th><th data-k="ans">answers</th><th>flags</th><th title="answers in this hand that disagreed with their own mix (a bug counter — should be empty)">integrity</th>
       </tr></thead>
       <tbody id="hands-body"></tbody>
     </table>
@@ -101,21 +100,20 @@ document.addEventListener("visibilitychange", () => {
 });
 
 /* ================= hands list ================= */
-let HANDS = [], SESSIONS = [], AUDIT_NOTE = "", sortK = "playedAt", sortDir = -1;
+let HANDS = [], SESSIONS = [], sortK = "playedAt", sortDir = -1;
 
-// The discrepancy audits are computed by the server in the background after a
-// restart; while any are still pending the disc column shows "?" — re-poll
-// until they are all in (one timer, whichever loader asked last). `view` is the
-// list the loader draws (hands · home · analytics): the poll runs while that list
-// is on screen, is parked while the tab is hidden, and route() stops it when the
-// user leaves the list.
+// While hands are in play the list keeps moving — re-poll (one timer, whichever
+// loader asked last). `view` is the list the loader draws (hands · home ·
+// analytics): the poll runs while that list is on screen, is parked while the
+// tab is hidden, and route() stops it when the user leaves the list. (Until
+// 2026-10-14 this also waited for the feed-spot audits, since retired.)
 let auditTimer = null, auditView = null;
 const onListView = (view) => PATH.view === view && !PATH.id;
 function pollWhilePending(j, view, reload) {
   if (!onListView(view)) return; // left the list while the read was in flight: re-arm nothing, and leave the new view's poll alone
   clearTimeout(auditTimer); auditView = view;
-  // hands in play (the wrapper's live rows) keep the list moving as well as pending audits
-  if (j.auditPending > 0 || j.live > 0) auditTimer = setTimeout(() => whenVisible(view, () => { if (onListView(view)) reload(); }), j.live > 0 ? 3000 : 2500);
+  // hands in play (the wrapper's live rows) keep the list moving
+  if (j.live > 0) auditTimer = setTimeout(() => whenVisible(view, () => { if (onListView(view)) reload(); }), 3000);
 }
 
 async function loadHands() {
@@ -123,7 +121,6 @@ async function loadHands() {
     const j = await (await fetch("/api/dashboard/hands")).json();
     HANDS = j.hands || [];
     SESSIONS = j.sessions || [];
-    AUDIT_NOTE = j.auditPending ? ` · auditing ${j.auditPending}…` : "";
     buildSessionFilter();
     renderHands();
     pollWhilePending(j, "hands", loadHands);
@@ -208,7 +205,6 @@ function renderHands() {
     const tf = $("table-filter").value;
     if (tf === "none" ? h.table != null : tf && String(h.table) !== tf) return false;
     if ($("only-flop").checked && !h.summary.sawFlop) return false;
-    if ($("only-disc").checked && !(h.discrepancies && (h.discrepancies.major || h.discrepancies.minor))) return false;
     if ($("only-unanswered").checked && h.answerStatus?.status === "answered") return false;
     if (!terms.length) return true;
     const text = `${h.stakes} ${h.summary.heroPos} ${h.heroCards.join("")} ${h.summary.finalStreet} ${h.strategy?.name ?? ""}`.toLowerCase();
@@ -218,13 +214,11 @@ function renderHands() {
     const va = sortVal(a, sortK), vb = sortVal(b, sortK);
     return (va < vb ? -1 : va > vb ? 1 : 0) * sortDir;
   });
-  $("count").textContent = (rows.length === HANDS.length ? `${HANDS.length} hands` : `${rows.length} of ${HANDS.length} hands`) + AUDIT_NOTE;
+  $("count").textContent = rows.length === HANDS.length ? `${HANDS.length} hands` : `${rows.length} of ${HANDS.length} hands`;
   $("hands-body").innerHTML = rows.map((h) => {
     const s = h.summary;
     const flags = [s.limpedPot ? "limped" : "", s.threeBet ? "3bet" : "", s.wentToShowdown ? "SD" : "", s.heroWonUncontested ? "steal" : ""].filter(Boolean).join(" ");
-    const d = h.discrepancies;
-    const disc = (h.integrityFaults ? `<span class="badge b-severe" title="an answer in this hand disagreed with its own mix — see the hand page">${h.integrityFaults}!</span>` : "")
-      + (d ? (d.major ? `<span class="badge b-major">${d.major}M</span>` : "") + (d.minor ? `<span class="badge b-minor">${d.minor}m</span>` : "") + (d.info ? `<span class="badge b-info">${d.info}i</span>` : "") : "?");
+    const disc = h.integrityFaults ? `<span class="badge b-severe" title="an answer in this hand disagreed with its own mix — see the hand page">${h.integrityFaults}!</span>` : "";
     return `<tr data-id="${h.dbId}"><td>${fmtT(h.playedAt)}</td><td>${esc(h.stakes ?? "?")}</td><td>${esc(s.heroPos ?? "?")}</td>
       <td>${cardsHtml(h.heroCards)}</td><td>${esc(s.finalStreet)}${h.live ? ` <span class="chip ${h.live === "live" ? "good" : "warn"}" title="${h.live === "live" ? "being played now: the wrapper writes this row as the hand goes and finishes it in place" : "the wrapper stopped writing this hand before it ended (closed or crashed mid-hand)"}">${h.live}</span>` : ""}</td><td>${h.strategy ? `<span class="chip ${h.strategy.id === "ign25-zone-3max-exploit" ? "good" : ""}">${esc(h.strategy.name)}</span>${h.strategy.test ? ' <span class="chip warn" title="declared at a test stake: this strategy answering on a cheaper table">test</span>' : ""}` : '<span class="sub">—</span>'}</td><td>${s.potBb}</td>
       <td>${h.table == null ? '<span class="sub">—</span>' : `<span class="chip">T${h.table}</span>`}</td>
@@ -236,7 +230,7 @@ document.querySelectorAll("thead th[data-k]").forEach((th) => {
   th.onclick = () => { const k = th.dataset.k; sortDir = sortK === k ? -sortDir : -1; sortK = k; renderHands(); };
 });
 $("table-filter").onchange = renderHands;
-$("filter").oninput = renderHands; $("only-flop").onchange = renderHands; $("only-disc").onchange = renderHands; $("only-unanswered").onchange = renderHands; $("sess-filter").onchange = renderHands;
+$("filter").oninput = renderHands; $("only-flop").onchange = renderHands; $("only-unanswered").onchange = renderHands; $("sess-filter").onchange = renderHands;
 
 /* ================= replayer state ================= */
 const STREET_N = { preflop: 0, flop: 3, turn: 4, river: 5 };
@@ -718,9 +712,7 @@ async function showDetail(dbId) {
       <div id="timeline"></div><div id="rangelook" class="rl" hidden></div><div id="actual" hidden></div><div id="checks" hidden></div></div>
     <div id="solution"></div>
     ${j.answers?.length ? `<div class="card"><h2>Every study answer logged for this hand <span class="sub">— in the order they were pushed; each also sits under its decision in the timeline</span></h2>` + j.answers.map((a, i) => answerCard(a, { index: i })).join("") + `</div>` : ""}
-    ${j.discrepancies?.length ? `<div class="card"><h2>Discrepancies</h2>` + j.discrepancies.map((d) =>
-      `<div class="tl-row"><span class="badge b-${d.severity}">${d.severity}</span><span class="who">${esc(d.field)}</span>
-       <span class="what">${esc(String(d.actual ?? "—"))} → ${esc(String(d.shown ?? "—"))}${d.note ? `<span class="sub"> · ${esc(d.note)}</span>` : ""}</span></div>`).join("") + `</div>` : ""}`;
+`;
   DETAIL.flMap = feedStepMap(j.feedLines, j.hand.actions);
   renderTimeline();
   // picking a view on a minimized hand card opens it
@@ -2611,7 +2603,7 @@ async function loadAnalytics() {
   if (!j.ok) { v.innerHTML = '<div class="card warn">analytics unavailable</div>'; return; }
   if (PATH.view !== "analytics") return; // navigated away while the fetch was in flight
   AN.options = j.options;
-  // disc counts fill in as the background audits land — refresh quietly
+  // hands in play keep the numbers moving — refresh quietly
   pollWhilePending(j, "analytics", loadAnalytics);
   v.innerHTML = anRender(j, scope, vs) + `<div class="ig-global"><div class="an-h">Solver &amp; model <span class="sub">— the corpus and the solvers, not hero's hands: this block does not change with the scope</span></div>${await anGlobal(j.global)}</div>`;
   anWire(v, scope, vs);
@@ -2709,7 +2701,6 @@ function anRender(j, scope, vs) {
     ${tile("PFR", pctS(a.pfr), "raised preflop", "", delta("pfr", 1, " pp"))}
     ${tile("3-bet", pctS(a.threeBet), "re-raised when facing a raise", "", delta("threeBet", 1, " pp"))}
     ${tile("WTSD", pctS(a.wtsd), "went to showdown after seeing the flop", "", delta("wtsd", 1, " pp"))}
-    ${tile("Discrepancies", a.discPer100 == null ? "–" : a.discPer100.toFixed(0), `per 100 hands · ${a.discrepancies.major} major`, "", delta("discPer100", 0))}
     ${tile("Answered", P.kind === "sessions" && P.sessions.length === 1 ? `<a class="ig-link" href="/sessions/${encodeURIComponent(P.sessions[0].id)}?show=unanswered" onclick="go('/sessions/${encodeURIComponent(P.sessions[0].id)}?show=unanswered');return false" title="review the unanswered decisions">${pctS(ans.decisionsCoveredPct)}</a>` : pctS(ans.decisionsCoveredPct), `of ${ans.decisions} decisions${ans.unansweredNodes ? ` · ${ans.unansweredNodes} unanswered` : ""}${P.kind === "sessions" && P.sessions.length === 1 ? " · click to review" : ""}`)}
     ${tile("Followed", pctS(ans.followedPct), `${ans.followed} of ${ans.graded} graded decisions`)}
   </div>
@@ -2783,7 +2774,6 @@ function anStatsTable(P) {
     ["WTSD", pctS(a.wtsd), "went to showdown after seeing the flop"],
     ["Flops seen", pctS(a.sawFlop), "hands that reached the flop with you in"],
     ["Limped pots", pctS(a.limpedPots), "hands where the pot was limped"],
-    ["Discrepancies", a.discPer100 == null ? "–" : a.discPer100.toFixed(1), `per 100 hands · ${a.discrepancies.major} major, ${a.discrepancies.minor} minor, ${a.discrepancies.info} info`],
     ["Known net", pctS(a.hands ? Math.round((1000 * a.netKnownHands) / a.hands) / 10 : null), "hands whose net result could be established"],
     ["Rake paid", `${(a.rakePaidBb ?? 0).toFixed(1)} bb · $${((a.rakePaidCents ?? 0) / 100).toFixed(2)}`, `on the ${a.rakedHands ?? 0} pots you won that saw a flop — 5% capped by players dealt, no flop no drop`],
     ["Rake per 100", a.rakePer100 == null ? "–" : `${a.rakePer100.toFixed(1)} bb`, "rake paid per 100 hands, all hands in the scope"],
@@ -2797,9 +2787,8 @@ function anAnswersTable(P) {
     ["Unanswered decisions", x.unansweredNodes, `${x.partialHands} hand${x.partialHands === 1 ? "" : "s"} got some answers but not all`],
     ...Object.entries(x.failKinds || {}).sort((a, b) => b[1] - a[1]).map(([k, n]) => [`· ${esc(k)}`, n, esc(WHY_MEANS[k] || "")]),
     ["Stray captures", x.strayCaptures, "answers keyed to a node hero never acted on — phantom reads, not decisions"],
-    // Integrity is a BUG counter, kept out of the discrepancy audit on purpose: the
-    // audit runs at ~130 per 100 hands, and a fault dropped in there would never be
-    // seen. This line should read 0. (services/answerIntegrity.ts)
+    // Integrity is a BUG counter: an answer that disagreed with its own mix. This
+    // line should read 0. (services/answerIntegrity.ts)
     [`<b${x.integrity?.faults ? ' style="color:var(--loss)"' : ""}>Integrity faults</b>`,
      x.integrity ? (x.integrity.faults ? `<b style="color:var(--loss)">${x.integrity.faults}</b>` : "0") : "–",
      x.integrity
@@ -3527,8 +3516,6 @@ function sessionOutcomeCard(j) {
     <div class="sess-strip">
       ${stat("VPIP", pctS(st.vpip))}${stat("PFR", pctS(st.pfr))}${stat("3-bet", pctS(st.threeBet))}${stat("WTSD", pctS(st.wtsd))}
       ${stat("flops seen", pctS(st.sawFlop))}${stat("limped pots", pctS(st.limpedPots))}
-      ${stat("discrepancies / 100", st.discPer100 == null ? "–" : st.discPer100.toFixed(1))}
-      <span class="sub">${(st.discrepancies?.major ?? 0)} major, ${(st.discrepancies?.minor ?? 0)} minor</span>
     </div>
     ${priced.length ? `<div class="sess-ext">${ext("biggest win", best)}${worst && worst !== best ? ext("biggest loss", worst) : ""}${split("at showdown", sd)}${split("without showdown", nsd)}</div>` : ""}
     <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">${j.recording ? `<a class="mini" href="/replay?session=${encodeURIComponent(j.recording.name)}" target="_blank" rel="noopener" style="text-decoration:none">open the recording in Replay Review ↗</a><a class="mini" href="/replay?session=${encodeURIComponent(j.recording.name)}&mode=scrub" target="_blank" rel="noopener" style="text-decoration:none">scrub it ↗</a>` : '<span class="sub">no frame recording for this session</span>'}</div>
@@ -5216,7 +5203,7 @@ function route() {
   $("view-home").style.display = PATH.view === "home" ? "" : "none";
   $("view-hands").style.display = PATH.view === "hands" && !PATH.id ? "" : "none";
   const onHands = PATH.view === "hands" && !PATH.id;
-  for (const el of [$("filter"), $("sess-filter"), $("only-flop").parentElement, $("only-disc").parentElement, $("only-unanswered").parentElement]) el.style.display = onHands ? "" : "none";
+  for (const el of [$("filter"), $("sess-filter"), $("only-flop").parentElement, $("only-unanswered").parentElement]) el.style.display = onHands ? "" : "none";
   // the table filter has the extra condition that there ARE tables to pick from
   $("table-filter").style.display = onHands && $("table-filter").dataset.avail === "1" ? "" : "none";
   $("view-detail").style.display = PATH.view === "hands" && PATH.id ? "" : "none";

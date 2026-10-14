@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { Enriched } from "../routes/dashboard";
 import type { ParsedHand } from "../feed/parsePanelFeed/parsePanelFeed";
-import { archived4920544353, faithful4920544353, record4920544353 } from "../utils/ignitionHh/fixtures";
-import { HhCheckStore, RETRY_DELAYS_MS, UNREACHABLE_RETRY_MS, freshCheck, nextCheck, tick, type CheckerDeps } from "./hhCheck";
+import { archived4920544353, archived4923636936, faithful4920544353, record4920544353, record4923636936 } from "../utils/ignitionHh/fixtures";
+import { HhCheckStore, RETRY_DELAYS_MS, UNREACHABLE_RETRY_MS, freshCheck, nextCheck, recheck, tick, type CheckerDeps } from "./hhCheck";
 import type { RecordResult } from "./ignitionRecord";
 
 const T0 = 1_790_000_000_000;
@@ -29,6 +29,24 @@ describe("nextCheck", () => {
   test("an unreachable client costs no try", () => {
     const down = nextCheck(pending, { ok: false, reason: "unreachable", error: "client closed" }, T0);
     expect(down).toMatchObject({ status: "pending", tries: 0, nextAt: T0 + UNREACHABLE_RETRY_MS, error: "client closed" });
+  });
+});
+
+describe("recheck", () => {
+  test("a stale verdict is settled again from the record in hand, no try spent (4923636936: 'actions 3-7 missing' → a site fold after hero)", () => {
+    const stale = { ...freshCheck(enriched(9, archived4923636936), T0), status: "mismatch" as const, throughOk: false, tries: 1, checkedAt: T0,
+      through: [{ kind: "action-missing" as const, field: "Ignition action 3 missing from ours", ours: "—", ignition: "preflop seat 3 raise 7.4bb", ignitionAt: 2 }] };
+    const now = T0 + 1000;
+    const again = recheck(stale, record4923636936, enriched(9, archived4923636936), now);
+    expect(again).toMatchObject({ status: "mismatch", throughOk: true, tries: 1, checkedAt: now, through: [], nextAt: null, error: null });
+    expect(again.diffs.map((d) => d.kind)).toEqual(["hero-site-fold"]);
+  });
+  test("comparedSince hands back the compared rows only, oldest first", () => {
+    const store = new HhCheckStore(":memory:");
+    const row = (id: string, playedAt: number, status: "match" | "mismatch" | "pending") =>
+      ({ ...freshCheck({ clientHandId: id, dbId: 1, playedAt }, T0), status });
+    store.saveMany([row("4900000003", T0 + 3, "match"), row("4900000001", T0 + 1, "mismatch"), row("4900000002", T0 + 2, "pending"), row("4900000000", T0 - 1, "match")]);
+    expect(store.comparedSince(T0).map((c) => c.clientHandId)).toEqual(["4900000001", "4900000003"]);
   });
 });
 

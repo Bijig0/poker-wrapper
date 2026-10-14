@@ -1,0 +1,547 @@
+{
+ "startTime": "2026-10-09T20:38:30Z",
+ "endTime": "2026-10-09T20:39:48Z",
+ "potSize": "$2.77",
+ "rake": "$0.13",
+ "gameType": "HOLDEM",
+ "tableName": "TBL#37948377 - $0.02/$0.05 NL - 6P",
+ "minBet": "$0.10",
+ "maxBet": "",
+ "ante": "$0",
+ "blinds": "$0.02 / $0.05",
+ "communityCards": [
+  "4d",
+  "5c",
+  "9d",
+  "Qh",
+  ""
+ ],
+ "limitType": "NL",
+ "maxSeat": 6,
+ "sessionId": "2026-10-09T16:25:22-2026-10-09T16:46:52-37948377-1851098135-1851101924-0-0-0-305473884-0",
+ "players": [
+  {
+   "position": "UTG",
+   "seat": "1",
+   "cards": [
+    "Ah",
+    "5h",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ],
+   "transparencies": [],
+   "startEndAmount": "$5/$4.41",
+   "totalBet": "$0.59",
+   "winLoseAmount": "$-0.59",
+   "isMe": false,
+   "seatNo": 0
+  },
+  {
+   "position": "UTG+1",
+   "seat": "2",
+   "cards": [
+    "Jd",
+    "Qd",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ],
+   "transparencies": [],
+   "startEndAmount": "$2.75/$4.41",
+   "totalBet": "$0.98",
+   "winLoseAmount": "$1.66",
+   "isMe": false,
+   "seatNo": 0
+  },
+  {
+   "position": "UTG+2",
+   "seat": "3",
+   "cards": [
+    "6d",
+    "7d",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ],
+   "transparencies": [],
+   "startEndAmount": "$5/$4.02",
+   "totalBet": "$0.98",
+   "winLoseAmount": "$-0.98",
+   "isMe": false,
+   "seatNo": 0
+  },
+  {
+   "position": "Dealer",
+   "seat": "4",
+   "cards": [
+    "7c",
+    "Td",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ],
+   "transparencies": [],
+   "startEndAmount": "$5.09/$5.09",
+   "totalBet": "$0",
+   "winLoseAmount": "$0",
+   "isMe": false,
+   "seatNo": 0
+  },
+  {
+   "position": "Small Blind [ME]",
+   "seat": "5",
+   "cards": [
+    "Ac",
+    "5s",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ],
+   "transparencies": [],
+   "startEndAmount": "$5.01/$4.99",
+   "totalBet": "$0.02",
+   "winLoseAmount": "$-0.02",
+   "isMe": true,
+   "seatNo": 0
+  },
+  {
+   "position": "Big Blind",
+   "seat": "6",
+   "cards": [
+    "Qc",
+    "Tc",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ],
+   "transparencies": [],
+   "startEndAmount": "$1.55/$1.35",
+   "totalBet": "$0.20",
+   "winLoseAmount": "$-0.20",
+   "isMe": false,
+   "seatNo": 0
+  }
+ ],
+ "action": [
+  {
+   "position": "Dealer",
+   "action": "Set dealer",
+   "data": [
+    "4"
+   ],
+   "transparencies": [],
+   "time": "16:38:30",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Small Blind  [ME]",
+   "action": "Small Blind",
+   "data": [
+    "$0.02"
+   ],
+   "transparencies": [],
+   "time": "16:38:30",
+   "isMe": true,
+   "showdown": null
+  },
+  {
+   "position": "Big Blind",
+   "action": "Big blind",
+   "data": [
+    "$0.05"
+   ],
+   "transparencies": [],
+   "time": "16:38:30",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG+2",
+   "action": "Posts chip",
+   "data": [
+    "$0.05"
+   ],
+   "transparencies": [],
+   "time": "16:38:30",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG",
+   "action": "Card dealt to a spot",
+   "data": [
+    "Ah",
+    "5h",
+    "",
+    ""
+   ],
+   "transparencies": [
+    "true",
+    "true",
+    "false",
+    "false"
+   ],
+   "time": "16:38:30",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG+1",
+   "action": "Card dealt to a spot",
+   "data": [
+    "Jd",
+    "Qd",
+    "",
+    ""
+   ],
+   "transparencies": [
+    "true",
+    "true",
+    "false",
+    "false"
+   ],
+   "time": "16:38:30",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG+2",
+   "action": "Card dealt to a spot",
+   "data": [
+    "6d",
+    "7d",
+    "",
+    ""
+   ],
+   "transparencies": [
+    "true",
+    "true",
+    "false",
+    "false"
+   ],
+   "time": "16:38:30",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Dealer",
+   "action": "Card dealt to a spot",
+   "data": [
+    "7c",
+    "Td",
+    "",
+    ""
+   ],
+   "transparencies": [
+    "true",
+    "true",
+    "false",
+    "false"
+   ],
+   "time": "16:38:30",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Small Blind  [ME]",
+   "action": "Card dealt to a spot",
+   "data": [
+    "Ac",
+    "5s",
+    "",
+    ""
+   ],
+   "transparencies": [
+    "false",
+    "false",
+    "false",
+    "false"
+   ],
+   "time": "16:38:30",
+   "isMe": true,
+   "showdown": null
+  },
+  {
+   "position": "Big Blind",
+   "action": "Card dealt to a spot",
+   "data": [
+    "Qc",
+    "Tc",
+    "",
+    ""
+   ],
+   "transparencies": [
+    "true",
+    "true",
+    "false",
+    "false"
+   ],
+   "time": "16:38:30",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG",
+   "action": "Raises",
+   "data": [
+    "$0.20"
+   ],
+   "transparencies": [],
+   "time": "16:38:36",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG+1",
+   "action": "Calls",
+   "data": [
+    "$0.20"
+   ],
+   "transparencies": [],
+   "time": "16:38:43",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG+2",
+   "action": "Calls",
+   "data": [
+    "$0.15"
+   ],
+   "transparencies": [],
+   "time": "16:38:49",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Dealer",
+   "action": "Folds",
+   "data": [],
+   "transparencies": [],
+   "time": "16:38:50",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Small Blind  [ME]",
+   "action": "Folds",
+   "data": [],
+   "transparencies": [],
+   "time": "16:38:57",
+   "isMe": true,
+   "showdown": null
+  },
+  {
+   "position": "Big Blind",
+   "action": "Calls",
+   "data": [
+    "$0.15"
+   ],
+   "transparencies": [],
+   "time": "16:38:59",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "",
+   "action": "FLOP",
+   "data": [
+    "4d",
+    "5c",
+    "9d"
+   ],
+   "transparencies": [],
+   "time": "16:38:59",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Big Blind",
+   "action": "Checks",
+   "data": [],
+   "transparencies": [],
+   "time": "16:39:05",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG",
+   "action": "Checks",
+   "data": [],
+   "transparencies": [],
+   "time": "16:39:06",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG+1",
+   "action": "Checks",
+   "data": [],
+   "transparencies": [],
+   "time": "16:39:14",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG+2",
+   "action": "Bets",
+   "data": [
+    "$0.39"
+   ],
+   "transparencies": [],
+   "time": "16:39:18",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Big Blind",
+   "action": "Folds",
+   "data": [],
+   "transparencies": [],
+   "time": "16:39:20",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG",
+   "action": "Calls",
+   "data": [
+    "$0.39"
+   ],
+   "transparencies": [],
+   "time": "16:39:21",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG+1",
+   "action": "Raises",
+   "data": [
+    "$0.78"
+   ],
+   "transparencies": [],
+   "time": "16:39:26",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG+2",
+   "action": "Calls",
+   "data": [
+    "$0.39"
+   ],
+   "transparencies": [],
+   "time": "16:39:29",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG",
+   "action": "Folds",
+   "data": [],
+   "transparencies": [],
+   "time": "16:39:34",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "",
+   "action": "TURN",
+   "data": [
+    "4d",
+    "5c",
+    "9d",
+    "Qh"
+   ],
+   "transparencies": [],
+   "time": "16:39:34",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG+1",
+   "action": "All-in",
+   "data": [
+    "$1.77"
+   ],
+   "transparencies": [],
+   "time": "16:39:41",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG+2",
+   "action": "Folds",
+   "data": [],
+   "transparencies": [],
+   "time": "16:39:47",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG+1",
+   "action": "Return uncalled portion of bet",
+   "data": [
+    "$1.77"
+   ],
+   "transparencies": [],
+   "time": "16:39:47",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG+1",
+   "action": "Does not show",
+   "data": [
+    "Jd",
+    "Qd",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ],
+   "transparencies": [
+    "true",
+    "true",
+    "false",
+    "false",
+    "false",
+    "false",
+    "false"
+   ],
+   "time": "16:39:47",
+   "isMe": false,
+   "showdown": {
+    "hi": [],
+    "lo": [],
+    "description": "One pair"
+   }
+  },
+  {
+   "position": "UTG+1",
+   "action": "Hand result",
+   "data": [
+    "$2.64"
+   ],
+   "transparencies": [],
+   "time": "16:39:47",
+   "isMe": false,
+   "showdown": null
+  }
+ ]
+}

@@ -59,6 +59,9 @@ export const backgroundLockPath = (): string => storePath("background-lock", api
 
 /** services/hhCheck: each archived hand's verdict against Ignition's own hand history. */
 export const hhChecksDbPath = (): string => storePath("hh-checks", central(), "HH_CHECKS_DB_PATH").path;
+/** The wrapper's saved copies of Ignition's hand records (apps/wrapper/src/ignition/handHistory.ts writes
+ *  <wrapper data>/hand_history/<id>.json for every hand it fetched) — read here by services/ignitionRecord.storedIgnitionRecord. */
+export const ignitionHhDir = (): string => storePath("ignition-hh", join(dataLayout().wrapper, "hand_history"), "IGNITION_HH_DIR").path;
 
 /** The wrapper's archive, read-only from here. */
 export const handsDbPath = (): string => storePath("hands", central(), "HANDS_DB_PATH").path;
@@ -90,6 +93,6 @@ export function storeWriteFailed(store: string, e: unknown): void {
 export function resolveAllStores(): StoreEntry[] {
   for (const f of [centralDbPath, answersDbPath, solvesDbPath, gtowRequestsPath, pollerEventsPath, exitLogPath, jobsDbPath, missQueueDbPath,
     riverMesDbPath, riverMesConfigPath, mesRiverCacheDir, tasksPath, fxCachePath, balanceAcksPath, backgroundLockPath,
-    handsDbPath, sessionsDbPath, profilesJsonPath, wrapperDebugDir, hhChecksDbPath, gtowCachePath, handNodesDbPath]) f();
+    handsDbPath, sessionsDbPath, profilesJsonPath, wrapperDebugDir, hhChecksDbPath, ignitionHhDir, gtowCachePath, handNodesDbPath]) f();
   return storeReport();
 }

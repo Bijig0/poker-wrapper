@@ -60,6 +60,12 @@ export const compareRecord = (body: unknown, archived: Enriched): Comparison => 
 
 export type Outcome = { kind: "compared"; diffs: HhDiff[]; through: HhDiff[] } | Extract<RecordResult, { ok: false }>;
 
+/** A verdict re-computed from a record already in hand (scripts/hhRecheck.ts, after a change to the comparison):
+ *  the same settle as a fresh comparison, but no try is spent — the record was not fetched again. */
+export const recheck = (prev: HhCheck, body: unknown, archived: Enriched, now: number): HhCheck =>
+  ({ ...nextCheck(prev, { kind: "compared", ...pick(compareRecord(body, archived)) }, now), tries: prev.tries });
+const pick = ({ diffs, through }: Comparison) => ({ diffs, through });
+
 /** The check after one attempt. */
 export function nextCheck(prev: HhCheck, outcome: Outcome, now: number): HhCheck {
   if ("kind" in outcome) {
@@ -126,6 +132,12 @@ export class HhCheckStore {
   readonly waiting = new Set<string>();
   checkedIds(): Set<string> {
     return (this.checked ??= new Set(this.db.query<{ c: string }, []>("SELECT client_hand_id AS c FROM hh_checks").all().map((r) => r.c)));
+  }
+  /** Every COMPARED hand (match / mismatch) played since `sinceMs`, oldest first — the rows a re-check rewrites;
+   *  pending and unavailable rows have no comparison to redo. */
+  comparedSince(sinceMs: number): HhCheck[] {
+    return this.db.query<Row, [number]>("SELECT * FROM hh_checks WHERE status IN ('match', 'mismatch') AND played_at >= ? ORDER BY played_at, rowid")
+      .all(sinceMs).map(fromRow);
   }
   due(now: number, limit: number): HhCheck[] {
     return this.db.query<Row, [number, number]>("SELECT * FROM hh_checks WHERE status = 'pending' AND next_at <= ? ORDER BY next_at LIMIT ?")
