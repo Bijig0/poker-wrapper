@@ -293,6 +293,20 @@ export const compareHand = (ours: ParsedHand, ign: IgnHand): HhDiff[] => CHECKS.
 
 const BOARD_CARDS: Record<Street, number> = { preflop: 0, flop: 3, turn: 4, river: 5, showdown: 5 };
 
+/**
+ * IGNITION'S RECORD CUT TO WHAT OURS SAW (2026-10-14, services/hhCheck compareRecord for a record that ended unseen).
+ * Both action lists are aligned as compareHand aligns them; Ignition's is kept up to the action aligned with OUR last
+ * one — an Ignition action before that with no partner stays (a real miss inside what was seen) — and its board is cut
+ * to ours. A record with no actions keeps nothing of Ignition's line. The seats and their start stacks are left as they
+ * are (known at the deal); the end stacks are the caller's to leave out (an end we never saw).
+ */
+export function cutIgnitionToSeen(ours: ParsedHand, ign: IgnHand): IgnHand {
+  const pairs = alignedActions(ours, ign);
+  const last = pairs.findLastIndex(([o]) => o != null);
+  const keepAt = last < 0 ? -1 : Math.max(-1, ...pairs.slice(0, last + 1).map(([, g]) => g?.at ?? -1));
+  return { ...ign, actions: ign.actions.slice(0, keepAt + 1), board: ign.board.slice(0, ours.board.length) };
+}
+
 /** compareHand with both sides cut at hero's last action — the part of the hand every answer was built on. What
  *  happens after hero is done (other seats' later actions, later streets, end stacks) is left out. A recording that
  *  never got to hero is kept whole: everything in it came before hero's missing action.

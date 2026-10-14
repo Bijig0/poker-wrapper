@@ -568,10 +568,32 @@ export function tapForget(rid: string): void {
   if (S.tapBound === rid) S.tapBound = null;
 }
 
+/**
+ * A SOCKET THAT CLOSED IS GONE FOR GOOD (2026-10-14, the answer-path audit's merged records). Chrome never reuses a
+ * WebSocket's requestId, so nothing a closed socket dealt or held can ever be this table's hand again. Until this,
+ * our own socket closing mid-hand (reader.ts noteSocketClosed) only released the bind — its deal stayed in tapDeals,
+ * its hand in tapHist — and the next DOM tick re-bound it on the cards our frame still showed (tapVerify → tapTryBind),
+ * which REPLAYED its whole hand into the record still open for it: PLAY_STAGE_INFO was a "dup" for the same id, and
+ * every other frame appended. 4923409614 (session_20261009_010205, table 1, 03:12:23.808: `<tap-bound> replayed 86`
+ * 60 ms after `<socket-closed> ours`), 4923409734 (table 2 of the same session, the same instant) and 4923345879
+ * (session_20261008_175953, table 2) were archived with the hand's actions twice over — a post-sb on the "river", the
+ * flop and turn a second time — and the API's reconciler filed hero's replayed actions as decisions never asked about.
+ * Now a close forgets the socket AND marks it closed, and tapBind refuses a closed one whatever is still held for it.
+ */
+export function tapSocketClosed(rid: string): void {
+  tapForget(rid);
+  S.tapClosed.add(rid);
+}
+
 /** Bind `rid`: its current hand (every frame since its PLAY_STAGE_INFO, whether or not we were reading it) is
  *  replayed through the reader, so a socket bound mid-hand — first time, or back after a drop — rebuilds the hand
- *  from its start. */
+ *  from its start. A socket whose close was seen never binds (tapSocketClosed). */
 export function tapBind(rid: string, why: Record<string, any>): void {
+  if (S.tapClosed.has(rid)) {
+    dumpEvent("<tap-bind-refused>", { rid, why: "this socket closed — its deal and its hand are an ended table's, never replayed" });
+    tapForget(rid);
+    return;
+  }
   S.tapStall = { since: null, said: false };
   S.tapBound = rid;
   S.tapReplay = [...(S.tapHist.get(rid) || S.tapHold.get(rid) || [])];
@@ -784,14 +806,41 @@ export function boardContradicts(d: Record<string, any>): boolean {
   return names.length === 3 && JSON.stringify(names.slice(0, have.length)) !== JSON.stringify(have.slice(0, names.length));
 }
 
+/**
+ * THE RECORD CLOSED WITHOUT ITS END (2026-10-14). A hand's end is PLAY_STAGE_END_REQ (`handOver`); 6,469 of the 6,545
+ * dealt hands in the socket dumps of 2026-09-25 .. 10-14 had it, and the 76 without were undealt stubs bar one. A record
+ * closed before it — the next hand's first frame came first (its PLAY_STAGE_INFO, or a blind post with that frame lost),
+ * our socket closed, the capture dropped, the session ended mid-hand — holds what the table sent up to then and no
+ * more: no result, maybe not hero's last action, maybe not the last street. The archive stamps it `endedUnseen` so the
+ * hand page says so, the hand-history check compares only what was seen (API services/hhCheck), and the reconciler
+ * never reads the missing end as decisions nobody asked about. null while the hand is in play or once its end came.
+ */
+export function endUnseenNote(): { why: string; street: string; actions: number } | null {
+  const w = ws();
+  if (w.handOver || !truthy(w.actions)) return null;
+  return { why: w.endUnseenWhy ?? "the record was closed before the table's end-of-hand frame arrived", street: streetNow(),
+           actions: (w.actions as unknown[]).length };
+}
+
+/** Why the hand in progress is being closed before its end, remembered for the archive's stamp (first word wins). */
+export function noteEndUnseen(why: string): void {
+  const w = ws();
+  if (w.handOver || !truthy(w.actions)) return;
+  w.endUnseenWhy ??= why;
+}
+
 /** Close the hand in progress and open a new one. */
 export function beginHand(hid: string | null): void {
   hid = hid || "";
+  // a new hand opening on a hand whose end never came: the archive below records it as such (endUnseenNote)
+  noteEndUnseen(hid ? `the next hand (${hid}) opened before this hand's end-of-hand frame arrived`
+                    : "the next hand's first frame arrived before this hand's end-of-hand frame");
   wsSeams.archiveHand();
   const dealCents = freezeDealCents();   // the pre-deal snapshot for this hand, judged against the hand just closed
   S.handNo += 1;
   S.handIds.set(S.handNo, hid);
   const w = ws();
+  delete w.endUnseenWhy;           // the closed hand's; this one has its own end to come
   w.dealCents = dealCents;         // every seat's stack at the deal, carried from the table's last word (dealtCents)
   S.tapPrevHero = [...(w.heroCards || [])];
   S.tapDealtAt = 0.0;
@@ -857,6 +906,16 @@ export function abandonHand(why: string): void {
 
 const idOf = (v: unknown) => (truthy(v) ? pyStr(v) : "");
 
+/** A live blind post (small / big blind, a post-in) that cannot be the hand in progress's: the hand has been PLAYED —
+ *  a voluntary action or a board card. Not the deal itself: a stream that delivers the deal preamble twice (goldens
+ *  20260920_131406 and 20260921_125219: blinds, CO_CARDTABLE_INFO, then the blinds and the deal again) repeats the
+ *  blinds after the first copy's deal, before anyone acts, and those are handled as they always were. */
+export function blindOpensNewHand(d: Record<string, any>): boolean {
+  const btn = d.btn ?? null;
+  if (!truthy(d.bet) || !(btn === 2 || btn === 4 || btn === 8 || btn === 16)) return false;
+  return boardReach() > 0 || voluntaryActed();
+}
+
 /** The hand's frames for the protocol line (wsLine.ts), less a frame delivered twice (wsLine.TwinFilter). */
 function keepFrame(w: Record<string, any>, d: Record<string, any>): void {
   const f: TwinFilter = (w.frameFilter ??= new TwinFilter());
@@ -874,6 +933,21 @@ export function onGameMsg(d: Record<string, any>): void {
   // HERO'S MONEY for the top-up (topup.ts noteTopUpFrame): the hand's end stacks, his buy's receipt, the Buy-chips
   // panel's offer — read before this handler can return early, and before a new hand's frame moves the hand counter
   noteTopUpFrame(d);
+  // A BLIND THAT CANNOT BE THIS HAND'S closes the record BEFORE the frame is kept (keepFrame below): kept first, it
+  // would be reduced into the closed hand's archived line (wsLine.ts) as its last row.
+  if (pid === "CO_BLIND_INFO" && blindOpensNewHand(d)) {
+    // A BLIND POST IS THE FIRST THING IN A HAND (2026-10-14): in 6,545 dealt hands across every socket dump not one
+    // CO_BLIND_INFO came after the hand's CO_CARDTABLE_INFO. One arriving while the hand in progress has been played
+    // (a voluntary action, a board card) is the NEXT hand's, its PLAY_STAGE_INFO lost (a tap gap) — or the same hand
+    // read twice (the closed-socket replay, tapSocketClosed). Either way this record is over: closed as it stands,
+    // ended unseen, and the post opens the hand it belongs to. Without this the post landed in the open record
+    // (4923409614: "post-sb" on the river at index 15) and everything after it with it.
+    dumpMark("forced new hand: a blind post while this hand was past its posts (its end never arrived)");
+    noteEndUnseen("a blind was posted while this hand was past its posts — the next hand began and this hand's end-of-hand frame never arrived");
+    beginHand(null);
+    onGameMsg(d);
+    return;
+  }
   // THE HAND'S FRAMES (wsLine.ts builds /hand's line from them): every frame this handler takes, in order; a new
   // hand's PLAY_STAGE_INFO opens the list below, after beginHand has emptied it
   if (pid !== "PLAY_STAGE_INFO") keepFrame(w, d);

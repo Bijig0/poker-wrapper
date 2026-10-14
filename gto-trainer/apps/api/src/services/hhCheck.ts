@@ -19,7 +19,8 @@ import { offTreeLog } from "./offTreeLog";
 import type { Database } from "bun:sqlite";
 import { archivedByClientHandId, doneIgnitionHandsAfter, finishedIgnitionIds, lastArchivedRowid, type Enriched } from "../routes/dashboard";
 import { hhChecksDbPath, openStore } from "./storePaths";
-import { compareHand, compareThroughHero, parseIgnitionHh, type HhDiff, type IgnHand } from "../utils/ignitionHh/ignitionHh";
+import { compareHand, compareThroughHero, cutIgnitionToSeen, parseIgnitionHh, type HhDiff, type IgnHand } from "../utils/ignitionHh/ignitionHh";
+import { endedUnseenOf, type EndedUnseen } from "../utils/archivedHand/endedUnseen";
 import { fetchIgnitionRecord, type RecordResult } from "./ignitionRecord";
 import { asActivity, step } from "./answerTrace";
 import { sessionLive } from "./sessionLive";
@@ -39,7 +40,11 @@ export interface HhCheck {
   checkedAt: number | null;
   error: string | null;
 }
-export interface Comparison { ignition: IgnHand; diffs: HhDiff[]; through: HhDiff[] }
+export interface Comparison {
+  ignition: IgnHand; diffs: HhDiff[]; through: HhDiff[];
+  /** the archived record ended unseen (the wrapper's stamp): the comparison stopped where the record did */
+  unseen?: EndedUnseen;
+}
 
 // ----------------------------------------------------------------------------------------------- pure core
 
@@ -53,9 +58,23 @@ export const freshCheck = (e: Pick<Enriched, "clientHandId" | "dbId" | "playedAt
   diffs: [], through: [], tries: 0, nextAt: now + RETRY_DELAYS_MS[0]!, checkedAt: null, error: null,
 });
 
+/**
+ * A RECORD THAT ENDED UNSEEN IS CHECKED AS FAR AS IT GOES (2026-10-14). The wrapper stamps a record it closed before the
+ * table's end-of-hand frame (`endedUnseen`: its socket closed mid-hand, the next hand opened on it, the session ended —
+ * 4923409614, whose socket closed on the river after the answer was served). Ignition's history has the whole hand;
+ * ours has what the table sent up to the close. Compared whole, every action after our last read as "missing from
+ * ours" and hero's own later action put the verdict at "does not match" — a missing end, not a misread. So Ignition's
+ * record is cut to the part ours saw (utils/ignitionHh cutIgnitionToSeen): the actions up to the one aligned with our
+ * last, the board as far as ours; the end stacks (money after an end we never saw) are not compared. What WAS seen is
+ * still held to the same standard: a wrong amount, a lost action or a wrong board card inside it is a mismatch as before.
+ */
 export const compareRecord = (body: unknown, archived: Enriched): Comparison => {
   const ignition = parseIgnitionHh(body);
-  return { ignition, diffs: compareHand(archived.hand, ignition), through: compareThroughHero(archived.hand, ignition) };
+  const unseen = endedUnseenOf(archived);
+  const against = unseen ? cutIgnitionToSeen(archived.hand, ignition) : ignition;
+  const kept = (ds: HhDiff[]) => (unseen ? ds.filter((d) => d.kind !== "end-stack") : ds);
+  return { ignition, diffs: kept(compareHand(archived.hand, against)), through: kept(compareThroughHero(archived.hand, against)),
+           ...(unseen ? { unseen } : {}) };
 };
 
 export type Outcome = { kind: "compared"; diffs: HhDiff[]; through: HhDiff[] } | Extract<RecordResult, { ok: false }>;

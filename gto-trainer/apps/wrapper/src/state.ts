@@ -224,6 +224,9 @@ function fresh() {
     /** Every socket's frames since ITS last PLAY_STAGE_INFO, always (tapHold only fills while unbound): what a
      *  re-bind replays, so the hand is rebuilt from its start after a hand in progress was dropped. */
     tapHist: new Map<string, Record<string, any>[]>(),
+    /** Sockets whose close the tap has seen (ignition/ws.ts tapSocketClosed): gone for good — nothing one of them
+     *  dealt or held may bind or be replayed again (2026-10-14, the merged records 4923409614 / 4923409734 / 4923345879). */
+    tapClosed: new Set<string>(),
     tapReplay: [] as Record<string, any>[],
     tapDomCards: [] as string[],
     tapAmbiguousSaid: new TupleSet(),
