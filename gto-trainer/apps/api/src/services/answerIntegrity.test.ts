@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { checkAnswerIntegrity, isCheckable, actionForRoll, MIX_FLOOR_PCT } from "./answerIntegrity";
+import { checkAnswerIntegrity, isCheckable, actionForRoll, MIX_FLOOR_PCT, playedActions, playsAt, rollBands } from "./answerIntegrity";
 
 describe("checkAnswerIntegrity", () => {
   test("a pure answer served with its own mix is clean", () => {
@@ -70,6 +70,22 @@ describe("checkAnswerIntegrity", () => {
     // fuzzy sizing would match Raise 2.5 to Raise 2.8 and hide the fault
     const faults = checkAnswerIntegrity({ pick: "Raise 2.5", actions: [{ action: "Raise 2.8", frequency: 100 }] });
     expect(faults.map((f) => f.kind)).toEqual(["served-off-mix"]);
+  });
+
+  // THE BOUNDARY (2026-10-14 audit finding 9): the register's mix-noise-floor says "actions at 1% or less are never
+  // played" — exactly 1.00% is dropped by the roller, so a pick at exactly 1.00% is served off its mix (the check used
+  // `< 1` while the roller used `> 1`: the two disagreed on the boundary alone)
+  test("an action at exactly 1.00% is not played, and a pick at exactly 1.00% is served off its mix", () => {
+    expect(playsAt(1)).toBe(false);
+    expect(playsAt(1.01)).toBe(true);
+    expect(playsAt(0.99)).toBe(false);
+    const mix = [{ action: "Fold", frequency: 99 }, { action: "Raise 2", frequency: 1 }];
+    expect(playedActions(mix).map((a) => a.action)).toEqual(["Fold"]);
+    expect(rollBands(mix).map((b) => b.action)).toEqual(["Fold"]);
+    expect(actionForRoll(mix, 99.5)).toBeNull();                       // one real action: nothing to roll
+    expect(checkAnswerIntegrity({ pick: "Raise 2", actions: mix })).toHaveLength(1);
+    expect(checkAnswerIntegrity({ pick: "Raise 2", actions: mix })[0]!.detail).toContain("plays 1% of the time");
+    expect(checkAnswerIntegrity({ pick: "Raise 2", actions: [{ action: "Fold", frequency: 98.99 }, { action: "Raise 2", frequency: 1.01 }] })).toEqual([]);
   });
 
   test("the floor is the roller's floor", () => {

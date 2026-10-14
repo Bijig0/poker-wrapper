@@ -41,8 +41,14 @@ export interface IntegrityFault {
   detail: string;
 }
 
-/** Below this, an action is noise in the solve rather than something the strategy plays. */
+/** At or below this, an action is noise in the solve rather than something the strategy plays: an action at exactly
+ *  1.00% is NOT played (the register's mix-noise-floor: "actions at 1% or less are never played"; playedActions keeps
+ *  `> MIX_FLOOR_PCT`, and so does the served-off-mix test below — the two agreed only above and below 1% until
+ *  2026-10-14, the audit's finding 9). */
 export const MIX_FLOOR_PCT = 1;
+
+/** The one predicate both the roller and the check use: does the strategy play an action at this frequency? */
+export const playsAt = (frequency: number | null | undefined): boolean => (frequency ?? 0) > MIX_FLOOR_PCT;
 
 export interface AnswerToCheck {
   pick?: string | null;
@@ -66,7 +72,7 @@ export const isCheckable = (a: AnswerToCheck): boolean =>
 
 /** The actions a strategy actually plays — the roller's own view of the mix. */
 export const playedActions = (actions: ActionFreq[]): ActionFreq[] =>
-  actions.filter((x) => (x.frequency ?? 0) > MIX_FLOOR_PCT);
+  actions.filter((x) => playsAt(x.frequency));
 
 /** One played action's slice of the 0-100 roll: a roll r lands on it when lo < r <= hi. */
 export interface RollBand extends ActionFreq {
@@ -124,7 +130,7 @@ export function checkAnswerIntegrity(a: AnswerToCheck): IntegrityFault[] {
 
   const mine = entryFor(actions, a.pick);
   const freq = mine?.frequency ?? null;
-  if (freq == null || freq < MIX_FLOOR_PCT) {
+  if (freq == null || !playsAt(freq)) {
     const top = [...actions].sort((x, y) => (y.frequency ?? 0) - (x.frequency ?? 0))[0];
     faults.push({
       kind: "served-off-mix",
