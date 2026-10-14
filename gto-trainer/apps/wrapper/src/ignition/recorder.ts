@@ -48,9 +48,17 @@ async function shotJpeg(ws: string, out: string, quality = 40): Promise<boolean>
   return true;
 }
 
+/** 0 for a folder that is gone: every table's wrapper prunes the same base at session start, so the folder another
+ *  one is removing can vanish under the scan (2026-10-14: the ENOENT that killed table 1's router). */
 function dirSize(d: string): number {
   let n = 0;
-  for (const f of readdirSync(d, { withFileTypes: true, recursive: true } as any) as any[]) {
+  let entries: any[];
+  try {
+    entries = readdirSync(d, { withFileTypes: true, recursive: true } as any) as any[];
+  } catch {
+    return 0;
+  }
+  for (const f of entries) {
     try {
       if (f.isFile()) n += statSync(join(f.parentPath ?? f.path ?? d, f.name)).size;
     } catch {}
@@ -99,7 +107,18 @@ export function pruneSessions(base: string, sess: string[], keep: number, curren
   return removed;
 }
 
+/** Never throws: a prune is housekeeping, and it runs inside setDebug on the router's path (resumeRecordingIfPending) —
+ *  a throw there stopped table 1's router for the whole session (2026-10-14 13:17, session_20261014_131738: table 2's
+ *  wrapper removed session_20261010_044206 while table 1 was sizing it; no table was seated by the router). */
 export function pruneDebug(): void {
+  try {
+    pruneDebugOnce();
+  } catch (e: any) {
+    log(`[debug] prune: ${e?.message ?? e} — left as it is`);
+  }
+}
+
+function pruneDebugOnce(): void {
   const base = DEBUG_DIR();
   if (!existsSync(base)) return;
   let sess = readdirSync(base, { withFileTypes: true })

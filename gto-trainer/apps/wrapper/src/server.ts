@@ -489,7 +489,11 @@ export function buildApp(): Hono {
       const seats = S.router.seats || {};
       const midSeating = !!(seats.leader && (seats.want || 1) > 1 && (seats.have || 0) > 0 && (seats.have || 0) < (seats.want || 1));
       Object.assign(S.router, { steps: [], loginAt: 0.0, snapState: null, loginTries: 0 });
-      if (!(await cdp.available(C.CDP_PORT))) {
+      if (!SESSION.routerAlive() && !isClientSite()) {
+        // the router died (a throw on its path): start it again — no re-seat flag, it would leave a table that is up
+        SESSION.startRouter((S.session.rec || {}).config || {}, S.session.id);
+        SESSION.routerSet("routing", `retry: the table router had stopped — starting it again (was: ${was})`, []);
+      } else if (!(await cdp.available(C.CDP_PORT))) {
         void SESSION.openTableWindow();
         SESSION.routerSet("waiting-window", "retry: opening the table window", []);
       } else if (midSeating) {
