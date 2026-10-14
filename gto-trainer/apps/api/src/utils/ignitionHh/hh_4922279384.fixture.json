@@ -1,0 +1,569 @@
+{
+ "startTime": "2026-10-03T07:03:33Z",
+ "endTime": "2026-10-03T07:04:59Z",
+ "potSize": "$10.80",
+ "rake": "$0.54",
+ "gameType": "HOLDEM",
+ "tableName": "TBL#37906132 - $0.02/$0.05 NL - 6P",
+ "minBet": "$0.10",
+ "maxBet": "",
+ "ante": "$0",
+ "blinds": "$0.02 / $0.05",
+ "communityCards": [
+  "2s",
+  "3c",
+  "Qc",
+  "7h",
+  "Jc"
+ ],
+ "limitType": "NL",
+ "maxSeat": 6,
+ "sessionId": "2026-10-03T00:18:47-2026-10-03T03:05:07-37906132-0-0-0-0-0-0-0",
+ "players": [
+  {
+   "position": "Small Blind",
+   "seat": "2",
+   "cards": [
+    "Ac",
+    "4c",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ],
+   "transparencies": [],
+   "startEndAmount": "$5.32/$10.27",
+   "totalBet": "$5.31",
+   "winLoseAmount": "$4.95",
+   "isMe": false,
+   "seatNo": 0
+  },
+  {
+   "position": "Big Blind",
+   "seat": "3",
+   "cards": [
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ],
+   "transparencies": [],
+   "startEndAmount": "$1.35/$1.30",
+   "totalBet": "$0.05",
+   "winLoseAmount": "$-0.05",
+   "isMe": false,
+   "seatNo": 0
+  },
+  {
+   "position": "UTG [ME]",
+   "seat": "4",
+   "cards": [
+    "9h",
+    "Ad",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ],
+   "transparencies": [],
+   "startEndAmount": "$7.95/$7.82",
+   "totalBet": "$0.13",
+   "winLoseAmount": "$-0.13",
+   "isMe": true,
+   "seatNo": 0
+  },
+  {
+   "position": "UTG+1",
+   "seat": "5",
+   "cards": [
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ],
+   "transparencies": [],
+   "startEndAmount": "$0.77/$0.77",
+   "totalBet": "$0",
+   "winLoseAmount": "$0",
+   "isMe": false,
+   "seatNo": 0
+  },
+  {
+   "position": "Dealer",
+   "seat": "6",
+   "cards": [
+    "6c",
+    "Kc",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ],
+   "transparencies": [],
+   "startEndAmount": "$5.31/$0",
+   "totalBet": "$5.31",
+   "winLoseAmount": "$-5.31",
+   "isMe": false,
+   "seatNo": 0
+  }
+ ],
+ "action": [
+  {
+   "position": "Dealer",
+   "action": "Set dealer",
+   "data": [
+    "6"
+   ],
+   "transparencies": [],
+   "time": "03:03:33",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Small Blind",
+   "action": "Small Blind",
+   "data": [
+    "$0.02"
+   ],
+   "transparencies": [],
+   "time": "03:03:33",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Big Blind",
+   "action": "Big blind",
+   "data": [
+    "$0.05"
+   ],
+   "transparencies": [],
+   "time": "03:03:33",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Small Blind",
+   "action": "Card dealt to a spot",
+   "data": [
+    "Ac",
+    "4c",
+    "",
+    ""
+   ],
+   "transparencies": [
+    "false",
+    "false",
+    "false",
+    "false"
+   ],
+   "time": "03:03:33",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Big Blind",
+   "action": "Card dealt to a spot",
+   "data": [
+    "",
+    "",
+    "",
+    ""
+   ],
+   "transparencies": [
+    "false",
+    "false",
+    "false",
+    "false"
+   ],
+   "time": "03:03:33",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG  [ME]",
+   "action": "Card dealt to a spot",
+   "data": [
+    "9h",
+    "Ad",
+    "",
+    ""
+   ],
+   "transparencies": [
+    "false",
+    "false",
+    "false",
+    "false"
+   ],
+   "time": "03:03:33",
+   "isMe": true,
+   "showdown": null
+  },
+  {
+   "position": "UTG+1",
+   "action": "Card dealt to a spot",
+   "data": [
+    "",
+    "",
+    "",
+    ""
+   ],
+   "transparencies": [
+    "false",
+    "false",
+    "false",
+    "false"
+   ],
+   "time": "03:03:33",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Dealer",
+   "action": "Card dealt to a spot",
+   "data": [
+    "6c",
+    "Kc",
+    "",
+    ""
+   ],
+   "transparencies": [
+    "false",
+    "false",
+    "false",
+    "false"
+   ],
+   "time": "03:03:33",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "",
+   "action": "Table deposit",
+   "data": [
+    "$1.50"
+   ],
+   "transparencies": [],
+   "time": "03:03:35",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "",
+   "action": "Seat re-join",
+   "data": [],
+   "transparencies": [],
+   "time": "03:03:35",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG  [ME]",
+   "action": "Raises",
+   "data": [
+    "$0.13"
+   ],
+   "transparencies": [],
+   "time": "03:03:36",
+   "isMe": true,
+   "showdown": null
+  },
+  {
+   "position": "UTG+1",
+   "action": "Folds",
+   "data": [],
+   "transparencies": [],
+   "time": "03:03:40",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Dealer",
+   "action": "Calls",
+   "data": [
+    "$0.13"
+   ],
+   "transparencies": [],
+   "time": "03:03:43",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Small Blind",
+   "action": "Calls",
+   "data": [
+    "$0.11"
+   ],
+   "transparencies": [],
+   "time": "03:03:50",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Big Blind",
+   "action": "Folds (timeout)",
+   "data": [],
+   "transparencies": [],
+   "time": "03:04:06",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Big Blind",
+   "action": "Seat sit out",
+   "data": [],
+   "transparencies": [],
+   "time": "03:04:06",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "",
+   "action": "FLOP",
+   "data": [
+    "2s",
+    "3c",
+    "Qc"
+   ],
+   "transparencies": [],
+   "time": "03:04:06",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Big Blind",
+   "action": "Seat re-join",
+   "data": [],
+   "transparencies": [],
+   "time": "03:04:07",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Small Blind",
+   "action": "Bets",
+   "data": [
+    "$0.20"
+   ],
+   "transparencies": [],
+   "time": "03:04:16",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "UTG  [ME]",
+   "action": "Folds",
+   "data": [],
+   "transparencies": [],
+   "time": "03:04:21",
+   "isMe": true,
+   "showdown": null
+  },
+  {
+   "position": "Dealer",
+   "action": "Calls",
+   "data": [
+    "$0.20"
+   ],
+   "transparencies": [],
+   "time": "03:04:25",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "",
+   "action": "TURN",
+   "data": [
+    "2s",
+    "3c",
+    "Qc",
+    "7h"
+   ],
+   "transparencies": [],
+   "time": "03:04:25",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Small Blind",
+   "action": "Checks",
+   "data": [],
+   "transparencies": [],
+   "time": "03:04:30",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Dealer",
+   "action": "Checks",
+   "data": [],
+   "transparencies": [],
+   "time": "03:04:32",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "",
+   "action": "RIVER",
+   "data": [
+    "2s",
+    "3c",
+    "Qc",
+    "7h",
+    "Jc"
+   ],
+   "transparencies": [],
+   "time": "03:04:32",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Small Blind",
+   "action": "Bets",
+   "data": [
+    "$1.01"
+   ],
+   "transparencies": [],
+   "time": "03:04:40",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Dealer",
+   "action": "Raises",
+   "data": [
+    "$2.02"
+   ],
+   "transparencies": [],
+   "time": "03:04:46",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Small Blind",
+   "action": "All-in(raise)",
+   "data": [
+    "$4.99"
+   ],
+   "transparencies": [],
+   "time": "03:04:56",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Dealer",
+   "action": "All-in",
+   "data": [
+    "$2.96"
+   ],
+   "transparencies": [],
+   "time": "03:04:58",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Small Blind",
+   "action": "Return uncalled portion of bet",
+   "data": [
+    "$0.01"
+   ],
+   "transparencies": [],
+   "time": "03:04:58",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Small Blind",
+   "action": "Showdown",
+   "data": [
+    "Ac",
+    "Qc",
+    "Jc",
+    "4c",
+    "3c",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ],
+   "transparencies": [],
+   "time": "03:04:58",
+   "isMe": false,
+   "showdown": {
+    "hi": [
+     "Ac",
+     "Qc",
+     "Jc",
+     "4c",
+     "3c"
+    ],
+    "lo": [
+     "",
+     "",
+     "",
+     "",
+     ""
+    ],
+    "description": "Flush"
+   }
+  },
+  {
+   "position": "Dealer",
+   "action": "Mucks",
+   "data": [
+    "6c",
+    "Kc",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ],
+   "transparencies": [
+    "false",
+    "false",
+    "false",
+    "false",
+    "false",
+    "false",
+    "false"
+   ],
+   "time": "03:04:59",
+   "isMe": false,
+   "showdown": {
+    "hi": [],
+    "lo": [],
+    "description": "Flush"
+   }
+  },
+  {
+   "position": "Small Blind",
+   "action": "Hand result",
+   "data": [
+    "$10.26"
+   ],
+   "transparencies": [],
+   "time": "03:04:59",
+   "isMe": false,
+   "showdown": null
+  },
+  {
+   "position": "Dealer",
+   "action": "Seat sit out",
+   "data": [],
+   "transparencies": [],
+   "time": "03:05:02",
+   "isMe": false,
+   "showdown": null
+  }
+ ]
+}

@@ -2,7 +2,10 @@
  * Ignition's own record of a hand, from a running Poker Wrapper (GET /hh/:id runs the client's hand-history lookup
  * inside the logged-in poker page). Every wrapper drives the same client page, so any of them can answer.
  */
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { DEFAULT_LIVE_URL } from "../feed/resolveHand/resolveHand";
+import { ignitionHhDir } from "./storePaths";
 import { studyPollers } from "./studyPoller";
 
 /** not-found: Ignition answered and has no such hand (yet). unreachable: no wrapper, client closed, or the network. */
@@ -22,6 +25,19 @@ const askWrapper = (base: string, id: string, refresh: boolean): Promise<any | n
   fetch(`${base}/hh/${id}${refresh ? "?refresh=1" : ""}`, { signal: AbortSignal.timeout(60_000) })
     .then((r) => (r.ok ? r.json() : null))
     .catch(() => null);
+
+/** The wrapper's SAVED copy of a record (it keeps every hand it fetched on disk, <wrapper data>/hand_history/<id>.json),
+ *  read without a wrapper up — what scripts/hhRecheck.ts re-runs the comparison from. null = never fetched (or unreadable). */
+export function storedIgnitionRecord(id: string): Extract<RecordResult, { ok: true }> | null {
+  const path = join(ignitionHhDir(), `${id}.json`);
+  if (!/^\d{5,}$/.test(id) || !existsSync(path)) return null;
+  try {
+    const rec = JSON.parse(readFileSync(path, "utf8"));
+    return rec?.ok && rec.body ? { ok: true, body: rec.body, fetchedAt: rec.fetchedAt ?? null, cached: true } : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function fetchIgnitionRecord(id: string, opts: { refresh?: boolean; wrappers?: string[] } = {}): Promise<RecordResult> {
   const bases = opts.wrappers ?? wrapperUrls(studyPollers.list().map((p) => p.assistiveUrl));

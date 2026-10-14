@@ -3,12 +3,21 @@
  * read into our terms, and checked against what the reader archived for the same hand. Pure: no I/O.
  *
  * Money in the record is dollar strings; amounts follow the same convention as our actions: Raises = the total
- * the bet is raised TO, Calls / All-in = the chips added, Bets = the bet. Seats are the table's own numbers, the
- * same ones the wrapper exports. Villains' hole cards are blank unless shown.
+ * the bet is raised TO, Calls = the chips added, Bets = the bet. Seats are the table's own numbers, the same ones the
+ * wrapper exports. Villains' hole cards are blank unless shown.
+ *
+ * ALL-INS (2026-10-14): Ignition's plain "All-in" line carries the chips ADDED, "All-in(raise)" the raise-to total;
+ * the reader files every shove as the seat's STREET TOTAL (the level it is at once the chips are in). parseIgnitionHh
+ * puts the total in `amountBb` (the seat's earlier money on the street added to a plain "All-in"; `addedBb` keeps the
+ * increment), so the two sides compare like for like. Hand 4922279384: seat 6 raised the river to 40.4bb and shoved
+ * for 59.2bb more — ours "all-in 99.6", Ignition "All-in $2.96" — was 1 of 64 "action-amount" mismatches that were
+ * nothing but this convention (the 2026-10-14 answer-path audit, finding 5).
  */
-import type { ActionType, ParsedHand, Street } from "../../feed/parsePanelFeed/parsePanelFeed";
+import type { ActionType, ParsedHand, PostIn, Street } from "../../feed/parsePanelFeed/parsePanelFeed";
 
-export interface IgnAction { seat: number | null; position: string; type: ActionType; amountBb?: number; street: Street; label: string }
+/** `amountBb`: a raise's / all-in's street total, a call's / bet's chips added. `addedBb`: the chips a plain "All-in"
+ *  line added, when they are not the total (the seat had money on the street already). */
+export interface IgnAction { seat: number | null; position: string; type: ActionType; amountBb?: number; addedBb?: number; street: Street; label: string }
 /** One line of Ignition's log, in order. `action` is its index in IgnHand.actions when the line is a betting action. */
 export interface IgnLine { seat: number | null; position: string; label: string; data: string[]; street: Street; action: number | null }
 export interface IgnSeat { seat: number; position: string; hero: boolean; cards: string[]; startBb: number; endBb: number; netBb: number; totalBetBb: number }
@@ -28,7 +37,10 @@ export interface IgnHand {
   nextHandId: string | null;
 }
 export type DiffKind = "big-blind" | "seats" | "hero-seat" | "hero-cards" | "board" | "board-extra" | "start-stack" | "end-stack"
-  | "action-amount" | "action-extra" | "action-missing";
+  | "action-amount" | "action-extra" | "action-missing"
+  /** Ignition folded hero on its clock (a timeout / disconnect / auth fold, his last action) and our record has no row
+   *  for it — the hand's answers were built on everything before it, so it is not a missed action of the capture */
+  | "hero-site-fold";
 /** One disagreement. Action diffs carry the index of the action on each side that has it. */
 export interface HhDiff { kind: DiffKind; field: string; ours: string; ignition: string; note?: string; oursAt?: number; ignitionAt?: number }
 
@@ -38,12 +50,25 @@ const TYPE: Record<string, ActionType> = {
   "small blind": "post-sb", "big blind": "post-bb", folds: "fold", checks: "check", calls: "call", bets: "bet", raises: "raise", "all-in": "all-in",
   // A POST-IN (a new player's out-of-turn blind) is filed by the reader as that seat's limp: a call of the posted amount.
   "posts chip": "call",
+  // A returning player's "Posts dead chip $0.07" at $0.02/$0.05 is his dead small blind AND his live big blind in one
+  // line (he then checks his option, or calls the raise less that 1bb); the reader sees the live 1bb as a post. The
+  // live part is the post-in here, the rest is dead money; a dead chip under one big blind is no action at all.
+  "posts dead chip": "call",
 };
 /** "Folds (timeout)" / "(disconnect)" / "(auth)" and "Checks (timeout)" are the plain action; "All-in(raise)" is an
  *  all-in whose amount is the raise-to total. */
 const typeOf = (label: string): ActionType | undefined =>
   TYPE[label.toLowerCase().replace(/\s*\((timeout|disconnect|auth)\)$/, "").replace(/^all-in\(.*\)$/, "all-in")];
-const isPostIn = (label: string) => label.toLowerCase() === "posts chip";
+const isPostIn = (label: string) => /^posts (dead )?chip$/i.test(label.trim());
+const isDeadPost = (label: string) => /^posts dead chip$/i.test(label.trim());
+/** The live blind inside a post line, in bb: all of a "Posts chip", one big blind of a dead post that holds one. */
+const livePostBb = (label: string, amtBb: number): number | null => !isDeadPost(label) ? amtBb : amtBb >= 1 - 1e-9 ? 1 : null;
+/** "Folds (timeout)" / "(disconnect)" / "(auth)": the site made the fold, not the player. */
+export const isSiteFold = (label: string) => /^folds\s*\((timeout|disconnect|auth)\)$/i.test(label.trim());
+/** A plain "All-in" is the chips added; "All-in(raise)" (and any other parenthesised form) is the raise-to total. */
+const isAllInIncrement = (label: string) => label.trim().toLowerCase() === "all-in";
+/** What a line does to its seat's money on the street: a raise-to replaces it, everything else adds to it. */
+const setsStreetTotal = (type: ActionType, label: string) => type === "raise" || (type === "all-in" && !isAllInIncrement(label));
 const STREET_MARK: Record<string, Street> = { FLOP: "flop", TURN: "turn", RIVER: "river" };
 
 const cents = (s: unknown): number => {
@@ -77,13 +102,24 @@ export function parseIgnitionHh(body: any): IgnHand {
   const seats: IgnSeat[] = (body?.players ?? []).map(readSeat(bb));
   const seatByPos = new Map(seats.map((s) => [s.position.toLowerCase(), s.seat]));
   const lines = tagStreets(body?.action ?? []).map((l) => ({ ...l, seat: seatByPos.get(l.position.toLowerCase()) ?? null }));
-  const posters = new Set(lines.filter((l) => isPostIn(l.label)).map((l) => l.seat));
+  const posters = new Set(lines.filter((l) => isPostIn(l.label) && livePostBb(l.label, bb(l.data[0])) != null).map((l) => l.seat));
+  // each seat's money on the current street so far (blinds and posts count): a plain "All-in" adds to it, and the
+  // action carries the sum — the street total the reader files
+  let onStreet: { street: Street; bySeat: Map<number | null, number> } = { street: "preflop", bySeat: new Map() };
   // a poster's preflop check is the free option of the limp it posted, not a second action
   const actionOf = (l: Omit<IgnLine, "action">): IgnAction | null => {
     const type = typeOf(l.label);
     if (!type || (type === "check" && l.street === "preflop" && posters.has(l.seat))) return null;
-    const amt = l.data[0] ? bb(l.data[0]) : NaN;
-    return { seat: l.seat, position: l.position, type, ...(Number.isFinite(amt) ? { amountBb: amt } : {}), street: l.street, label: l.label };
+    const raw = l.data[0] ? bb(l.data[0]) : NaN;
+    const amt = isPostIn(l.label) && Number.isFinite(raw) ? (livePostBb(l.label, raw) ?? NaN) : raw;
+    if (isPostIn(l.label) && !Number.isFinite(amt)) return null;   // a dead chip under a big blind: money in the pot, not an action
+    if (l.street !== onStreet.street) onStreet = { street: l.street, bySeat: new Map() };
+    const before = onStreet.bySeat.get(l.seat) ?? 0;
+    const money = Number.isFinite(amt);
+    if (money) onStreet.bySeat.set(l.seat, setsStreetTotal(type, l.label) ? amt : round2(before + amt));
+    const total = money && type === "all-in" && isAllInIncrement(l.label) && before > 0 ? round2(before + amt) : null;
+    return { seat: l.seat, position: l.position, type, ...(money ? { amountBb: total ?? amt } : {}), ...(total != null ? { addedBb: amt } : {}),
+      street: l.street, label: l.label };
   };
   const parsed = lines.map((l) => ({ line: l, action: actionOf(l) }));
   const actions = parsed.flatMap((p) => (p.action ? [p.action] : []));
@@ -152,27 +188,47 @@ const checkEndStacks: Check = (o, g) =>
   });
 
 /** An action on either side, with its index in that side's own list. */
-interface Step { at: number; seat: number | null; type: string; amount?: number; street: string; postIn: boolean }
+interface Step { at: number; seat: number | null; type: string; amount?: number; street: string; postIn: boolean; label: string }
 
 const oursSteps = (o: ParsedHand): Step[] =>
-  o.actions.map((a, at) => ({ at, seat: a.seatId, type: a.type, amount: a.amount, street: a.street, postIn: false }));
+  o.actions.map((a, at) => ({ at, seat: a.seatId, type: a.type, amount: a.amount, street: a.street, postIn: false, label: a.type }));
 const ignSteps = (g: IgnHand): Step[] =>
-  g.actions.map((a, at) => ({ at, seat: a.seat, type: a.type, amount: a.amountBb, street: a.street, postIn: isPostIn(a.label) }));
+  g.actions.map((a, at) => ({ at, seat: a.seat, type: a.type, amount: a.amountBb, street: a.street, postIn: isPostIn(a.label), label: a.label }));
 
-/** Ignition logs a post-in right after the blinds; the reader files it at the poster's turn, as a limp (call) or, when
- *  the post covered it, a check. Each post-in is paired with that seat's first preflop call/check and both drop out.
- *  A post-in the hand's `postIns` already folded into the poster's own action — a raise (the post is inside its level)
- *  or a fold (the post stays in the pot as dead money) — has no row of its own on our side: Ignition's drops alone.
+/** Ignition logs a post-in right after the blinds; the reader folds it into the poster's own first preflop action
+ *  (utils/foldPostIns, recorded in the hand's `postIns` with how it was read):
+ *    limp  — his option check became a call OF THE POST: that row pairs with Ignition's post and both drop out;
+ *    call  — his call carries the post (X + post): Ignition's post drops out and its amount is added to his call, so
+ *            the two calls compare as the same money (hand 4923627084: pairing the post with his FIRST call ate the
+ *            3bb call itself and reported it missing — the 2026-10-14 audit, finding 5);
+ *    raise / fold / pending — the post is inside his raise-to, or dead in the pot: Ignition's drops alone.
+ *  A hand with no `postIns` record (rows from before the fold, or a post the reader never saw) pairs the post with
+ *  the poster's option check or a call of the post's size only — never a later full-size call.
  *  (2026-09-26: hands 4920636325 / 4920636586 / 4920638121 / 4920638634 were flagged "post-in missing" while the
  *  archived rows carried every post.) */
-const pairPostIns = (ours: Step[], ign: Step[], folded: ReadonlySet<number>): { ours: Step[]; ign: Step[] } => {
+const pairPostIns = (ours: Step[], ign: Step[], postIns: readonly PostIn[] | undefined): { ours: Step[]; ign: Step[] } => {
   const gone = new Set<Step>();
+  const carried = new Map<Step, number>();   // Ignition's call that carries a post, and the post's size
+  const used = new Set<PostIn>();
   for (const g of ign.filter((x) => x.postIn)) {
-    const o = ours.find((x) => !gone.has(x) && x.seat === g.seat && x.street === "preflop" && (x.type === "call" || x.type === "check"));
-    if (o) { gone.add(g); gone.add(o); }
-    else if (g.seat !== null && folded.has(g.seat)) gone.add(g);
+    const rec = postIns?.find((p) => p.seatId === g.seat && !used.has(p));
+    if (rec) used.add(rec);
+    const read = rec?.readAs ?? "none";
+    if (read === "limp" || read === "none") {
+      const o = ours.find((x) => !gone.has(x) && x.seat === g.seat && x.street === "preflop"
+        && (x.type === "check" || (x.type === "call" && x.amount != null && g.amount != null && near(x.amount, g.amount))));
+      if (o) { gone.add(g); gone.add(o); }
+      else if (rec) gone.add(g);   // read as a limp but no row of the post's size: the post is not what went wrong
+    } else {
+      gone.add(g);
+      if (read === "call") {
+        const call = ign.find((x) => x.at > g.at && x.seat === g.seat && x.street === "preflop" && x.type === "call");
+        if (call) carried.set(call, (carried.get(call) ?? 0) + (g.amount ?? 0));
+      }
+    }
   }
-  return { ours: ours.filter((o) => !gone.has(o)), ign: ign.filter((g) => !gone.has(g)) };
+  const withPost = (x: Step): Step => (carried.has(x) && x.amount != null ? { ...x, amount: round2(x.amount + carried.get(x)!) } : x);
+  return { ours: ours.filter((o) => !gone.has(o)), ign: ign.filter((g) => !gone.has(g)).map(withPost) };
 };
 
 // an all-in is a bet, raise or call that uses every chip — the reader files a shove under any of the four
@@ -200,18 +256,35 @@ function alignSteps(a: Step[], b: Step[]): Pair[] {
 
 const stepText = (s: Step | null) => (s ? `${s.street} seat ${s.seat ?? "?"} ${s.type}${s.amount != null ? ` ${s.amount}bb` : ""}` : "—");
 
-/** An all-in's amount is the raise-to total on one side and the chips added on the other: only like types compare. */
-const pairDiff = ([o, g]: Pair): HhDiff[] =>
-  o && g
+/** Both sides' actions aligned, post-ins paired off first. */
+const alignedActions = (o: ParsedHand, g: IgnHand): Pair[] => {
+  const { ours, ign } = pairPostIns(oursSteps(o), ignSteps(g), o.postIns);
+  return alignSteps(ours, ign);
+};
+
+const heroSeatOf = (g: IgnHand) => g.seats.find((s) => s.hero)?.seat ?? null;
+/** Ignition's last action by hero — the hand's answers were built on what came before it. -1 when hero never acted. */
+const heroLastAt = (g: IgnHand) => { const h = heroSeatOf(g); return h == null ? -1 : g.actions.findLastIndex((a) => a.seat === h); };
+
+/** Ignition's site-made fold of hero (his last action) that our record has no row for. */
+const siteFoldOfHero = ([o, g]: Pair, ign: IgnHand) =>
+  o == null && g != null && g.seat === heroSeatOf(ign) && g.at === heroLastAt(ign) && g.type === "fold" && isSiteFold(g.label);
+
+/** Amounts compare only between like types: a raise is a raise-to total, a call the chips added. (An all-in is a
+ *  street total on both sides since 2026-10-14 — parseIgnitionHh.) */
+const pairDiff = (ign: IgnHand) => (pair: Pair): HhDiff[] => {
+  const [o, g] = pair;
+  return o && g
     ? o.amount != null && g.amount != null && o.type === g.type && !near(o.amount, g.amount)
       ? [diff("action-amount", `action ${o.at + 1} amount`, stepText(o), stepText(g), { oursAt: o.at, ignitionAt: g.at })] : []
     : o ? [diff("action-extra", `action ${o.at + 1} only in ours`, stepText(o), "—", { oursAt: o.at })]
+    : siteFoldOfHero(pair, ign)
+      ? [diff("hero-site-fold", `Ignition action ${g!.at + 1}: hero's fold`, "—", `${stepText(g)} (${g!.label})`, { ignitionAt: g!.at,
+          note: "the site folded hero on its clock — not in our record; every answer was built on what came before it" })]
     : [diff("action-missing", `Ignition action ${g!.at + 1} missing from ours`, "—", stepText(g), { ignitionAt: g!.at })];
-
-const checkActions: Check = (o, g) => {
-  const { ours, ign } = pairPostIns(oursSteps(o), ignSteps(g), new Set((o.postIns ?? []).map((p) => p.seatId)));
-  return alignSteps(ours, ign).flatMap(pairDiff);
 };
+
+const checkActions: Check = (o, g) => alignedActions(o, g).flatMap(pairDiff(g));
 
 const CHECKS: Check[] = [checkBigBlind, checkSeats, checkHero, checkBoard, checkStartStacks, checkEndStacks, checkActions];
 
@@ -222,15 +295,23 @@ const BOARD_CARDS: Record<Street, number> = { preflop: 0, flop: 3, turn: 4, rive
 
 /** compareHand with both sides cut at hero's last action — the part of the hand every answer was built on. What
  *  happens after hero is done (other seats' later actions, later streets, end stacks) is left out. A recording that
- *  never got to hero is kept whole: everything in it came before hero's missing action. */
+ *  never got to hero is kept whole: everything in it came before hero's missing action.
+ *
+ *  ONE CUT FOR BOTH SIDES (2026-10-14): the two action lists are aligned first and cut where Ignition's last action
+ *  by hero lands in the alignment. Cutting each side at ITS OWN last hero action read a hand whose hero fold came from
+ *  the site's clock (no fold in our record) as "every action since his blind is missing" (4923636936: actions 3-7
+ *  flagged, all present — the 2026-10-14 audit, finding 5). A site-made fold of hero that our record has no row for
+ *  ends the comparison: it is reported by compareHand as `hero-site-fold`, not here. */
 export function compareThroughHero(ours: ParsedHand, ign: IgnHand): HhDiff[] {
-  const hero = ign.seats.find((s) => s.hero)?.seat;
-  const gi = ign.actions.findLastIndex((a) => a.seat === hero);
-  const oi = ours.actions.findLastIndex((a) => a.hero);
-  const cards = gi < 0 ? 5 : BOARD_CARDS[ign.actions[gi]!.street];
-  const cut = gi < 0 ? { ours, ign } : {
-    ours: { ...ours, actions: oi < 0 ? ours.actions : ours.actions.slice(0, oi + 1), board: ours.board.slice(0, cards) },
-    ign: { ...ign, actions: ign.actions.slice(0, gi + 1), board: ign.board.slice(0, cards) },
-  };
-  return compareHand(cut.ours, cut.ign).filter((d) => d.kind !== "end-stack");
+  const gi = heroLastAt(ign);
+  if (gi < 0) return compareHand(ours, ign).filter((d) => d.kind !== "end-stack");
+  const cards = BOARD_CARDS[ign.actions[gi]!.street];
+  const cut = { ours: { ...ours, board: ours.board.slice(0, cards) }, ign: { ...ign, board: ign.board.slice(0, cards) } };
+  const pairs = alignedActions(ours, ign);
+  const end = pairs.findLastIndex(([, g]) => g != null && g.at <= gi);
+  const through = pairs.slice(0, end + 1).filter((p) => !siteFoldOfHero(p, ign));
+  return [
+    ...CHECKS.filter((c) => c !== checkActions).flatMap((check) => check(cut.ours, cut.ign)).filter((d) => d.kind !== "end-stack"),
+    ...through.flatMap(pairDiff(ign)),
+  ];
 }
