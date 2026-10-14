@@ -21,7 +21,7 @@ import {
   awardName, bankStep, boardCards, buyPanelUp, disconnectOf, domHeroSeat, forgetFrame, heroCards, heroClockOf, heroHandOf, heroStatus, modalOf, parseSeats, potOf, potVal, RANK_RE,
   mySel, pinFrame, sameHole, splitStrip, tableJs, toAct, watchJs, type Node,
 } from "./dom";
-import { actAdd, actSeen, boardCap, dumpEvent, dumpMark, lastStanding, mkey, noteDomBoard, tapForget, tapVerify, withoutRabbit } from "./ws";
+import { actAdd, actSeen, boardCap, dumpEvent, dumpMark, lastStanding, mkey, noteDomBoard, noteEndUnseen, tapSocketClosed, tapVerify, withoutRabbit } from "./ws";
 import { handState, heroPosition, toActSources } from "./hand";
 import { handleModal, stateCheck, topUpReceipt } from "./checks";
 import { shadowTick } from "./shadow";
@@ -140,6 +140,8 @@ function notePin(what: ReturnType<typeof pinFrame>): void {
 export function noteDisconnect(what: NonNullable<ReturnType<typeof disconnectOf>>, via: string): void {
   if (S.disconnect || !S.session.id) return;
   S.disconnect = { at: time(), slot: TABLES.slot(), ...what, sid: S.session.id, handled: false, via };
+  // the hand in play ends here, unseen: the session's closing archive records it as such (ws.ts endUnseenNote)
+  noteEndUnseen(`${what.text} with the hand in play — its end never reached the wrapper`);
   stopCounting();
   Object.assign(S.study, { auto: false, autoDue: null, autoAllowReal: false,
                            standDownPending: null });
@@ -197,6 +199,11 @@ export function noteSocketClosed(rid: string): void {
   }
   S.tapBound = null;
   S.tapMismatch = 0;
+  // gone for good, on every path below: its deal and its held hand can never bind or replay again (ws.ts
+  // tapSocketClosed — until 2026-10-14 the next DOM tick re-bound the closed socket and replayed its hand into the
+  // record still open, 4923409614). The hand in progress keeps what it had; its end never comes on this socket.
+  tapSocketClosed(rid);
+  noteEndUnseen("the table's socket closed with the hand in play — its end never reached the wrapper");
   stallSocketClosed(rid);
   if (time() - (S.tapLeavingAt || 0) <= LEAVE_GRACE_S) {
     log(`[ws] table socket ${rid} closed — we left the table; the next table binds fresh`);
@@ -215,7 +222,6 @@ export function noteSocketClosed(rid: string): void {
     const now = time();
     S.siteClosed.notice = { at: now, decideAt: now + SITE_CLOSE_SETTLE_S, settled: false, rid, sid: S.session.id, slot: TABLES.slot(),
                             seats: site.seats, hero: site.hero, hand: S.handNo };
-    tapForget(rid);
     dumpEvent("<socket-closed-by-site?>", { rid, ...site });
     feedAdd(`The table's connection closed with the table over (${site.why}) and no hand on — `
             + `the site closing the table, unless the connection follows in ${SITE_CLOSE_SETTLE_S} s`);

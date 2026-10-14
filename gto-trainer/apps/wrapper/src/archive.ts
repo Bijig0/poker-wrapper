@@ -20,6 +20,7 @@ import { awardName, type Node } from "./ignition/dom";
 import { shadowArchive } from "./ignition/shadow";
 import { autoLogFor } from "./autoLog";
 import { stallsFor } from "./ignition/stall";
+import { endUnseenNote } from "./ignition/ws";
 import { SITE as CP_SITE } from "./sites/coinpoker";
 import * as feed from "./sites/cpFeed";
 import * as cgg from "./sites/cggFeed";
@@ -93,6 +94,10 @@ function archiveHandLocked(): void {
     // the hand's connection stalls (ignition/stall.ts): a decision lost to one is filed as socket-stall, not no-probe
     const stalls = stallsFor(S.handNo);
     if (stalls) h.connStalls = stalls;
+    // a record closed before the table's end-of-hand frame (ws.ts endUnseenNote): what it has is all that was seen —
+    // the hand page says so, the HH check compares only that much, the reconciler invents nothing past it
+    const unseen = endUnseenNote();
+    if (unseen) h.endedUnseen = unseen;
     if (result) h.result = { text: result };
     const aw = S.awards.get(h.clientHandId || "");
     if (aw) h.result = { ...(h.result || { text: aw.text }), ...aw, heroWon: aw.winnerSeat === h.heroSeatId };
