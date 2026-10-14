@@ -47,7 +47,7 @@ import { fetchNode6max } from "../services/hrc6maxDb";
 import { nodeGetterHu } from "../services/hrc2max";
 import { mesNodeDetail } from "../services/mesPostflop";
 import { reconstructFlopRanges, type RawNode, type WalkStep } from "../utils/reconstructFlopRanges/reconstructFlopRanges";
-import { preflopPathView, dealtFromTreeId, livePreflopNodeView, actionPct, preflopCacheKeyOf, storedPreflopGetter, seatActionOnTree, reduceToHeadsUp } from "../services/gtowAiPreflop";
+import { preflopPathView, dealtFromTreeId, livePreflopNodeView, actionPct, preflopCacheKeyOf, storedPreflopGetter, seatActionOnTree, reduceToHeadsUp, preflopViewFromTrace } from "../services/gtowAiPreflop";
 import { getPreflopPin, preflopNodeFor, preflopNodesFor } from "../services/preflopPin";
 import { APPROXIMATIONS, departuresOf, departureBadge, departureStatesOf, departureForCode } from "../services/approximations";
 import { solveStore } from "../services/solveStore";
@@ -1634,15 +1634,36 @@ app.get("/answer-node", async (c) => {
     // the line hero's node was read on; the node and every seat's range are read back from the solve cache — never a
     // request. With no record (a hand answered before, or whose facts were pruned) the panel says so.
     if (logged?.tier === "ai-preflop" || /^gtow-ai/.test(logged?.chart ?? "")) {
+      // THE STORED SOLVE STANDS IN (2026-10-14, gtowAiPreflop.AiPreflopTrace): the answer's own record is stored as a
+      // solve (answers.solve_id, origin "preflop-ai") — hero's node whole and every prefix node it kept, the cache only
+      // for a prefix it lacks — so when the hand's record is gone or the cache evicted the tree, the node still shows,
+      // read from the trace. The record and the cache answer first, as before (the pool-locked view's unlocked node).
+      const cid = hand.clientHandId ?? e.clientHandId ?? null;
+      const stored = logged ? solveStore.forAnswer(logged.solve_id ?? null, cid, logged.decision_key ?? null) : null;
+      const trace = stored?.ok && stored.trace?.kind === "preflop-ai" ? stored.trace : null;
+      const traceView = trace ? await preflopViewFromTrace(trace, hand.heroCards) : null;
+      const fromTrace = (view: Extract<NonNullable<typeof traceView>, { ok: true }>) => c.json({ ...base, kind: "ai-preflop", view, unlocked: {},
+        tree: { id: `gtow-ai · ${trace!.shape.n}-handed · ${trace!.shape.positions.map((p: string) => `${p}:${trace!.shape.stacks[p]}`).join("/")}`,
+                line: trace!.line.used, rawLine: trace!.line.raw, lastResort: trace!.lastResort?.how ?? null, reduced: trace!.reduced?.droppedPos ?? null,
+                at: trace!.at, poolLocks: trace!.poolLocks ?? null, solveId: stored!.ok ? stored!.row.id : null, account: trace!.request.account, solId: trace!.request.solId },
+        note: `read from the stored solve #${stored!.ok ? stored!.row.id : "?"} (the answer's own record)` });
       const noNode = (why: string) => c.json({ ...base, kind: "ai-chain",
         note: `This preflop decision was answered by GTO Wizard AI preflop, not a chart, and its node cannot be shown: ${why}.` });
       const rec = preflopNodeFor({ ...hand, clientHandId: hand.clientHandId ?? e.clientHandId ?? undefined }, upto);
-      if (!rec) return noNode("no record of its tree is kept for this decision (only the last preflop answer of a hand was kept before 2026-10-04; until 2026-10-12 a hand's facts were also pruned after 30 days)");
+      if (!rec) {
+        if (traceView?.ok) return fromTrace(traceView);
+        return noNode("no record of its tree is kept for this decision (only the last preflop answer of a hand was kept before 2026-10-04; until 2026-10-12 a hand's facts were also pruned after 30 days)" + (traceView && !traceView.ok ? `; the stored solve: ${traceView.reason}` : ""));
+      }
       if (rec.piece !== "gtow-ai-preflop") return noNode(`the record kept for this decision is a chart's (${rec.chartId}), not an AI tree's`);
       const key = preflopCacheKeyOf(rec);
-      if (!key) return noNode("the tree's key in the GTO Wizard solve cache is not known");
-      const view = await livePreflopNodeView(rec, hand.heroCards, storedPreflopGetter(key));
-      if (!view.ok) return noNode(`the stored tree could not be read — ${view.reason}`);
+      if (!key) {
+        if (traceView?.ok) return fromTrace(traceView);
+        return noNode("the tree's key in the GTO Wizard solve cache is not known");
+      }
+      const cached = await livePreflopNodeView(rec, hand.heroCards, storedPreflopGetter(key));
+      if (!cached.ok && traceView?.ok) return fromTrace(traceView);
+      if (!cached.ok) return noNode(`the stored tree could not be read — ${cached.reason}` + (traceView && !traceView.ok ? `; the stored solve: ${traceView.reason}` : ""));
+      const view = cached;
       // A POOL-LOCKED TREE: at the locked seat's node the view above draws the LOCKED strategy (the pool's range). The
       // page shows GTO's own strategy there — the same node on the UNLOCKED tree the lock was built on, read back from
       // the solve cache (no request) — and, when that tree is not at hand, the unlocked share the answer's note names.
@@ -2180,6 +2201,16 @@ app.get("/solve/:id", (c) => {
   // ?hand=&key= (the answer's client hand id + decision key): never show another hand's chain under this one (hand 973)
   const got = solveStore.forAnswer(Number.isFinite(id) ? id : null, c.req.query("hand") || null, c.req.query("key") || null);
   if (!got.ok) return c.json({ ok: false, error: got.error }, 404);
+  // A STORED AI PREFLOP ANSWER (2026-10-14, gtowAiPreflop.AiPreflopTrace, origin "preflop-ai"): not a chain — no streets,
+  // no walkthrough nodes. The record as stored, less the node replies' per-combo arrays unless ?full=1 asks for them
+  // (hero's node keeps his own row: strategy and EV per action); the hand page shows it under the AI preflop node.
+  if (got.trace?.kind === "preflop-ai") {
+    const full = c.req.query("full") === "1";
+    const t = got.trace;
+    const lite = full ? t : { ...t, hero: { ...t.hero, node: t.hero?.node ? { ...t.hero.node, data: undefined } : null },
+      prefix: (t.prefix ?? []).map((p: any) => ({ ...p, data: undefined })) };
+    return c.json({ ok: true, row: got.row, via: got.via, kind: "preflop-ai", preflop: lite });
+  }
   return c.json({ ok: true, row: got.row, via: got.via, ...expandTrace(got.trace) });
 });
 

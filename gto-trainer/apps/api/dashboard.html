@@ -1640,13 +1640,15 @@ async function rlLoad(i, D) {
   const { a } = rlAnswer(i);
   put({ loading: true });
   try {
-    if (a?.solve_id != null) { const w = await getJ(solveUrl(a.solve_id, a.client_hand_id, a.decision_key)); return put(w.ok ? { kind: "chain", w } : { kind: "none", why: w.error }); }
+    // a stored CHAIN solve draws here; a GTO Wizard AI preflop answer's stored solve (2026-10-14, origin preflop-ai) is not a
+    // chain — its node comes through /answer-node below, from the kept record or the stored solve itself
+    if (a?.solve_id != null && a.tier !== "ai-preflop") { const w = await getJ(solveUrl(a.solve_id, a.client_hand_id, a.decision_key)); return put(w.ok && w.kind !== "preflop-ai" ? { kind: "chain", w } : { kind: "none", why: w.error ?? "the stored solve is a preflop record, not a chain" }); }
     const j = await getJ(`/api/dashboard/answer-node?dbId=${D.dbId}&upto=${i}&ranges=1`);
     if (!j.ok) return put({ kind: "none", why: j.error ?? "no node" });
     // no logged answer and off the chart: live, that line goes to GTO Wizard AI preflop — offer to run it
     if (CHART_NODE_KINDS.has(j.kind)) return put(j.node ? { kind: "chart", j } : !j.logged ? { kind: "unsolved", j } : { kind: "none", why: j.note ?? "the chart has no node for this line" });
     if (j.kind === "mes") return put({ kind: "mes", j });
-    if (j.logged?.solveId != null) { const w = await getJ(solveUrl(j.logged.solveId, D.clientHandId, j.logged.decisionKey ?? j.logged.decision_key)); return put(w.ok ? { kind: "chain", w } : { kind: "none", why: w.error }); }
+    if (j.logged?.solveId != null && j.kind !== "ai-preflop" && j.logged.tier !== "ai-preflop") { const w = await getJ(solveUrl(j.logged.solveId, D.clientHandId, j.logged.decisionKey ?? j.logged.decision_key)); return put(w.ok && w.kind !== "preflop-ai" ? { kind: "chain", w } : { kind: "none", why: w.error ?? "the stored solve is a preflop record, not a chain" }); }
     if (j.kind === "ai-preflop" && j.view?.hero?.strategy) {
       const v = j.view;
       return put({ kind: "aiview", v: { id: j.tree.id, note: v.note ?? "read back from the GTO Wizard solve cache (no request)", actions: v.hero.actions, strategy: v.hero.strategy, heroKey: v.hero.pos,
@@ -2223,6 +2225,27 @@ async function renderWalkthrough(solveId, hostId, upto, hand = null, key = null)
   let w;
   try { w = await dashJ(solveUrl(solveId, hand, key)); } catch (e) { host.innerHTML = `<div class="warn">${esc(String(e))}</div>`; return null; }
   if (!w.ok) { host.innerHTML = `<div class="warn">${esc(w.error)}</div>`; return w; }
+  // A STORED AI PREFLOP ANSWER (2026-10-14, origin preflop-ai): no chain to walk — the record's facts: the tree as sent, the
+  // line as walked and as read, the locks and where their ranges came from, hero's row at his node, the mix served
+  if (w.kind === "preflop-ai") {
+    const p = w.preflop, rq = p.request ?? {}, hn = p.hero?.node ?? null;
+    const row = (hn?.actions ?? []).filter((a) => a.strategy != null && a.strategy > 0.0005).sort((a, b) => b.strategy - a.strategy)
+      .map((a) => `<b>${esc(a.label)}</b> ${(100 * a.strategy).toFixed(1)}%${a.ev != null ? ` <span class="sub">ev ${(Number(a.ev) / 100).toFixed(2)}bb</span>` : ""}`).join(" · ");
+    host.innerHTML = `<div class="nv-facts">
+      ${fact("stored", `#${esc(w.row.id)} · ${esc(w.row.origin)} · ${fmtT(w.row.ts)}${p.askedBy ? ` · asked by ${esc(p.askedBy)}` : ""}`)}
+      ${fact("tree", `${esc(String(p.shape?.n ?? "?"))}-handed · ${esc((p.seats ?? []).map((s) => `${s.api}${s.table && s.table !== s.api ? ` (${s.table})` : ""} ${s.stack}bb${s.blind ? ` posts ${s.blind}` : ""}`).join(", "))}${p.shape?.deadBb ? ` · ${esc(String(p.shape.deadBb))}bb dead` : ""}`)}
+      ${fact("sent as", rq.bodyFrom === "posted" ? "the tree body as POSTed (below)" : rq.bodyFrom === "store" ? "the stored tree body (the solve cache's copy of what was POSTed)" : rq.bodyFrom === "rebuilt" ? "rebuilt from the shape and menu (nothing posted by this process)" : "not recorded")}
+      ${fact("cloud solution", `<span class="mono" title="${esc(rq.solId ?? "")}">${esc(String(rq.solId ?? "—").slice(0, 14))}</span>${rq.readFrom ? ` → <span class="mono">${esc(String(rq.readFrom).slice(0, 14))}</span> (re-posted)` : ""} · account ${esc(rq.account ?? (rq.stored ? "stored tree (no request)" : "?"))}${rq.cacheKey ? ` · cache <span class="mono">${esc(String(rq.cacheKey).slice(0, 12))}</span>` : ""} · ${p.stored ? "from the solve cache" : p.cached ? "cached" : "fresh solve"} · ${esc(String(p.solveSecs ?? "?"))} s`)}
+      ${fact("line", `captured <span class="mono">${esc(p.line?.raw || "root")}</span> · read at <span class="mono">${esc(p.line?.used || "root")}</span>${(p.line?.snapped ?? []).length ? ` · snapped: ${esc(p.line.snapped.join(", "))}` : ""}${(p.line?.fits ?? []).length ? ` · fitted: ${esc(p.line.fits.map((f) => `${f.folds.join("+")} folded → '${f.line || "root"}'`).join("; "))}` : ""}`)}
+      ${(rq.locks ?? []).length ? fact("locks", `${rq.locks.length} node lock${rq.locks.length === 1 ? "" : "s"}: ${esc((rq.lockSources ?? []).join("; ") || "(sources not recorded)")}`) : ""}
+      ${p.lastResort ? fact("last resort", esc(p.lastResort.how)) : ""}
+      ${hn ? fact("your node", `${esc(hn.actor ?? "?")} to act at <span class="mono">${esc(hn.line || "root")}</span> · ${esc(p.hero?.cards ?? "")}: ${row || "no action above 0.05%"}`) : ""}
+      ${fact("served", `${esc((p.hero?.mix ?? []).map((a) => `${a.action} ${Number(a.frequency).toFixed(0)}%`).join(" / ") || "—")}${p.hero?.decision ? ` · pick <b>${esc(p.hero.decision.action)}</b>` : ""}`)}
+      ${fact("prefix nodes kept", `${(p.prefix ?? []).filter((x) => x.where !== "none").length} of ${(p.prefix ?? []).length}`)}
+    </div>
+    <details style="margin-top:8px"><summary class="sub">the tree request as sent</summary><pre class="mono" style="white-space:pre-wrap;font-size:11px">${esc(JSON.stringify(rq.body ?? null, null, 1))}</pre></details>`;
+    return w;
+  }
   const swapped = w.via === "key" && Number(w.row.id) !== Number(solveId)
     ? `<div class="card warn" style="margin-bottom:10px">The solve logged with this answer (#${esc(solveId)}) is not this hand's — that number belongs to another hand's solve in today's store. Showing #${esc(w.row.id)} instead: the newest solve stored for this exact decision (${esc(w.row.origin === "replay" ? "a re-solve with the code of " : "stored ")}${esc(new Date(Number(w.row.ts)).toLocaleString())}).</div>`
     : "";

@@ -60,7 +60,7 @@ import { POSTFLOP_ORDER } from "../utils/aiStudyLine/aiStudyLine";
 import { menuPotMode, threeWaySizes } from "./gtowApi";
 import type { AiChainSpec } from "./aiChain";
 import { nodeTrust, arrivalTrust } from "./nodeTrust";
-import { repostReason, solvePreflopGtowAi, solvePreflopPoolLocked, solvePreflopColdCallLocked, COLD_CALL_NOT_NEEDED, POOL_LOCK_SKIPPED, poolLockMs, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, aiPreflopTreeBuilt, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, HERO_OFF_TREE, heroSelfLockReasons, type AiPreflopOutcome, type AiPreflopShape, type PreflopVillainLine } from "./gtowAiPreflop";
+import { repostReason, solvePreflopGtowAi, solvePreflopPoolLocked, solvePreflopColdCallLocked, COLD_CALL_NOT_NEEDED, POOL_LOCK_SKIPPED, poolLockMs, solvePreflopLastResort, warmPreflopGtowAi, arrivalRangesGtowAi, aiPreflopTreeBuilt, siteRakeOf, GTOW_AI_PREFLOP_SOURCE, GTOW_AI_PREFLOP_TIER, LINE_NOT_HERO, HERO_OFF_TREE, heroSelfLockReasons, type AiPreflopOutcome, type AiPreflopShape, type AiPreflopTrace, type PreflopVillainLine } from "./gtowAiPreflop";
 import { answerLog } from "./answerLog";
 import { postInNote, deadPostsBb, freeOptionMix } from "../utils/foldPostIns/foldPostIns";
 import { rollBands } from "./answerIntegrity";
@@ -130,8 +130,12 @@ export type FastSolveResult =
       mesBoard?: string;
       mesEvGainBb?: number;
       mesExact?: boolean;
-      /** id in data/solves.sqlite of the stored AI-chain trace (inputs + every node). */
+      /** id in data/solves.sqlite of the stored AI-chain trace (inputs + every node) — or, since 2026-10-14, of the
+       *  served GTO Wizard AI preflop answer's record (origin "preflop-ai", gtowAiPreflop.AiPreflopTrace). */
       solveId?: number | null;
+      /** INTERNAL: the AI preflop piece's record of this answer, stored by fastSolve() once the served answer is known
+       *  (a lock and the regular answer run beside each other; only the one served is stored) and dropped from the result */
+      aiTrace?: AiPreflopTrace;
       /** Postflop: where the flop-entering ranges came from (the 3-max chart +
        *  the exploit hero range, the MES spec, or the 6-max fallback). This is
        *  what the answer log shows as "chart" for a postflop answer — `gametype`
@@ -3247,6 +3251,7 @@ async function solvePreflopCpRing(hand: ParsedHand, heroPos: string | null, rake
     ...(r.villainLinesNa ? { villainLinesNa: r.villainLinesNa } : {}),
     warning: note(r.note), approx: approx || !!rakeNote || !!r.heroSelfLock || undefined,
     path: classifyPath({ street: "preflop", streets: [], preflop: pfPath, ...preflopAlsoOf(r) }),
+    ...(r.trace ? { aiTrace: r.trace } : {}),
   });
   const ai = await solvePreflopGtowAi(hand, heroPos, why);
   if (ai.ok) return asResult(ai, ai.shape.deadSb);
@@ -4753,7 +4758,16 @@ export async function fastSolve(hand: ParsedHand, heroPos: string | null, opts: 
   const path = guardChecks(0, () => withChecks(path0, street, decisionChecks(hand, value, scope.origin, Date.now() - t0, heroPos)), path0);
   const treeGap = value.treeGap;
   const fitEmpties = value.fitEmpties;
-  return { ...value, path: { ...path, requests: scope.counts, origin: scope.origin, ...(treeGap ? { treeGap } : {}), ...(fitEmpties ? { fitEmpties } : {}) } } as FastSolveResult;
+  const finalPath: DecisionPath = { ...path, requests: scope.counts, origin: scope.origin, ...(treeGap ? { treeGap } : {}), ...(fitEmpties ? { fitEmpties } : {}) };
+  // THE SERVED AI PREFLOP ANSWER IS STORED HERE, ONCE (storePreflopAiSolve): the piece's record rides on the result as
+  // aiTrace until the answer is chosen (a lock and the regular answer run beside each other inside), then goes to the
+  // solve store with the decision's final path, and the answer carries its id as a chain answer does
+  if (value.ok && value.aiTrace) {
+    const { aiTrace, ...served } = value;
+    const solveId = storePreflopAiSolve(hand, aiTrace, scope.origin, opts.sessionId, finalPath);
+    return { ...served, ...(solveId != null ? { solveId } : {}), path: finalPath } as FastSolveResult;
+  }
+  return { ...value, path: finalPath } as FastSolveResult;
 }
 
 async function fastSolveEntry(hand: ParsedHand, heroPos: string | null, opts: FastSolveOpts = {}): Promise<FastSolveResult> {
@@ -4966,6 +4980,7 @@ async function solvePreflopSixStrategy(hand: ParsedHand, heroPos: string | null,
     ...(r.villainLinesNa ? { villainLinesNa: r.villainLinesNa } : {}),
     warning: r.note, approx: approx || !!r.heroSelfLock || undefined,
     path: classifyPath({ street: "preflop", streets: [], preflop: pfPath, ...preflopAlsoOf(r) }),
+    ...(r.trace ? { aiTrace: r.trace } : {}),
     ...(gated ? { treeGap: gated } : {}),
     ...(emptied ? { fitEmpties: emptied } : {}),
   });
@@ -5067,6 +5082,28 @@ function preflopAlsoOf(r: Extract<AiPreflopOutcome, { ok: true }>): { preflopAls
     ...[repostReason(r.solId), stackNotConfirmedReason(r.shape.unconfirmed ?? [])].filter((x): x is PathReason => !!x)];
   return also.length ? { preflopAlso: also } : {};
 }
+/**
+ * THE SERVED AI PREFLOP ANSWER'S RECORD, STORED (2026-10-14, the answer-path audit's finding 9: 1,021 AI preflop answers
+ * in 14 days, solve_id 0 on every one). The piece's trace (gtowAiPreflop.AiPreflopTrace — the tree as POSTed, the locks
+ * and their sources, the account, solution id, cache key, the line as walked and as read, hero's node as sent, the mix
+ * served) goes into services/solveStore as the postflop chain's does — synchronously, gzipped, a few KB to ~100 KB —
+ * under origin "preflop-ai", and the answer row's solve_id names it (studyPoller logBase.solveId). Stored once per
+ * served answer, from fastSolve() after the answer is chosen; a warm-up stores nothing. Never throws: a failed store is
+ * reported by solveStore (storeWriteFailed) and the answer goes out without an id, as a chain's does.
+ */
+function storePreflopAiSolve(hand: ParsedHand, trace: AiPreflopTrace, origin: string, sessionId: string | null | undefined, path: DecisionPath | null): number | null {
+  if (origin === "warm") return null;
+  const t0 = Date.now();
+  const id = solveStore.save({
+    origin: "preflop-ai", sessionId: sessionId ?? hand.sessionId ?? null, clientHandId: hand.clientHandId ?? null, wrapperHandId: hand.handId ?? null,
+    decisionKey: JSON.stringify([hand.street, hand.board, hand.heroCards, hand.currentNode.toCall, hand.actions.length]),
+    street: "preflop", board: null, heroCards: hand.heroCards.join("") || null, heroPos: trace.hero.pos, tier: GTOW_AI_PREFLOP_TIER,
+    line: trace.line.used, solves: trace.cached || trace.stored ? 0 : 1, solveMs: Math.round(trace.solveSecs * 1000), ok: true, why: null,
+  }, { ...trace, askedBy: origin, path });
+  tmark("preflop solve stored", id != null ? `#${id} (origin preflop-ai, ${Date.now() - t0} ms)` : "the store refused it — the answer carries no solve id");
+  return id;
+}
+
 /** A preflop reason beside the answer's own (chainPath.preflopAlso), the verdict re-classified. A result with no path is
  *  returned as it is. */
 function withPreflopAlso(r: FastSolveResult, reason: PathReason): FastSolveResult {
@@ -5134,6 +5171,7 @@ async function poolLimpLockFirst(hand: ParsedHand, heroPos: string | null, opts:
     approx: r.shape.deadSb || undefined,
     path: classifyPath({ street: "preflop", streets: [], preflop: { piece: "gtow-ai-preflop:pool-lock", how: "by-design", code: "preflop:pool-limp-lock",
       why: `the ${t.target.pos} (${t.target.stack}bb) limped; no pool-locked chart covers him — his limp locked to ${t.target.key} on the exact tree`.slice(0, 200) }, ...preflopAlsoOf(r) }),
+    ...(r.trace ? { aiTrace: r.trace } : {}),
   };
 }
 
@@ -5178,6 +5216,7 @@ async function poolColdCallLockFirst(hand: ParsedHand, heroPos: string | null, d
     approx: r.shape.deadSb || undefined,
     path: classifyPath({ street: "preflop", streets: [], preflop: { piece: "gtow-ai-preflop:coldcall-lock", how: "by-design", code: "preflop:pool-coldcall-lock",
       why: `the ${t.target.pos} (${t.target.stack}bb) cold-called the 3-bet at ~0% on the exact tree — his call locked to ${t.target.key}`.slice(0, 200) }, ...preflopAlsoOf(r) }),
+    ...(r.trace ? { aiTrace: r.trace } : {}),
   };
 }
 

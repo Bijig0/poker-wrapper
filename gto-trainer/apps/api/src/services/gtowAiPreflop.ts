@@ -204,6 +204,219 @@ export interface AiPreflopResult {
   lastResort?: { how: string };
   /** HERO'S OWN OFF-TREE ACTION LOCKED (2026-10-07): his hand read 0 at his node until his earlier action was locked */
   heroSelfLock?: HeroSelfLock;
+  /** THE EXACT RECORD OF THIS ANSWER (preflopTraceOf, 2026-10-14): fastSolve stores it as the served answer's solve */
+  trace?: AiPreflopTrace;
+}
+
+/**
+ * THE EXACT RECORD OF A SERVED AI PREFLOP ANSWER (2026-10-14, the answer-path audit's finding 9). An AI preflop answer
+ * wrote no solve: the only way to read it back exactly was the hand's preflopNodes record (the solution id and the line)
+ * AND the node still being in the GTO Wizard solve cache — of 1,021 answers in 14 days, 527 (every one before the
+ * per-decision record of 2026-10-04) had no record and 234 more had lost their node to the cache's eviction. Now each
+ * answer carries this trace and fastSolve stores it in services/solveStore (origin "preflop-ai"), the answer row's
+ * solve_id naming it, as the postflop chain's trace is stored: the tree request as it was POSTed (stacks per seat,
+ * positions, blinds and posts, the size menu, the rake), the locks on it and where each lock's range came from, the
+ * account that solved it, the solution id and the cache key, the line as walked from the capture and as read on the
+ * tree (snaps, fits), hero's node as GTO Wizard sent it (every action's strategy and EVs over the 1,326 combos, hero's
+ * row read out), the mix served and the pick, and every prefix node on the line that was at hand without a request
+ * (so every seat's range at hero's node reads back from the trace alone — routes/dashboard.ts /answer-node falls back to
+ * it when the cache no longer holds the node). Built from what the solve already holds in memory: no request, no read.
+ */
+export interface AiPreflopTraceAction {
+  code: string; type: string | null; betsize: string | null; allin: boolean; label: string;
+  /** hero's combo on this action (0..1), and its EV when GTO Wizard sent one */
+  strategy: number | null; ev: number | null;
+  /** the share of the actor's whole range taking it, as the node reports it */
+  totalFrequency: number | null;
+}
+export interface AiPreflopTraceNode {
+  line: string;
+  /** the seat the node puts on the clock (API position) */
+  actor: string | null;
+  /** the token walked from this node (a prefix node), or null at hero's own */
+  taken: string | null;
+  /** the node reply as GTO Wizard sent it (a prefix node's `evs` left out); null when it was not at hand without a request */
+  data: any | null;
+  where: "memory" | "store" | "none";
+}
+export interface AiPreflopTrace {
+  kind: "preflop-ai";
+  v: 1;
+  at: number;
+  request: {
+    /** the solution the answer was read on (a locked child when locked; `gc:<key>` when served from the store) */
+    solId: string;
+    /** the solve polled for it now (a re-post's replacement), when not solId itself */
+    readFrom: string | null;
+    /** the GTO Wizard account that solved it; null for a stored tree never materialised in this process */
+    account: string | null;
+    cacheKey: string | null;
+    stored: boolean;
+    /** the tree exactly as POSTed to /custom-trees/ (the stored body for a stored tree; rebuilt from the shape and menu
+     *  when neither was at hand — said by bodyFrom) */
+    body: any | null;
+    bodyFrom: "posted" | "store" | "rebuilt" | "none";
+    /** every node lock POSTed on it, in order, as sent (last_node_lock bodies) */
+    locks: any[];
+    /** where each lock's range came from, in the locks' order (a pool cell, hero's chart mix, the raiser's exact range) */
+    lockSources: string[];
+  };
+  shape: AiPreflopShape;
+  /** each seat of the tree: its API position, the table's name and seat, the stack sent, the blind it posts */
+  seats: { api: string; table: string | null; seat: number | null; stack: number; blind: number | null }[];
+  /** the size menu the tree was built with (menus()), null for a locked last-resort tree (its own body says) */
+  menu: any | null;
+  line: {
+    /** the capture's own tokens, as lineOf read them */
+    raw: string;
+    /** the tree's codes hero's node was read at (sizes snapped, a fit folded) */
+    used: string;
+    snapped: string[];
+    fits?: AiFitRead[];
+  };
+  hero: {
+    pos: string | null;
+    cards: string;
+    comboIdx: number | null;
+    class: string | null;
+    node: { line: string; actor: string | null; actions: AiPreflopTraceAction[]; data: any } | null;
+    /** the mix served (percent, after the 0.05 floor) and the pick */
+    mix: MixAction[];
+    decision: WeightedPick | null;
+  };
+  prefix: AiPreflopTraceNode[];
+  villainLines?: PreflopVillainLine[];
+  villainLinesNa?: string;
+  heroSelfLock?: HeroSelfLock;
+  lastResort?: { how: string };
+  reduced?: { droppedPos: string[] } | null;
+  poolLocks?: { pos: string; key: string }[];
+  cached: boolean;
+  stored: boolean;
+  solveSecs: number;
+  repostedFrom: { from: string; to: string } | null;
+}
+
+/** A node at hand WITHOUT a request: this process's memory, else the solve cache (the hit not counted). */
+function nodeAtHand(solId: string, line: string): { data: any; where: "memory" | "store" } | null {
+  const hit = nodes.get(`${solId}|${line}`);
+  if (hit) return { data: hit, where: "memory" };
+  const ck = solveCache.enabled ? preKeyOfSol(solId) : null;
+  if (ck) {
+    const s = solveCache.getNode(ck, nodeAddr({ preflop: line }), false);
+    if (s?.status === NODE_OK) return { data: s.data, where: "store" };
+  }
+  return null;
+}
+
+/** The request behind a solution id as this process knows it: what was POSTed (or stored), its locks, its account. */
+function traceRequestOf(solId: string, rebuilt: () => any | null): AiPreflopTrace["request"] {
+  const read = latest(solId);
+  const cacheKey = preKeyOfSol(solId);
+  const stored = isStoredSolId(solId);
+  const p = posted.get(read) ?? posted.get(solId);
+  let body: any | null = null, bodyFrom: AiPreflopTrace["request"]["bodyFrom"] = "none", locks: any[] = [];
+  if (p) { body = p.body; bodyFrom = "posted"; locks = [...p.locks]; }
+  else if (cacheKey && solveCache.enabled) {
+    const t = solveCache.treeBody(cacheKey);
+    if (t && t.kind === "pre") { body = t.tree; bodyFrom = "store"; locks = [...(t.locks ?? [])]; }
+  }
+  if (!body) { body = rebuilt(); bodyFrom = body ? "rebuilt" : "none"; }
+  return { solId, readFrom: read !== solId ? read : null, account: owners.get(read) ?? owners.get(solId) ?? null, cacheKey, stored, body, bodyFrom, locks, lockSources: [] };
+}
+
+/**
+ * A node reply AS THE RECORD KEEPS IT: who is to act (`game`) and every action with its per-combo strategy — hero's
+ * node with its per-combo EVs too — which is all a range walk, the hand page's view and the answer itself read. A reply
+ * as GTO Wizard sends it is ~680 KB of JSON (74 KB gzipped) and 70% of it is `players_info` (each seat's range and
+ * equities at the node, which the walk derives from the strategies anyway): kept whole, a six-handed line's trace would
+ * be ~500 KB gzipped per answer; kept like this it is ~17 KB for hero's node and ~7 KB a prefix node (measured on a
+ * cached F-F-R2.6 reply, 2026-10-14).
+ */
+function slimNode(data: any, keepEvs: boolean): any {
+  if (!data || !Array.isArray(data.action_solutions)) return data;
+  return {
+    game: data.game ?? null,
+    action_solutions: data.action_solutions.map((a: any) => ({
+      action: a?.action ?? null, total_frequency: a?.total_frequency, total_ev: a?.total_ev, strategy: a?.strategy ?? null,
+      ...(keepEvs && Array.isArray(a?.evs) ? { evs: a.evs } : {}),
+    })),
+  };
+}
+
+/**
+ * Build the trace of an answer just read (see AiPreflopTrace). `codes` is the line hero's node was read at on `solId`;
+ * the prefix nodes are the ones the walk read (memory) or the store holds — never requested here.
+ */
+export function preflopTraceOf(x: {
+  solId: string; shape: AiPreflopShape; menu: any | null; rawTokens: string[]; codes: string[]; snapped: string[];
+  fits?: AiFitRead[]; heroCards: string[]; heroIdx: number | null; node: any; mix: MixAction[]; decision: WeightedPick | null;
+  villainLines?: PreflopVillainLine[]; villainLinesNa?: string | null; heroSelfLock?: HeroSelfLock | null; lastResort?: { how: string } | null;
+  reduced?: { droppedPos: string[] } | null; poolLocks?: { pos: string; key: string }[]; lockSources?: string[];
+  cached: boolean; stored: boolean; solveSecs: number;
+  /** the tree body when the solve has it (the regular tree's treeBody): the request's fallback when nothing was posted */
+  body?: any | null;
+}): AiPreflopTrace {
+  const { shape } = x;
+  const request = traceRequestOf(x.solId, () => x.body ?? null);
+  request.lockSources = [...(x.lockSources ?? [])];
+  const handPosOf: Record<string, string> = {};
+  for (const [hp, ap] of Object.entries(shape.apiOf)) handPosOf[ap] = hp;
+  const blindOf = (p: string): number | null => (p === "SB" ? shape.sb : p === "BB" ? shape.bb : shape.straddle?.pos === p ? shape.straddle.bb : null);
+  const seats = shape.positions.map((p) => ({ api: p, table: handPosOf[p] ?? null, seat: shape.seatOf[p] ?? null, stack: shape.stacks[p] ?? 100, blind: blindOf(p) }));
+  const actorOf = (data: any): string | null => data?.game?.players?.find((pl: any) => pl.is_hero)?.position ?? null;
+  const prefix: AiPreflopTraceNode[] = [];
+  for (let k = 0; k < x.codes.length; k++) {
+    const line = x.codes.slice(0, k).join("-");
+    const n = nodeAtHand(x.solId, line);
+    prefix.push({ line, actor: n ? actorOf(n.data) : null, taken: x.codes[k] ?? null, data: n ? slimNode(n.data, false) : null, where: n?.where ?? "none" });
+  }
+  const sols: any[] = Array.isArray(x.node?.action_solutions) ? x.node.action_solutions : [];
+  const actions: AiPreflopTraceAction[] = sols.map((a) => ({
+    code: String(a?.action?.code ?? ""), type: a?.action?.type != null ? String(a.action.type) : null,
+    betsize: a?.action?.betsize != null && a.action.betsize !== "" ? String(a.action.betsize) : null, allin: a?.action?.allin === true, label: labelOf(a?.action),
+    strategy: x.heroIdx != null && Array.isArray(a?.strategy) ? Number(a.strategy[x.heroIdx] ?? 0) : null,
+    ev: x.heroIdx != null && Array.isArray(a?.evs) ? Number(a.evs[x.heroIdx] ?? NaN) : null,
+    totalFrequency: a?.total_frequency != null ? Number(a.total_frequency) : null,
+  })).map((a) => ({ ...a, ev: a.ev != null && Number.isFinite(a.ev) ? a.ev : null }));
+  return {
+    kind: "preflop-ai", v: 1, at: Date.now(), request, shape, seats, menu: x.menu,
+    line: { raw: x.rawTokens.join("-"), used: x.codes.join("-"), snapped: [...x.snapped], ...(x.fits?.length ? { fits: x.fits } : {}) },
+    hero: { pos: shape.heroApiPos, cards: x.heroCards.join(""), comboIdx: x.heroIdx, class: heroClass(x.heroCards),
+            node: x.node ? { line: x.codes.join("-"), actor: actorOf(x.node), actions, data: slimNode(x.node, true) } : null, mix: x.mix, decision: x.decision },
+    prefix,
+    ...(x.villainLines?.length ? { villainLines: x.villainLines } : {}),
+    ...(x.villainLinesNa ? { villainLinesNa: x.villainLinesNa } : {}),
+    ...(x.heroSelfLock ? { heroSelfLock: x.heroSelfLock } : {}),
+    ...(x.lastResort ? { lastResort: x.lastResort } : {}),
+    ...(x.reduced !== undefined ? { reduced: x.reduced } : {}),
+    ...(x.poolLocks?.length ? { poolLocks: x.poolLocks } : {}),
+    cached: x.cached, stored: x.stored, solveSecs: x.solveSecs, repostedFrom: repostedFrom(x.solId),
+  };
+}
+
+/**
+ * THE VIEW OF A STORED TRACE (routes/dashboard.ts /answer-node, when the hand's record or the cache no longer gives the
+ * node): the same LiveNodeView the live pin gives, read from the trace's own nodes first, then the solve cache (the cold
+ * archive included), never a request. The trace holds hero's node whole and every prefix node that was at hand when it
+ * was written, so a tree the cache evicted still reads back.
+ */
+export async function preflopViewFromTrace(trace: AiPreflopTrace, heroCards: string[] = []): Promise<LiveNodeView | { ok: false; reason: string }> {
+  if (!trace || trace.kind !== "preflop-ai" || !trace.hero?.node) return { ok: false, reason: "the stored solve holds no preflop node" };
+  const own = new Map<string, any>();
+  for (const p of trace.prefix ?? []) if (p.data) own.set(p.line, p.data);
+  own.set(trace.hero.node.line, trace.hero.node.data);
+  const key = trace.request?.cacheKey ?? null;
+  const fromStore = key ? storedPreflopGetter(key) : null;
+  const get = async (line: string): Promise<{ data: any; cached: boolean } | { error: string }> => {
+    const d = own.get(line);
+    if (d) return { data: d, cached: true };
+    if (fromStore) return fromStore(line);
+    return { error: `node '${line || "root"}' is not in the stored trace and the tree's cache key is not known` };
+  };
+  const cards = heroCards.length ? heroCards : (trace.hero.cards.match(/[2-9TJQKA][shdc]/g) ?? []);
+  return livePreflopNodeView({ solId: trace.request.solId, shape: trace.shape, codes: trace.line.used ? trace.line.used.split("-") : [],
+    reduced: trace.reduced ?? null, lastResort: trace.lastResort?.how }, cards, get);
 }
 /** One fit of a line the tree cannot hold, as hero's node was read on it. */
 export interface AiFitRead { folds: string[]; line: string; actions: MixAction[]; offPath: boolean }
@@ -1885,7 +2098,11 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
       skipPin?: () => boolean;
       /** read each villain action on hero's EXACT line against the tree's own play (check #3) — asked for when the
        *  chart refused because it has no branch for a villain's limp or call (fastSolve, the fit rule) */
-      villainLines?: boolean } = {}): Promise<AiPreflopOutcome> {
+      villainLines?: boolean;
+      /** THE DECISION'S INDEX in the hand as the answer log keys it (hand.actions.length of the TABLE's hand) when
+       *  `hand` is not the table's — the last resort reads a reduced hand (reduceToHeadsUp: two posts and the kept
+       *  actions), whose own length recorded the node under an index no decision has (2026-10-14) */
+      actionIndex?: number } = {}): Promise<AiPreflopOutcome> {
   const t0 = Date.now();
   const shape = shapeOf(hand, heroPos, opts.deadBb ?? 0, opts.rakeSeats);
   if ("error" in shape) return { ok: false, reason: `GTO Wizard AI preflop: ${shape.error}` };
@@ -2079,17 +2296,25 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
     setPreflopPin({
       piece: "gtow-ai-preflop", handKey, solId: ansSol, shape, codes, rawTokens: tokens, warm, cacheKey: preKeyOfSol(ansSol),
       id: `gtow-ai · ${shape.n}-handed · ${shape.positions.map((p) => `${p}:${shape.stacks[p]}`).join("/")}`,
-      heroPos: heroPosOf(hand, heroPos) ?? "", reduced: opts.reduced ?? null, actionIndex: hand.actions.length, at: Date.now(),
+      heroPos: heroPosOf(hand, heroPos) ?? "", reduced: opts.reduced ?? null, actionIndex: opts.actionIndex ?? hand.actions.length, at: Date.now(),
       ...(selfLock ? { heroSelfLock: selfLock.line } : {}),
     } satisfies AiPreflopPin, hand.heroCards.join(""));
   }
   const shapeText = `${shape.n}-handed · ${shape.positions.map((p) => `${p} ${shape.stacks[p]}bb`).join(", ")} · rake 5% cap ${shape.rakeCapBb}bb${shape.deadSb ? " · dead SB approximated" : ""}${shape.deadBb ? ` · ${shape.deadBb}bb dead money in the pot` : ""}`;
   // a node from the persistent solve cache says so: the hand page must tell a stored answer from a fresh solve
   const stored = !!ansNode.stored;
+  const fits = fitReads.length ? fitReads.map(({ data: _data, ...f }) => ({ ...f, actions: pctMix(f.actions) })) : undefined;
+  // THE EXACT RECORD (preflopTraceOf): the tree as POSTed, the line as walked and as read, hero's node as sent, the mix served
+  const trace = preflopTraceOf({
+    solId: ansSol, shape, menu: m, rawTokens: tokens, codes, snapped, fits, heroCards: hand.heroCards, heroIdx: idx, node: ansNode.data,
+    mix: actions, decision, villainLines, villainLinesNa, heroSelfLock: selfLock, reduced: opts.reduced ?? null,
+    lockSources: selfLock ? [`hero self-lock: hero's ${selfLock.taken} at '${selfLock.line || "root"}' locked to his ${selfLock.source} range (${selfLock.combos} combos)`] : [],
+    cached: ansNode.cached, stored, solveSecs: secs, body: treeBody(shape, m),
+  });
   return {
     ok: true, actions, decision, line, pos: shape.heroApiPos, heroClass: heroClass(hand.heroCards), treeKey: selfLock ? `${key}|hero-self-lock:${selfLock.line}` : key,
-    solId: ansSol, usedLine, solveSecs: secs, cached: ansNode.cached, ...(stored ? { stored: true } : {}), shape,
-    ...(fitReads.length ? { fits: fitReads.map(({ data: _data, ...f }) => ({ ...f, actions: pctMix(f.actions) })), villainLines }
+    solId: ansSol, usedLine, solveSecs: secs, cached: ansNode.cached, ...(stored ? { stored: true } : {}), shape, trace,
+    ...(fits ? { fits, villainLines }
       : villainLinesNa ? { villainLinesNa } : { villainLines }),
     ...(selfLock ? { heroSelfLock: selfLock } : {}),
     note: (selfLock ? `${heroSelfLockNote(selfLock, heroClass(hand.heroCards))} ` : "") +
@@ -2304,7 +2529,8 @@ export async function solvePreflopLastResort(hand: ParsedHand, heroPos: string |
   const tryLocked = raised && lockedLastResortOn();
   let lockedOut = tryLocked;                 // the locked tree is still being asked: the plain tree holds its pin back
   let plainPinSkipped = false;
-  const plainOpts = (pinNow: boolean) => ({ deadBb: 0, rakeSeats: dealt, reduced: { droppedPos: red.droppedPos },
+  // the record is the TABLE's decision (hand.actions.length), not the reduced hand's (2026-10-14)
+  const plainOpts = (pinNow: boolean) => ({ deadBb: 0, rakeSeats: dealt, reduced: { droppedPos: red.droppedPos }, actionIndex: hand.actions.length,
     ...(pinNow ? {} : { skipPin: () => { const skip = lockedOut; if (skip) plainPinSkipped = true; return skip; } }) });
   const plain = lastResortSeams.headsUp(red.hand, red.hand.positions[red.hand.heroSeatId] ?? null, why, plainOpts(false));
   plain.catch(() => undefined);
@@ -2334,8 +2560,9 @@ export async function solvePreflopLastResort(hand: ParsedHand, heroPos: string |
     `${red.droppedPos.length ? `${red.droppedPos.join(", ")} folded out` + (left > 0 ? ` and NONE of the ${left}bb they put in is in the tree's pot (chips there before the first action are an ante and move every range — hero is priced tighter than the table)` : "") : "nobody else in the pot"}; ` +
     `both seats play a heads-up blind's range, and the folded players' ranges and anyone still to act behind hero are not modelled.` +
     (lockedWhy ? ` The locked tree (the raiser's range imposed) did not answer: ${lockedWhy.replace(/^locked tree:\s*/, "")}.` : "") + ` ` + r.note;
-  return { ...r, pos: red.heroPos, note, lastResort: { how: `hero (${red.heroPos}) vs ${red.aggressorPos} heads-up, ${red.droppedPos.join("/") || "nobody"} folded out, no dead money` +
-    (lockedWhy ? " (plain tree: the locked one did not answer)" : "") } };
+  const lastResort = { how: `hero (${red.heroPos}) vs ${red.aggressorPos} heads-up, ${red.droppedPos.join("/") || "nobody"} folded out, no dead money` +
+    (lockedWhy ? " (plain tree: the locked one did not answer)" : "") };
+  return { ...r, pos: red.heroPos, note, lastResort, ...(r.trace ? { trace: { ...r.trace, lastResort } } : {}) };
 }
 
 /**
@@ -2567,10 +2794,17 @@ export async function solveLockedLastResort(hand: ParsedHand, heroPos: string | 
     (dead > 0 ? `${r2n(dead)}bb dead in the pot from ${from}` : "no dead money in the pot") +
     (plan.potOver > 0 ? ` (the tree's pot is ${plan.potOver}bb bigger than that: both posts shifted under GTO Wizard's 250bb unit rule)` : "") +
     `. Not modelled: ${left.join("; ")}. Solved in ${secs.toFixed(1)} s${hn.stored ? " (from the GTO Wizard solve cache)" : ""}. Why: ${why}.`;
+  const decision = actions.length ? pickWeightedAction(actions) : null;
+  const trace = preflopTraceOf({
+    solId: locked.solId, shape, menu: null, rawTokens: heroCodes, codes: heroCodes, snapped: [], heroCards: hand.heroCards, heroIdx, node: hn.data,
+    mix: actions, decision, lastResort: { how }, reduced: null,
+    lockSources: locks.map((l, i) => `${i === 0 && plan.heroFirst ? `hero's check at the root locked (his range every hand)` : `${plan.raiserPos}'s raise to ${plan.raiseTo}bb at '${l.action_history.join("-") || "root"}' locked to ${range.how} (${raiserCombos} combos)`}`),
+    cached: hn.cached, stored: !!hn.stored, solveSecs: secs, body,
+  });
   return {
-    ok: true, actions, decision: actions.length ? pickWeightedAction(actions) : null, line: heroLine, pos: plan.heroPos, heroClass: heroClass(hand.heroCards),
+    ok: true, actions, decision, line: heroLine, pos: plan.heroPos, heroClass: heroClass(hand.heroCards),
     treeKey: `locked|${plan.heroPos}-${plan.raiserPos}`, solId: locked.solId, usedLine: heroLine, solveSecs: secs, cached: hn.cached,
-    ...(hn.stored ? { stored: true } : {}), shape, note, lastResort: { how },
+    ...(hn.stored ? { stored: true } : {}), shape, note, lastResort: { how }, trace,
   };
 }
 
@@ -2872,9 +3106,16 @@ export async function solvePreflopPoolLocked(hand: ParsedHand, heroPos: string |
     `. Tree: ${shapeText}; ${secs.toFixed(1)} s${hn.stored ? " (from the GTO Wizard solve cache)" : ""}.` +
     (repaired.changed.length ? ` Sizes snapped to the tree's own: ${repaired.changed.join(", ")}.` : "") +
     (shape.stackCap ? ` ${stackCapNote(shape)}.` : "");
+  const trace = preflopTraceOf({
+    solId: locked.solId, shape, menu: m, rawTokens: tokens, codes, snapped: repaired.changed, heroCards: hand.heroCards, heroIdx, node: hn.data,
+    mix: actions, decision, reduced: null, poolLocks: [{ pos: target.pos, key: target.key }],
+    lockSources: [`pool limp lock: the ${target.pos}'s ${target.complete ? "complete" : "limp"} at '${at.line || "root"}' locked to the pool's ${target.key} range (${(100 * freq).toFixed(1)}% of hands, n=${n}, ${combos} combos)`,
+      ...(resp?.locks.length ? resp.lines.map((l) => `iso reply lock: the ${target.pos}'s call at '${l || "root"}' locked to the pool's limp-call rates by hand group (${resp.source})`) : [])],
+    cached: !!hn.cached, stored: !!hn.stored, solveSecs: secs, body,
+  });
   return {
     ok: true, actions, decision, line, pos: shape.heroApiPos, heroClass: heroClass(hand.heroCards), treeKey: `${key}|pool:${target.pos}:${target.key}${resp?.locks.length ? `|resp:${resp.source}` : ""}`,
-    solId: locked.solId, usedLine: repaired.line, solveSecs: secs, cached: !!hn.cached, ...(hn.stored ? { stored: true } : {}), shape, note,
+    solId: locked.solId, usedLine: repaired.line, solveSecs: secs, cached: !!hn.cached, ...(hn.stored ? { stored: true } : {}), shape, note, trace,
   };
 }
 
@@ -3048,9 +3289,15 @@ export async function solvePreflopColdCallLocked(hand: ParsedHand, heroPos: stri
     `Tree: ${shapeText}; ${secs.toFixed(1)} s${hn.stored ? " (from the GTO Wizard solve cache)" : ""}.` +
     (repaired.changed.length ? ` Sizes snapped to the tree's own: ${repaired.changed.join(", ")}.` : "") +
     (shape.stackCap ? ` ${stackCapNote(shape)}.` : "");
+  const trace = preflopTraceOf({
+    solId: locked.solId, shape, menu: m, rawTokens: tokens, codes: pinCodes, snapped: repaired.changed, heroCards: hand.heroCards, heroIdx, node: hn.data,
+    mix: actions, decision, reduced: null, poolLocks: [{ pos: target.pos, key: target.key }],
+    lockSources: [`pool cold-call lock: the ${target.pos}'s call at '${at.line || "root"}' locked to the pool's ${target.key} range (${(100 * freq).toFixed(2)}% of chances, ${combos} combos)`],
+    cached: !!hn.cached, stored: !!hn.stored, solveSecs: secs, body,
+  });
   return {
     ok: true, actions, decision, line, pos: shape.heroApiPos, heroClass: heroClass(hand.heroCards), treeKey: `${key}|coldcall:${target.pos}:${target.key}`,
-    solId: locked.solId, usedLine: repaired.line, solveSecs: secs, cached: !!hn.cached, ...(hn.stored ? { stored: true } : {}), shape, note,
+    solId: locked.solId, usedLine: repaired.line, solveSecs: secs, cached: !!hn.cached, ...(hn.stored ? { stored: true } : {}), shape, note, trace,
   };
 }
 
