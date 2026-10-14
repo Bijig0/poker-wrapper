@@ -2047,6 +2047,18 @@ async function solvePostflopViaChainOnce(
     const pos = streetSeats[i]?.[j], to = streetAmounts[i]?.[j];
     if (t === "RAI" && pos && to != null) allInsBySeat.push({ pos, k: i, to });
   }));
+  // AN ALL-IN CALL FOR LESS PROVES THE SEAT'S STACK TOO (2026-10-14, the answer-path audit's latent item 4): its token is
+  // "C" (an all-in for no more than the price is a call) and carries no amount into the chain, so a seat whose stack the
+  // table had not reported (first hand on a socket, a seat the result frame had at 0 and the screen unreadable) was
+  // sent with the tree's stack and his call counted whole — the pot over by the shortfall, the seat kept live. The
+  // chips he called with are his stack entering the street, exactly as a shove's are (flopSeatStacks); only the
+  // per-seat stacks read it (not the plans' amounts, which stay the shoves').
+  const pfCalls = postflopAllInCalls(hand);
+  const allInCallsBySeat: { pos: string; k: number; to: number }[] = [];
+  streets.forEach((st, i) => st.forEach((t, j) => {
+    const pos = streetSeats[i]?.[j], to = pfCalls[(["flop", "turn", "river"] as const)[i]!]?.[j];
+    if (t === "C" && pos && to != null) allInCallsBySeat.push({ pos, k: i, to });
+  }));
 
   // The chain's seats. Heads-up: OOP/IP as the exploit spot derived them. THREE-WAY (2026-09-19, Ultra): the
   // seats in postflop order, the middle one GTO Wizard's "OOP+1". FOUR AND FIVE WAY (2026-09-21): no tree
@@ -2076,6 +2088,10 @@ async function solvePostflopViaChainOnce(
     /** a DEAD-MONEY collapse's kept seats' chips moved into that starting pot (DeadMoneyPlan.preload): off their stacks,
      *  and off their all-in amounts on the plan's street (amountsOf → treeAllInAmounts) */
     preload?: Record<string, number>;
+    /** a DEAD-MONEY plan's hero action numbers, per token (DeadMoneyPlan.heroActs — the served-mix key, aiChain
+     *  heroActionN) and of the decision itself */
+    heroActionN?: (number | null)[][];
+    heroDecisionN?: number;
   }
   // ALL-IN PREFLOP IS NOT A FLOP SEAT (2026-09-25, harness seed 1333 [jam]): an 18bb small blind jams, two 100bb
   // players call — the flop is theirs, with a side pot; the jammer never acts again. The tree was built three-way
@@ -2102,7 +2118,7 @@ async function solvePostflopViaChainOnce(
     .map(([, pos]) => String(pos).toUpperCase()));
   // EACH FLOP SEAT'S OWN STACK BEHIND and THE FIELD'S STACK (flopFieldMoney) — every tree below starts from them
   const { behindFlop, fieldStack } = flopFieldMoney({
-    flopSeats, heroPos: heroPosName, chainPos, depth, flopStack, streets, streetSeats, allIns: allInsBySeat,
+    flopSeats, heroPos: heroPosName, chainPos, depth, flopStack, streets, streetSeats, allIns: [...allInsBySeat, ...allInCallsBySeat],
     dealt: pinnedDealt ?? dealtBySeat(hand), table, antePerSeat: huCp ? anteHu : cpRing ? hand.anteBb ?? 0 : 0,
   });
   if (fieldStack <= 0.5) return fail("preflop line is (near) all-in");
@@ -2149,6 +2165,8 @@ async function solvePostflopViaChainOnce(
     ...((pl as Partial<DeadMoneyPlan>).dead != null ? { deadPot: Math.round(((pl as DeadMoneyPlan).dead +
       Object.values((pl as DeadMoneyPlan).preload ?? {}).reduce((a, b) => a + b, 0)) * 100) / 100 } : {}),
     ...((pre) => (pre && Object.keys(pre).length ? { preload: pre } : {}))((pl as Partial<DeadMoneyPlan>).preload),
+    // a dead-money plan says which of its tokens are hero's real actions (a cut's synthetic checks are not)
+    ...((dp) => (dp.heroActs && dp.heroDecisionN != null ? { heroActionN: [dp.heroActs], heroDecisionN: dp.heroDecisionN } : {}))(pl as Partial<DeadMoneyPlan>),
   });
   /** the walks are dead-money collapses: their menus are blended by action class (menuByClass) */
   let deadMode = false;
@@ -2376,6 +2394,8 @@ async function solvePostflopViaChainOnce(
     streets: w.streets,
     ...((am) => (am?.some((s) => s.some((x) => x != null)) ? { streetAmounts: am } : {}))(amountsOf(w)),
     streetSeats: w.streetSeats,
+    ...(w.heroActionN ? { heroActionN: w.heroActionN } : {}),
+    ...(w.heroDecisionN != null ? { heroDecisionN: w.heroDecisionN } : {}),
     heroComboIdx,
     dealt: dealtCount(hand, heroPos),
     rangeSource: [rangeSource, w.rangeNote].filter(Boolean).join(" + ") || undefined,
@@ -2775,14 +2795,26 @@ export function tableFlopPot(hand: ParsedHand, dealt: Record<number, number> | n
 }
 
 export function postflopAllInAmounts(hand: ParsedHand): Record<"flop" | "turn" | "river", (number | null)[]> {
+  return postflopAmounts(hand, (a, calls) => a.type === "all-in" && !calls.has(a));
+}
+/**
+ * THE ALL-IN CALLS FOR LESS, beside their "C" tokens (2026-10-14): a seat's all-in that does not raise the price is
+ * tokenized "C" (buildSolutionUrl.allInCalls) and is left out of postflopAllInAmounts — but the amount is the seat's
+ * street total, which is all he had: it proves his stack entering the street (flopSeatStacks) the way a shove's does.
+ * null everywhere else; the arrays line up with the street's tokens one for one.
+ */
+export function postflopAllInCalls(hand: ParsedHand): Record<"flop" | "turn" | "river", (number | null)[]> {
+  return postflopAmounts(hand, (a, calls) => a.type === "all-in" && calls.has(a));
+}
+function postflopAmounts(hand: ParsedHand, want: (a: ParsedHand["actions"][number], calls: Set<ParsedHand["actions"][number]>) => boolean): Record<"flop" | "turn" | "river", (number | null)[]> {
   // the same filter as buildSpotSolutionTokens' streets (posts carry no token; an all-in for no more than the price is a
   // call, "C"), so the arrays line up with the tokens one for one
   const calls = allInCalls(hand.actions);
   const per = (street: "flop" | "turn" | "river") => hand.actions
     .filter((a) => a.street === street)
-    .map((a) => ({ tok: calls.has(a) ? "C" : actionToken(a), amt: a.type === "all-in" && !calls.has(a) ? Number(a.amount) : NaN }))
+    .map((a) => ({ tok: calls.has(a) ? "C" : actionToken(a), amt: want(a, calls) ? Number(a.amount) : NaN }))
     .filter((p) => p.tok !== null)
-    .map((p) => (p.tok === "RAI" && Number.isFinite(p.amt) && p.amt > 0 ? Math.round(p.amt * 100) / 100 : null));
+    .map((p) => (Number.isFinite(p.amt) && p.amt > 0 ? Math.round(p.amt * 100) / 100 : null));
   return { flop: per("flop"), turn: per("turn"), river: per("river") };
 }
 

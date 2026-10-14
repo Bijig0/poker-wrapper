@@ -38,6 +38,15 @@ export interface DeadMoneyPlan extends CollapsePlan {
   preload: Record<string, number>;
   /** how many times the street was cut (0 = walked from its first action) */
   cuts: number;
+  /** HERO'S REAL ACTION NUMBER ON THE STREET, per token of `streets[0]` (2026-10-14, the answer-path audit's latent
+   *  item 3): for a token of his that stands for an action he took at the table, how many of his own actions on the
+   *  street came before it; null for a villain's token and for a cut's synthetic check (replayKept.acts). The served-mix
+   *  key (servedStrategy: hand, street, hero's action number) is counted on these, never on the plan's line — a cut
+   *  opens the line with a check for each kept seat ahead of the reopening and drops the actions before it, so the
+   *  line's count of hero's tokens is not his action number (aiChain heroActionN). */
+  heroActs: (number | null)[];
+  /** hero's real action number of the decision this plan answers (the street's actions of his, all of them) */
+  heroDecisionN: number;
 }
 
 /**
@@ -60,9 +69,14 @@ export interface DeadMoneyPlan extends CollapsePlan {
  * `order` = the seats in postflop order (default: the order they first act in).
  */
 export function replayKept(acts: Act<string>[], toks: string[], kept: ReadonlySet<string>, capOf: (p: string) => number | null | undefined,
-    order?: readonly string[], startBase = 0, layerTo = 0): { toks: string[]; seats: string[]; tookOver: string[]; preload: Record<string, number>; cuts: number; shifts: number; layered: number; closed: false; lostFold: boolean } {
+    order?: readonly string[], startBase = 0, layerTo = 0): { toks: string[]; seats: string[]; tookOver: string[]; preload: Record<string, number>; cuts: number; shifts: number; layered: number; closed: false; lostFold: boolean;
+    /** per token, the index into `acts` of the table action it stands for — null for a cut's synthetic check (a kept
+     *  seat ahead of the reopening checking in front of it: no action of his) */
+    acts: (number | null)[] } {
   const rot = order?.length ? [...order] : [...new Set(acts.map((x) => x.seat))];
   const out: string[] = [], seats: string[] = [], tookOver: string[] = [];
+  /** the act behind each token of `out` (null: synthetic) */
+  const from: (number | null)[] = [];
   const put = new Map<string, number>(), treePut = new Map<string, number>();
   // `startBase` (planDeadMoney's last mode): every kept seat's first `startBase` chips are in the starting pot — the
   // dropped seats' opening levels, when every kept seat went past them
@@ -97,17 +111,18 @@ export function replayKept(acts: Act<string>[], toks: string[], kept: ReadonlySe
       // the cut: the kept seats' chips so far are the tree's starting pot, the round starts again here
       for (const p of inTree) { const x = treePut.get(p) ?? 0; if (x > 0) preload[p] = r((preload[p] ?? 0) + x); }
       base = r(base + treeLevel); cuts++;
-      out.length = 0; seats.length = 0; treePut.clear(); treeLevel = 0; lastInc = 1; actedSince = new Set();
+      out.length = 0; seats.length = 0; from.length = 0; treePut.clear(); treeLevel = 0; lastInc = 1; actedSince = new Set();
       for (const p of rot) {
         if (p === seat) break;
-        if (inTree.has(p) && cap(p) > 0.005) { out.push("X"); seats.push(p); actedSince.add(p); }
+        if (inTree.has(p) && cap(p) > 0.005) { out.push("X"); seats.push(p); from.push(null); actedSince.add(p); }
       }
     }
   };
-  const emit = (seat: string, tok: string) => { out.push(tok); seats.push(seat); actedSince.add(seat); };
+  /** one token for table action `i` */
+  const emit = (seat: string, tok: string, i: number) => { out.push(tok); seats.push(seat); from.push(i); actedSince.add(seat); };
   acts.forEach((a, i) => {
     if (a.kind === "fold") {
-      if (kept.has(a.seat)) { maybeCut(a.seat); emit(a.seat, "F"); inTree.delete(a.seat); }
+      if (kept.has(a.seat)) { maybeCut(a.seat); emit(a.seat, "F", i); inTree.delete(a.seat); }
       return;
     }
     const mine = put.get(a.seat) ?? 0;
@@ -115,7 +130,7 @@ export function replayKept(acts: Act<string>[], toks: string[], kept: ReadonlySe
     put.set(a.seat, to);
     level = Math.max(level, to);
     if (!kept.has(a.seat)) return;
-    if (a.kind === "check") { maybeCut(a.seat); emit(a.seat, "X"); return; }
+    if (a.kind === "check") { maybeCut(a.seat); emit(a.seat, "X", i); return; }
     // FIRST, WITHOUT CUTTING: an action that puts nothing more in the tree, or only an incomplete increment, is
     // settled in the round as it stands (stress-500 brief_I-003: the BB's last call of a 7 increment had cut the
     // street and wiped the line to "BB X") — a cut is for a wager the closed round cannot hold
@@ -133,7 +148,7 @@ export function replayKept(acts: Act<string>[], toks: string[], kept: ReadonlySe
       if (rel0 <= mineT + 0.005 && (a.kind === "call" || a.kind === "allin" || a.kind === "raise")) {
         takeLayers();
         // (review 5: a seat whose share leaves him all in in the tree has nothing to check with — nothing at all)
-        if (!actedSince.has(a.seat) && !allIn(a.seat)) emit(a.seat, "X");
+        if (!actedSince.has(a.seat) && !allIn(a.seat)) emit(a.seat, "X", i);
         return;
       }
       // A CALL OF A DROPPED SEAT'S LEVEL AT OR BELOW HERO'S CHIPS (`layerTo`, stress-500 brief_B-002, 2026-10-05): not
@@ -154,8 +169,8 @@ export function replayKept(acts: Act<string>[], toks: string[], kept: ReadonlySe
         if (incomplete) shifts++; else layered++;
         layers.push({ at: to, amt, done: new Set([a.seat]) });
         // in the tree: a call of its level, a check when there is nothing to call and he has not acted this round
-        if (mineT < treeLevel - 0.005) { emit(a.seat, "C"); treePut.set(a.seat, treeLevel); }
-        else if (!actedSince.has(a.seat)) emit(a.seat, "X");
+        if (mineT < treeLevel - 0.005) { emit(a.seat, "C", i); treePut.set(a.seat, treeLevel); }
+        else if (!actedSince.has(a.seat)) emit(a.seat, "X", i);
         return;
       }
     }
@@ -165,12 +180,12 @@ export function replayKept(acts: Act<string>[], toks: string[], kept: ReadonlySe
     const rel = r(to - (preload[a.seat] ?? 0));
     if (a.kind === "call" && rel > treeLevel + 0.005) {
       // the level he called was a dropped seat's: in the tree it is his own wager (his all-in when it is his stack)
-      emit(a.seat, rel >= cap(a.seat) - 0.005 ? "RAI" : `R${rel}`); tookOver.push(a.seat);
+      emit(a.seat, rel >= cap(a.seat) - 0.005 ? "RAI" : `R${rel}`, i); tookOver.push(a.seat);
       lastInc = Math.max(lastInc, r(rel - treeLevel));
       treePut.set(a.seat, rel); treeLevel = rel; actedSince = new Set([a.seat]); return;
     }
     if (rel <= (treePut.get(a.seat) ?? 0) + 0.005 && (a.kind === "call" || a.kind === "allin")) {
-      if (!actedSince.has(a.seat)) emit(a.seat, "X");
+      if (!actedSince.has(a.seat)) emit(a.seat, "X", i);
       return;
     }
     // after a cut the tree counts from the cut's level: a wager's amount is re-expressed (an all-in included) — but an
@@ -178,11 +193,11 @@ export function replayKept(acts: Act<string>[], toks: string[], kept: ReadonlySe
     const allInCall = a.kind === "allin" && rel <= treeLevel + 0.005;
     const moved = (preload[a.seat] ?? 0) > 0;
     emit(a.seat, allInCall && (base > 0 || moved) ? "C"
-      : (base > 0 || moved) && a.kind !== "call" ? (rel >= cap(a.seat) - 0.005 ? "RAI" : `R${rel}`) : toks[i]!);
+      : (base > 0 || moved) && a.kind !== "call" ? (rel >= cap(a.seat) - 0.005 ? "RAI" : `R${rel}`) : toks[i]!, i);
     treePut.set(a.seat, rel);
     if (rel > treeLevel + 0.005) { lastInc = Math.max(lastInc, r(rel - treeLevel)); treeLevel = rel; actedSince = new Set([a.seat]); }
   });
-  return { toks: out, seats, tookOver, preload, cuts, shifts, layered, closed: false, lostFold };
+  return { toks: out, seats, tookOver, preload, cuts, shifts, layered, closed: false, lostFold, acts: from };
 }
 
 /**
@@ -332,12 +347,16 @@ export function planDeadMoney(a: DeadMoneyArgs): { plans: DeadMoneyPlan[]; why: 
     const headsUp = live.length === 1 && !keptFolder && startBase === 0 && !fixed.cuts && !fixed.shifts;
     const dropped = a.seats.filter((s) => !kept.has(s.pos)).map((s) =>
       `${sc.folded.has(s.pos) ? (putOf(s.pos) > 0 ? (headsUp ? "folded" : "dead") : "fold") : putOf(s.pos) > 0 ? "dead" : "ghost"}:${s.pos}`);
+    // hero's real action number behind each token (the act it stands for, counted among his own on the street)
+    const heroOrd = acts.map((x, i) => (x.seat === a.heroPos ? acts.slice(0, i).filter((y) => y.seat === a.heroPos).length : null));
+    const heroActs = fixed.acts.map((ix) => (ix == null ? null : heroOrd[ix] ?? null));
     plans.push({
       kind: `${headsUp ? `heads-up: ${dropped.join(" + ")}` : dropped.join(" + ") || "exact"}${fixed.cuts ? " (street cut)" : ""}${fixed.shifts ? " (incomplete raise)" : ""}${fixed.layered ? " (called level in the pot)" : ""}`, seats, heroIdx: seats.findIndex((s) => s.pos === a.heroPos),
       streets: [fixed.toks.map((tok, i) => ({ tok, seat: fixed.seats[i]! }))],
       steps: dropped.length, ghostOnly: false,
       dead: r2(Object.values(deadBy).reduce((s, x) => s + x, 0)), deadBy, tookOver: fixed.tookOver, headsUp,
       preload: fixed.preload, cuts: fixed.cuts,
+      heroActs, heroDecisionN: acts.filter((x) => x.seat === a.heroPos).length,
     });
     if (startBase > 0) plans[plans.length - 1]!.kind += ` (opening ${startBase} in the pot)`;
   };

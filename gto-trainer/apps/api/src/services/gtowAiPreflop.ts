@@ -658,8 +658,16 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, ra
   let present = [...new Set(seats.map((x) => x.pos))].filter((p) => ORDER.includes(p));
   if (present.length !== seats.length) return { error: `seat labels outside the 6-max set: ${seats.map((x) => x.pos).join(", ")}` };
   // heads-up: the dealer is the small blind
+  // HERO'S LABEL FOLLOWS THE RENAME (2026-10-14, the answer-path audit's latent item 1): a hero labelled BTN at a
+  // two-seat table is the tree's SB. Looked up under "BTN" the shape named no hero seat (heroApiPos null): the answer's
+  // pos was null, the LINE_NOT_HERO check was skipped, and walkArrivalRanges read his raise as a villain's (the union of
+  // the node's sizes, not the size he played). Every live heads-up hand so far carried SB/BB (142 of 142); the BTN label
+  // comes from a source that names the dealer (buildSolutionUrl's HU variant, tickToHand before its fix) or a heads-up
+  // table with a dead small blind.
+  let hpTree = hp;
   if (present.length === 2 && present.includes("BTN") && !present.includes("SB")) {
     byPos.set("SB", byPos.get("BTN")!); byPos.delete("BTN"); present = present.map((p) => (p === "BTN" ? "SB" : p));
+    if (hpTree === "BTN") hpTree = "SB";
   }
   // a hand with no small blind (the seat emptied between hands): the API cannot express it —
   // model the missing SB as a ghost posting a penny that can only fold (see the header: measured against the 0.5bb ghost)
@@ -734,7 +742,7 @@ export function shapeOf(hand: ParsedHand, heroPos: string | null, deadBb = 0, ra
   // a rebuild from a logged tree (`dealt`) carries that tree's stacks — nothing to confirm; live, the seats the table has
   // not reported this hand are named on the shape (the figures stand; the note and the path say so)
   const unconfirmed = dealt ? [] : unconfirmedStacks(hand, used);
-  return { n, apiOf, seatOf, positions: set, stacks, sb, bb, straddle: null, rakeCapBb, deadSb, deadBb: Math.max(0, Math.round(deadBb * 100) / 100), heroApiPos: hp ? (apiOf[hp] ?? null) : null,
+  return { n, apiOf, seatOf, positions: set, stacks, sb, bb, straddle: null, rakeCapBb, deadSb, deadBb: Math.max(0, Math.round(deadBb * 100) / 100), heroApiPos: hpTree ? (apiOf[hpTree] ?? null) : null,
     ...(anteBb ? { anteBb } : {}), ...(siteRake ? { siteRake } : {}), ...(stackCap ? { stackCap } : {}), ...(unconfirmed.length ? { unconfirmed } : {}) };
 }
 
@@ -772,7 +780,18 @@ export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: strin
   /** limps (calls before any raise, the SB's complete included) in front of each seat when the line reaches it */
   const limpsAt: Record<string, number> = {};
   let limps = 0;
-  const posOf = (a: ParsedAction) => (a.hero ? heroPosOf(hand, null) : hand.positions[a.seatId]?.toUpperCase()) ?? null;
+  // HERO'S TOKENS SIT ON THE SEAT THE SHAPE GAVE HIM (2026-10-14, the audit's latent item 2): shapeOf resolved hero
+  // through its heroPos override (heroPosOf: the override, his label, his post) and the heads-up rename; this walk used
+  // to re-derive him as heroPosOf(hand, null) — his label alone — so a hero the hand does not label (handToSpot's "pass
+  // heroPos explicitly") mapped to no seat and his action was taken by whichever seat the walk was padding, an early
+  // seat's lost fold included (his open became the button's). The live callers pass his label, so the two agreed; the
+  // shape's seat is the one answer now.
+  const heroApi = shape.heroApiPos;
+  const apiPosOf = (a: ParsedAction): string | null => {
+    if (a.hero) return heroApi;
+    const p = hand.positions[a.seatId]?.toUpperCase();
+    return p ? shape.apiOf[p] ?? null : null;
+  };
   // the API's tree acts in its own seat order; a seat that never acted before the line reaches
   // a later seat is a fold it did not show — pad it, exactly as the chart walk does
   const order = shape.positions.slice();                // API order
@@ -780,7 +799,6 @@ export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: strin
   let cursor = 0;
   const calls = allInCalls(hand.actions);
   const pendingHero = !hand.ended && hand.currentNode.street === "preflop" && hand.currentNode.toActIsHero;
-  const heroApi = shape.heroApiPos;
   // THE DEAD-SB GHOST FOLDS ON ITS TURN (2026-10-01): the tree puts it on the clock after the button, with the fold
   // its only action, and no seat at the table makes that fold for it. It is due once every seat ahead of it has a
   // token (acted, or padded as a fold) — whether the line goes on to the BB or stops there with the BB to act.
@@ -802,7 +820,7 @@ export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: strin
       if (cursor >= acted.length) { if (round === 0) stoppedAt = api; break; }
       if (round === 0 && api === "SB" && ghostDue()) { tokens.push("F"); ghostFolded = true; continue; }
       const a = acted[cursor]!;
-      const aApi = posOf(a) ? shape.apiOf[posOf(a)!] ?? null : null;
+      const aApi = apiPosOf(a);
       if (aApi === api || aApi == null) {
         if (a.type === "fold") tokens.push("F");
         else if (a.type === "check") tokens.push("X");

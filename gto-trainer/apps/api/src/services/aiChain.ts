@@ -128,6 +128,20 @@ export interface AiChainSpec {
    *  rotation against the capture at every node and names the disagreement.
    *  Entries may be null (position unknown); those are skipped. */
   streetSeats?: (string | null)[][];
+  /** HERO'S REAL ACTION NUMBER ON THE STREET, per token, parallel to `streets` (2026-10-14, the answer-path audit's
+   *  latent item 3): for a token of his that stands for an action he took at the table, how many of his own actions on
+   *  that street came before it; null for a villain's token and for a token that stands for NO action of his. A
+   *  dead-money plan that CUT the street (deadMoneyCollapse.replayKept) opens its line with a synthetic check for each
+   *  kept seat ahead of the reopening, hero's included, and drops the kept seats' actions before the cut — so on that
+   *  line the count of hero's tokens is not his action number, and the served-mix key (servedStrategy: hand, street,
+   *  hero's action number) matched ANOTHER decision's mix: his synthetic check narrowed by the mix he was served for the
+   *  bet he really made there. Absent: every token of his is one of his real actions in order (a ghost / merge / fold
+   *  collapse keeps hero's tokens whole) and his number is counted from the line. A synthetic token is narrowed by this
+   *  tree's own strategy and never looked up. */
+  heroActionN?: (number | null)[][];
+  /** hero's real action number of the decision the walk ends on (the last street's pending node); absent: counted
+   *  from the line as above */
+  heroDecisionN?: number;
   /** Hero's postflop seat and combo index (null = unknown cards). */
   heroSeat: SeatLabel;
   heroComboIdx: number | null;
@@ -2116,7 +2130,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
           ...(stackNotes.length ? { stackNotes } : {}), ...(retreeNotes.length ? { retreeNotes } : {}),
           heroWeight: spec.heroComboIdx != null ? seats[heroIdx]!.range[spec.heroComboIdx] ?? 0 : null,
           heroMaxLive: spec.heroComboIdx != null ? heaviestLive(seats[heroIdx]!.range, new Set(cards.slice(0, 3 + k).map(cardIdx))) : null,
-          heroAt: { k, n: actorsOf(labels, seats.length, caps).filter((x) => x === heroIdx).length } };
+          heroAt: { k, n: spec.heroDecisionN ?? actorsOf(labels, seats.length, caps).filter((x) => x === heroIdx).length } };
       }
 
       const label = labels[ti]!;
@@ -2181,10 +2195,17 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         } else if (!ans) {
           // NO NODE OF THIS PLAN ANSWERED IT (served-strategy narrowing, 2026-10-08 — live 11381: answered on merge:CO+BTN,
           // this decision only on ghost:BTN): the mix he was SERVED for that action — the blend over the plans it was
-          // read on, or its one tree's node — not this tree's strategy. Keyed by his action number on the street.
-          const nHero = actorsOf(labels, seats.length, caps).slice(0, ti).filter((x) => x === heroIdx).length;
-          const sv = servedHeroStrategy(handKey, k, nHero);
-          if (sv && !(sv.solId === String(ens.solId) && !sv.blended)) {
+          // read on, or its one tree's node — not this tree's strategy. Keyed by his action number on the street: the
+          // spec's real one where it carries it (heroActionN — a dead-money cut's line), else counted from the line.
+          const real = spec.heroActionN?.[si];
+          const synthetic = !!real && real[ti] == null;
+          const nHero = real?.[ti] ?? actorsOf(labels, seats.length, caps).slice(0, ti).filter((x) => x === heroIdx).length;
+          const sv = synthetic ? null : servedHeroStrategy(handKey, k, nHero);
+          if (synthetic) {
+            // A CHECK THE CUT STANDS IN FOR (heroActionN): no decision of his is behind it — this tree's own strategy
+            nodeRec.heroAnswered = { solId: String(ens.solId), src: "served", action: label, strategy: null, combo: null,
+              miss: `the ${label.toLowerCase()} stands in for the street's cut (dead-money plan), not an action of his — narrowed by this tree's strategy` };
+          } else if (sv && !(sv.solId === String(ens.solId) && !sv.blended)) {
             const m = servedActionIndex(label, sv.menu, (l, s) => matchWalkAction(l, s, stack));
             const c = spec.heroComboIdx;
             const servedInfo = { plans: sv.plans, blended: sv.blended, first: sv.first, kept: sv.src, plan, ...(m.byClass ? { byClass: true } : {}) };
