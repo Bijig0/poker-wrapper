@@ -7,13 +7,14 @@
  * onto the late seats of the 6-max tree.
  */
 import { time } from "../clock";
+import { log } from "../feed";
 import { pyFloatStr, pyRound, pyStr, sortedNums, splitWs } from "../py";
 import { CGG, CP, S, isCgg, isCp } from "../state";
 import { C } from "../config";
 import * as TABLES from "../tables";
 import { TOL } from "../reconcile";
 import { potVal } from "./dom";
-import { dealtCents, domBoardRefused, voluntaryActed, withoutRabbit } from "./ws";
+import { dealtCents, domBoardRefused, dumpEvent, voluntaryActed, withoutRabbit } from "./ws";
 import { potAgrees, wsHand, type WsHand } from "./wsLine";
 import { seatWords, undealtStatus } from "./roster";
 import { KEEPALIVE_GRACE_S, KEEPALIVE_S } from "./stall";
@@ -455,6 +456,101 @@ export function protocolHand(): WsHand | null {
 }
 
 /**
+ * WHICH LINE WAS SERVED (2026-10-14, hand 4924546540, session_20261014_131738 table 1): for at least 50 s mid-hand the
+ * /state line carried a FOLD by seat 4, the button, all-in for his whole 2.2bb (his CO_SELECT_INFO: btn 4096 "raise",
+ * bet 5, raise 11, account 0). The server skipped him (CO_CURRENT_PLAYER 6 → 5), the API built a GTO Wizard node from
+ * the fold, and the hand got no answer. The archive written 20 s later (lineSource "ws", the protocol's line) and the
+ * shadow report's reconciled line had no such fold, and nothing recorded which line /state served at that moment or
+ * why. These lines make the next one attributable:
+ *   1. the protocol line unavailable while a hand is on — which line was served instead (and when it comes back);
+ *   2. a fold read for a seat with nothing behind, outside the protocol reducer (the level reconciler, the DOM backfill);
+ *   3. an all-in the protocol's frame typed as a raise / bet / call (wsLine.ts nothingBehind — the typing unchanged).
+ * LOGS AND DUMP MARKERS ONLY: /state and /hand carry nothing new (the reader goldens compare them byte for byte). Each
+ * line is logged once per hand (once per seat per hand for 2 and 3). `lineDiagSeams.log` is the tests' seam.
+ */
+export const lineDiagSeams = { log: (m: string) => log(m) };
+
+function lineDiag(): typeof S.lineDiag {
+  const m = S.lineDiag;
+  if (m.hand !== S.handNo) Object.assign(m, { hand: S.handNo, fallback: false, back: false, said: new Set<string>() });
+  return m;
+}
+
+const handTag = () => {
+  const id = S.handIds.get(S.handNo);
+  return `hand ${S.handNo}${id ? ` (${id})` : ""}`;
+};
+
+const rowText = (a: any) => `${String(a.street ?? "?")[0]} ${pyStr(a.seatId)} ${a.type}${a.amount !== undefined && a.amount !== null ? " " + pyStr(a.amount) : ""}`;
+
+/** 1 — the protocol line unavailable while a hand is on (handStateIgnition: a hand with dealt seats and hero): log and
+ *  mark the ws_dump once, with the line served instead; once more when the protocol line is back. */
+export function noteLineServed(proto: WsHand | null, lineSource: string, served: any[], note: string | null): void {
+  if (S.fakeMode) return;
+  const w = ws(), m = lineDiag();
+  const frames = (w.frames || []).length;
+  if (!proto) {
+    if (m.fallback) return;
+    m.fallback = true;
+    const which = lineSource === "reconciled" ? "reconciled" : "event";
+    lineDiagSeams.log(`[line] ${handTag()}: protocol line unavailable — frames ${frames}, tapBound ${S.tapBound ?? null}, serving the ${which} line`
+      + ` (${served.length} rows: ${served.slice(-6).map(rowText).join(", ") || "none"})`);
+    dumpEvent("<line-fallback>", { frames, tapBound: S.tapBound ?? null, served: which, line: served.map(rowText), note });
+  } else if (m.fallback && !m.back) {
+    m.back = true;
+    lineDiagSeams.log(`[line] ${handTag()}: protocol line available again — frames ${frames}`);
+    dumpEvent("<line-back>", { frames, tapBound: S.tapBound ?? null });
+  }
+}
+
+/** 2 — a fold read for a seat other than hero OUTSIDE the protocol reducer (`via`: the level reconciler's derivation,
+ *  the DOM backfill) while the wrapper's latest reading says the seat has nothing behind: its socket account
+ *  (S.ws.wsAccount, from its own last frame) or its screen stack (`screenBehindBb`, null = unread) is 0, or its last
+ *  action this hand in the event log was an all-in. Once per seat per hand. */
+export function noteFoldNothingBehind(seat: number, via: string, screenBehindBb: number | null | undefined): void {
+  try {
+    foldNothingBehind(seat, via, screenBehindBb);
+  } catch {}
+}
+
+function foldNothingBehind(seat: number, via: string, screenBehindBb: number | null | undefined): void {
+  if (S.fakeMode || !S.handNo) return;
+  const w = ws();
+  if (seat === (w.heroSeat ?? null)) return;
+  const acct = (w.wsAccount as Map<number, number> | undefined)?.get(seat);
+  let last: any = null;
+  const acts: any[] = w.actions || [];
+  for (let i = acts.length - 1; i >= 0; i--) if (acts[i].seat === seat && acts[i].type !== "fold") { last = acts[i]; break; }
+  const zeroWs = acct === 0, zeroScreen = typeof screenBehindBb === "number" && screenBehindBb <= TOL;
+  const jammed = last?.type === "all-in";
+  if (!zeroWs && !zeroScreen && !jammed) return;
+  const m = lineDiag(), key = `fold ${seat}`;
+  if (m.said.has(key)) return;
+  m.said.add(key);
+  const chips = zeroWs || zeroScreen ? "0" : acct !== undefined ? `${acct}c` : "nothing";
+  const detail = [`socket account ${acct ?? "unread"}`, `screen ${screenBehindBb ?? "unread"}`,
+    last ? `last action ${last.type}${last.cents != null ? ` ${last.cents}c` : ""}` : "no earlier action"];
+  lineDiagSeams.log(`[line] ${handTag()} seat ${seat}: fold read via ${via} but the seat has ${chips} behind (${detail.join(", ")})`);
+}
+
+/** 3 — the protocol's line filed a money action that left its seat with nothing behind under a verb other than all-in
+ *  (or a fold from a seat already at 0): logged once per seat per hand, the typing left as it is. */
+export function noteProtoNothingBehind(proto: WsHand): void {
+  if (S.fakeMode || !proto.nothingBehind.length) return;
+  const m = lineDiag();
+  const bb = ws().bb || 0, scaled = bb && ws().bbSeen;
+  for (const x of proto.nothingBehind) {
+    const key = `proto ${x.seat}`;
+    if (m.said.has(key)) continue;
+    m.said.add(key);
+    const size = scaled ? `${pyRound(x.toCents / bb, 2)}bb` : `${x.toCents}c`;
+    lineDiagSeams.log(x.verb === "fold"
+      ? `[line] ${handTag()} seat ${x.seat}: the protocol filed a fold (${x.street}) from a seat with 0 behind`
+      : `[line] ${handTag()} seat ${x.seat}: ${x.type} to ${size} leaves 0 behind — an all-in the frame typed "${x.verb}" (${x.street})`);
+  }
+}
+
+/**
  * THE SCREEN AS A CHECKER (2026-09-26): with the line built from the protocol, nothing the screen shows is written
  * into it — a disagreement marks the decision uncertain instead (auto-execute holds, the panel says why). Checked:
  * the protocol's own pot against the chips the line put in (exact, at each pot frame); a frame the reducer could not
@@ -589,6 +685,11 @@ export function handStateIgnition(): Record<string, any> | null {
     ? [actions, null, protocolUncertain(proto, screenBoard), null, "ws"] as [any[], any, string | null, string | null, string]
     : reconciledLine(actions, hero, street);
   actions = lineActions;
+  // WHICH LINE WAS SERVED (2026-10-14, hand 4924546540): logs only, nothing below changes (noteLineServed)
+  try {
+    noteLineServed(proto, lineSource, actions, lineNote);
+    if (proto) noteProtoNothingBehind(proto);
+  } catch {}
   let heroOwedBb: number | null = null;
   if (rcLedger !== null) {
     committed = rcLedger.committed;

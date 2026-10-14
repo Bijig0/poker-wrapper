@@ -2,7 +2,7 @@ import { DEFAULT_LIVE_URL } from "../feed/resolveHand/resolveHand";
 import { buildAnswerText, type AnswerAction } from "../feed/buildAnswerText/buildAnswerText";
 import { gtowCdp } from "./gtowCdp";
 import { gtowApi } from "./gtowApi";
-import { answerLog, failKindOf, isFailKind, NEVER_ASKED, type FailKind } from "./answerLog";
+import { answerLog, captureJson, failKindOf, isFailKind, NEVER_ASKED, type FailKind } from "./answerLog";
 import { isBackgroundOwner } from "./backgroundLock";
 import { checkAnswerIntegrity } from "./answerIntegrity";
 import { drawRoll, fmtRoll, rollDecision } from "./rollDecision";
@@ -734,6 +734,8 @@ class StudyPoller {
       chain: this.lastChainLine,
       // THE SHORT ALL-IN PRESS (services/allInPress): how an ALLIN in this mix is pressed, when not as the shove
       press: sol?.ok === true && sol.press?.length ? JSON.stringify(sol.press) : null,
+      // WHAT THE API SAW (answerLog.captureJson, 2026-10-14): the hand the solve read — the probe's when the reply had none
+      captureJson: captureJson(full.hand ?? probe.hand),
     };
     // THE CHAIN PATH (services/chainPath): an answer carries the one fastSolve made; a decision with no answer is a
     // fault (its requests still counted) — unless the chain was never the question (hero acted first, hand over)
@@ -1163,6 +1165,8 @@ class StudyPoller {
       latencyMs, failReason: reason, failKind: kind,
       seatStats: seatStatsJson(full?.sessionId ?? probe.hand?.sessionId ?? null, (full?.hand ?? probe.hand) as Parameters<typeof seatStatsJson>[1]),
       sessionId: full?.sessionId ?? probe.hand?.sessionId ?? null,
+      // WHAT THE API SAW (answerLog.captureJson, 2026-10-14): the solve's hand when it came back, else the probe's
+      captureJson: captureJson(full?.hand ?? probe.hand),
       // a verdict that arrived after hero acted still says how the chain did; a fetch that failed is a fault
       ...((): { pathVerdict: string | null; path: string | null } => {
         const done = full?.solution?.path;

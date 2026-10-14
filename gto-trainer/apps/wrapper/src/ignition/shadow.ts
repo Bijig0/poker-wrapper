@@ -12,7 +12,7 @@ import { log } from "../feed";
 import { pyInt, pyJsonDumps } from "../py";
 import { HandReconciler, bb as rcBb, makeTick } from "../reconcile";
 import { S } from "../state";
-import { eventLine, potFaultAnswered, protocolHand } from "./hand";
+import { eventLine, noteFoldNothingBehind, potFaultAnswered, protocolHand } from "./hand";
 import { withoutRabbit } from "./ws";
 import { cardKey, sameHole } from "./dom";
 
@@ -29,6 +29,10 @@ export function shadowTick(state: Record<string, any>): void {
       }
       sh.hand = hand;
       sh.rc = new HandReconciler(hand || 0);
+      // a fold it reads for a seat with nothing behind is logged (hand.ts noteFoldNothingBehind, 2026-10-14) — logs only
+      sh.rc.onFold = (seat: number, via: string, behind: number | null) => {
+        if (S.shadow.hand === S.handNo) noteFoldNothingBehind(seat, `the level reconciler (${via})`, behind);
+      };
     }
     sh.seq += 1;
     const hero = S.ws.heroSeat ?? null;

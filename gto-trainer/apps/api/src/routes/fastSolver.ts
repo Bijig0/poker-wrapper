@@ -177,6 +177,8 @@ async function handleFastSolve(c: any): Promise<Response> {
       lineSource: liveExtras?.lineSource ?? null,
       lineUncertain: liveExtras?.lineUncertain ?? null,
       lineNote: liveExtras?.lineNote ?? null,
+      // the stacks as dealt, when the wrapper exported them — the answer row's capture_json (services/answerLog.captureJson)
+      ...(hand.startStacks ? { startStacks: hand.startStacks } : {}),
     },
     spot: spotOutcome.ok ? spotOutcome.spot : null,
     notes: spotOutcome.ok ? spotOutcome.notes : [],

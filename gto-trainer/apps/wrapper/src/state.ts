@@ -166,6 +166,10 @@ function fresh() {
      *  cards the SAME capture showed at hero's seat, the flops it showed before anyone had acted this hand, and the
      *  refusals already logged. Kept out of S.ws / liveStatus, which the reader golden compares key by key. */
     domBoard: { hand: 0, hole: [] as string[], stale: new Set<string>(), said: new Set<string>() },
+    /** The [line] diagnostics' once-per-hand latches (ignition/hand.ts lineDiag, 2026-10-14): the hand they are for,
+     *  whether the protocol line was unavailable / came back, and the per-seat lines already logged. Logs only — kept
+     *  out of S.ws / liveStatus, which the reader golden compares key by key. */
+    lineDiag: { hand: 0, fallback: false, back: false, said: new Set<string>() },
     /** `load`: the API's GET /api/load as load.ts reads it (null = not measured), refreshed with the issues */
     health: { at: 0.0, issues: [] as any[], load: null as import("./load").Load | null, loadAt: 0.0 },
     panelWatch: { sid: null, seen: false, missingSince: null } as Record<string, any>,

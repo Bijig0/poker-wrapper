@@ -642,3 +642,92 @@ describe("one poller per wrapper, however its URL is spelled", () => {
     expect(studyPollers.list()).toHaveLength(0);
   });
 });
+
+// WHAT THE API SAW (2026-10-14, hand 4924546540): a decision that got no answer because the live action list carried a
+// fold for an all-in seat could not be attributed — nothing kept the hand per decision. Every row the poller writes now
+// carries capture_json: the hand the solve read (the /fast-solver reply's `hand`), else the probe's.
+describe("studyPoller capture_json", () => {
+  const liveHand = (cid: string, lineSource: string) => ({
+    clientHandId: cid, handId: 7, street: "preflop", board: [], node: { toCall: 1.2 },
+    actions: [
+      { seatId: 5, hero: false, type: "post-sb", amount: 0.4, street: "preflop" },
+      { seatId: 6, hero: false, type: "post-bb", amount: 1, street: "preflop" },
+      { seatId: 3, hero: false, type: "fold", street: "preflop" },
+      { seatId: 4, hero: false, type: "raise", amount: 2.2, street: "preflop" },
+    ],
+    positions: { 3: "CO", 4: "BTN", 5: "SB", 6: "BB" }, liveSeats: [3, 4, 5, 6], startStacks: { 3: 55.6, 4: 100, 5: 12.25, 6: 100 },
+    lineSource, lineUncertain: null, lineNote: null,
+  });
+  const probeOf = (cid: string, cards: string[]) => ({
+    ok: true, studyAnswersOn: true, hero: { toAct: true, cards }, hand: liveHand(cid, "probe-read"),
+  });
+  const captureOf = (cid: string) => {
+    const rows = answerLog.forHand(cid) as { capture_json: string | null; text: string | null; fail_reason: string | null }[];
+    expect(rows.length).toBeGreaterThan(0);
+    return { row: rows[0]!, capture: JSON.parse(rows[0]!.capture_json!) };
+  };
+  const ACTIONS = ["5:post-sb:0.4", "6:post-bb:1", "3:fold", "4:raise:2.2"];
+
+  it("a served answer records the hand the solve read", async () => {
+    ingestResponse = probeOf("cap-served-1", ["Ah", "Kd"]);
+    fastSolveResponse = { ok: true, hero: { toAct: true, cards: ["Ah", "Kd"] }, hand: liveHand("cap-served-1", "solve-read"),
+      solution: { ok: true, decision: { action: "Raise 7", frequency: 100 }, actions: [{ action: "Raise 7", frequency: 100 }] } };
+    studyPoller.start({ intervalMs: 100_000 });
+    await wait(30);
+    const { row, capture } = captureOf("cap-served-1");
+    expect(row.text).not.toBeNull();
+    expect(capture.lineSource).toBe("solve-read");   // the solver's projection wins over the probe's
+    expect(capture.actions).toEqual(ACTIONS);
+    expect(capture).toMatchObject({ street: "preflop", toCall: 1.2, actionCount: 4, liveSeats: [3, 4, 5, 6],
+      positions: { 3: "CO", 4: "BTN", 5: "SB", 6: "BB" }, startStacks: { 3: 55.6, 4: 100, 5: 12.25, 6: 100 } });
+  });
+
+  it("a failed decision (the solver's refusal) records it too", async () => {
+    ingestResponse = probeOf("cap-failed-1", ["Qs", "Qd"]);
+    fastSolveResponse = { ok: true, hero: { toAct: true, cards: ["Qs", "Qd"] }, hand: liveHand("cap-failed-1", "solve-read"),
+      solution: { ok: false, reason: "no solution for this spot" } };
+    studyPoller.start({ intervalMs: 100_000 });
+    await wait(30);
+    const { row, capture } = captureOf("cap-failed-1");
+    expect(row.text).toBeNull();
+    expect(row.fail_reason).toBe("no solution for this spot");
+    expect(capture.lineSource).toBe("solve-read");
+    expect(capture.actions).toEqual(ACTIONS);
+  });
+
+  it("a solve that never came back (unreachable) records the probe's hand", async () => {
+    ingestResponse = probeOf("cap-unreach-1", ["7c", "7h"]);
+    fastSolveResponse = "REJECT";
+    studyPoller.start({ intervalMs: 100_000 });
+    await wait(30);
+    const { row, capture } = captureOf("cap-unreach-1");
+    expect(row.text).toBeNull();
+    expect(capture.lineSource).toBe("probe-read");
+    expect(capture.actions).toEqual(ACTIONS);
+  });
+
+  it("an abandoned-stale verdict records the hand its solve read", async () => {
+    ingestResponse = probeOf("cap-stale-1", ["Jc", "Tc"]);
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    fastSolveResponse = async () => {
+      await gate;
+      return { ok: true, hero: { toAct: true }, hand: liveHand("cap-stale-1", "solve-read"),
+        solution: { ok: true, decision: { action: "Call", frequency: 100 }, actions: [{ action: "Call", frequency: 100 }] } };
+    };
+    studyPoller.start({ intervalMs: 20 });
+    await wait(30);
+    // the table moves on (a villain jams): the next probe is a new decision, so the first verdict lands stale
+    ingestResponse = { ...probeOf("cap-stale-1", ["Jc", "Tc"]),
+      hand: { ...liveHand("cap-stale-1", "probe-read"), node: { toCall: 99 }, actions: [...liveHand("cap-stale-1", "x").actions, { seatId: 6, type: "raise", amount: 100 }] } };
+    await wait(60);
+    release();
+    await wait(30);
+    const rows = answerLog.forHand("cap-stale-1") as { capture_json: string | null; fail_kind: string | null }[];
+    const stale = rows.find((r) => r.fail_kind === "abandoned-stale");
+    expect(stale).toBeDefined();
+    const capture = JSON.parse(stale!.capture_json!);
+    expect(capture.lineSource).toBe("solve-read");
+    expect(capture.actions).toEqual(ACTIONS);
+  });
+});

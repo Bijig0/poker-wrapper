@@ -774,9 +774,13 @@ export function dealtFromTreeId(hand: ParsedHand, heroPos: string | null, id: st
 }
 
 /** The line so far as the API walks it: seat order, F / C / X / R<total bb>; also the raise totals by level, and — in a
- *  limped pot before any raise — each seat's iso size (isoSizes). */
-export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: string[]; levels: number[]; iso: Record<string, number> | null } {
+ *  limped pot before any raise — each seat's iso size (isoSizes). `seats`: the API seat each token belongs to (pads and
+ *  the ghost's fold included); `dropped`: actions left out because their seat was already all in (see below). */
+export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: string[]; levels: number[]; iso: Record<string, number> | null; seats: string[]; dropped: string[] } {
   const tokens: string[] = []; const levels: number[] = [];
+  const seats: string[] = [];
+  const dropped: string[] = [];
+  const emit = (tok: string, api: string) => { tokens.push(tok); seats.push(api); };
   /** limps (calls before any raise, the SB's complete included) in front of each seat when the line reaches it */
   const limpsAt: Record<string, number> = {};
   let limps = 0;
@@ -814,31 +818,56 @@ export function lineOf(hand: ParsedHand, shape: AiPreflopShape): { tokens: strin
     const top = shape.stacks[api];
     return top != null && (shape.stackCap || top === PREFLOP_STACK_CAP_BB) && t >= top ? top : t;
   };
+  // AN ALL-IN SEAT HAS NO FURTHER ACTION (2026-10-14, hand 4924546540). The BTN shoved his whole 2.2bb (the frame said
+  // "raise", 0 behind), the SB and hero raised over him, and the hand's list then carried a FOLD by the BTN before the
+  // SB's 18.6: this walk put it on the BTN's slot of the second round and sent 'F-R2.2-R3.4-R7.8-F-R18.6'. GTO Wizard
+  // skips an all-in seat (at 'F-R2.2-R3.4-R7.8' the SB is on the clock), so that node does not exist, it is answered
+  // "not solved yet" for ever, and hero's AA got no answer on any street. Each seat's chips in are counted as
+  // preflopPutIn counts them (a post / raise / bet / all-in is the seat's total, a call adds); a seat whose chips reach
+  // its TREE stack (shape.stacks, shapeOf's 0.05 — the stack the tree plays him with) is out of the action, and any
+  // later action the list gives him is dropped and named (`dropped`), never tokenized.
+  const chipsIn: Record<string, number> = {};
+  const count = (api: string | null, a: ParsedAction) => {
+    const amt = Number(a.amount ?? 0);
+    if (!api || !Number.isFinite(amt) || amt <= 0) return;
+    if (a.type === "call") chipsIn[api] = (chipsIn[api] ?? 0) + amt;
+    else if (a.type === "post-sb" || a.type === "post-bb" || a.type === "raise" || a.type === "bet" || a.type === "all-in") chipsIn[api] = Math.max(chipsIn[api] ?? 0, amt);
+  };
+  for (const a of hand.actions) if (a.street === "preflop" && (a.type === "post-sb" || a.type === "post-bb")) count(apiPosOf(a), a);
+  const allInNow = (api: string | null): boolean => {
+    const top = api ? shape.stacks[api] : undefined;
+    return top != null && (chipsIn[api!] ?? 0) >= top - 0.05;
+  };
   for (let round = 0; round < 4 && cursor < acted.length; round++) {
     for (const api of order) {
       if (round === 0 && limpsAt[api] == null) limpsAt[api] = limps;
+      while (cursor < acted.length && allInNow(apiPosOf(acted[cursor]!))) {
+        const a = acted[cursor++]!;
+        dropped.push(`${apiPosOf(a)}'s ${a.type}${a.amount ? ` ${num(a.amount)}` : ""} after his all-in (seat ${a.hero ? hand.heroSeatId : a.seatId})`);
+      }
       if (cursor >= acted.length) { if (round === 0) stoppedAt = api; break; }
-      if (round === 0 && api === "SB" && ghostDue()) { tokens.push("F"); ghostFolded = true; continue; }
+      if (round === 0 && api === "SB" && ghostDue()) { emit("F", "SB"); ghostFolded = true; continue; }
       const a = acted[cursor]!;
       const aApi = apiPosOf(a);
       if (aApi === api || aApi == null) {
-        if (a.type === "fold") tokens.push("F");
-        else if (a.type === "check") tokens.push("X");
-        else if (a.type === "call" || calls.has(a)) { tokens.push("C"); if (round === 0 && !levels.length && api !== "BB") limps++; }   // an all-in for no more than the price is a call
-        else if (a.type === "raise" || a.type === "bet" || a.type === "all-in") { const t = capped(api, a.amount ?? 0); levels.push(t); tokens.push(`R${num(t)}`); }
-        else tokens.push("C");
+        if (a.type === "fold") emit("F", api);
+        else if (a.type === "check") emit("X", api);
+        else if (a.type === "call" || calls.has(a)) { emit("C", api); if (round === 0 && !levels.length && api !== "BB") limps++; }   // an all-in for no more than the price is a call
+        else if (a.type === "raise" || a.type === "bet" || a.type === "all-in") { const t = capped(api, a.amount ?? 0); levels.push(t); emit(`R${num(t)}`, api); }
+        else emit("C", api);
+        count(api, a);
         cursor++;
       } else if (round === 0 && api !== heroApi && !tokens.length && api === "SB") {
         // nothing to pad before the first action in the blinds
       } else if (round === 0 && !levels.length && api !== "SB" && api !== "BB" && !(pendingHero && api === heroApi)) {
-        tokens.push("F");   // an early seat with no recorded action before a later seat acted: it folded
+        emit("F", api);   // an early seat with no recorded action before a later seat acted: it folded
       }
     }
   }
   // the line stopped with the ghost next (the button's was the last action): the BB is on the clock behind its fold
-  if (stoppedAt === "SB" && ghostDue()) tokens.push("F");
+  if (stoppedAt === "SB" && ghostDue()) emit("F", "SB");
   for (const api of order) if (limpsAt[api] == null) limpsAt[api] = limps;   // seats the line has not reached yet
-  return { tokens, levels, iso: isoSizes(shape, levels, limpsAt) };
+  return { tokens, levels, iso: isoSizes(shape, levels, limpsAt), seats, dropped };
 }
 
 /**
@@ -1836,7 +1865,22 @@ function prefetchRun(solId: string, done: string[], rest: string[], end: boolean
   for (let k = 1; k <= last; k++) void fetchNode(solId, [...done, ...rest.slice(0, k)].join("-"), { once: true }).catch(() => undefined);
 }
 
-async function repairLine(solId: string, tokens: string[], opts: { end?: boolean } = {}): Promise<{ line: string; changed: string[] } | { error: string }> {
+/**
+ * THE TOKEN MUST BE THE ACTOR'S (2026-10-14, hand 4924546540). A token whose seat is not the one the tree puts on the
+ * clock is a line the tree cannot hold — a fold by a seat already all in matched the SB's fold at 'F-R2.2-R3.4-R7.8',
+ * and the child was polled "not solved yet" for 30 s. Given `seats` (lineOf's, parallel to the tokens) and the shape's
+ * `positions`, a token whose seat differs from the node's actor is refused at once ("actor mismatch"). An actor the
+ * positions do not spell (a heads-up tree naming its seats otherwise) is not judged: the walk is what it was.
+ */
+export const ACTOR_MISMATCH = "actor mismatch";
+export function actorMismatch(tok: string, at: string, data: any, seat: string | undefined, positions: readonly string[] | undefined): string | null {
+  if (!seat || !positions) return null;
+  const actor: string | null = data?.game?.players?.find((p: any) => p.is_hero)?.position ?? null;
+  if (!actor || !positions.includes(actor) || actor === seat) return null;
+  return `${ACTOR_MISMATCH}: '${tok}' is ${seat}'s but the tree puts ${actor} on the clock at '${at || "root"}'`;
+}
+
+async function repairLine(solId: string, tokens: string[], opts: { end?: boolean; seats?: string[]; positions?: readonly string[] } = {}): Promise<{ line: string; changed: string[] } | { error: string }> {
   const out: string[] = [];
   const changed: string[] = [];
   for (let i = 0; i < tokens.length; i++) {
@@ -1846,6 +1890,8 @@ async function repairLine(solId: string, tokens: string[], opts: { end?: boolean
     const at = out.join("-");
     const node = await fetchNode(solId, at);
     if ("error" in node) return { error: `walking '${at || "root"}': ${node.error}` };
+    const mismatch = actorMismatch(tok, at, node.data, opts.seats?.[i], opts.positions);
+    if (mismatch) return { error: mismatch };
     const sols = (node.data?.action_solutions as any[]) ?? [];
     const pick = matchToken(tok, sols);
     if (!pick) {
@@ -2124,8 +2170,12 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   const t0 = Date.now();
   const shape = shapeOf(hand, heroPos, opts.deadBb ?? 0, opts.rakeSeats);
   if ("error" in shape) return { ok: false, reason: `GTO Wizard AI preflop: ${shape.error}` };
-  const { tokens, levels, iso } = lineOf(hand, shape);
+  const { tokens, levels, iso, seats, dropped } = lineOf(hand, shape);
   const line = tokens.join("-");
+  // (lineOf: an action by a seat already all in is left out of the line — said once per decision, and in the note)
+  if (dropped.length) console.log(`[line-guard] hand ${hand.clientHandId ?? hand.handId ?? "?"}: ${dropped.join("; ")}`);
+  /** the walk's actor check (repairLine): each token on the seat lineOf gave it */
+  const actorCheck = { seats, positions: shape.positions };
   const m = menus(levels, shape.n, iso);
   const key = treeKeyOf(shape, m);
   const sol = await ensureSolution(key, treeBody(shape, m), { multiway: shape.n > 2, preflop: true });
@@ -2148,7 +2198,7 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
     const direct = fetchNode(sol.solId, line, { stop: () => abandon });
     // a fold is always on offer: only a line with a call, a check or a raise can miss the tree
     const walk = tokens.some((t) => t !== "F")
-      ? repairLine(sol.solId, tokens, { end: true }).catch((e): { error: string } => ({ error: `walk threw: ${e instanceof Error ? e.message : e}` }))
+      ? repairLine(sol.solId, tokens, { end: true, ...actorCheck }).catch((e): { error: string } => ({ error: `walk threw: ${e instanceof Error ? e.message : e}` }))
       : null;
     const first = walk
       ? await Promise.race([direct.then((n) => ({ n, w: null })), walk.then((w) => ({ n: null, w }))])
@@ -2158,11 +2208,13 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
       const w = first.w!;
       const renamed = !("error" in w) && w.changed.length > 0;
       const notOffered = "error" in w && /is not offered/.test(w.error);
+      // a token on a seat the tree does not put on the clock: the address is no node (repairLine, 2026-10-14)
+      const misActor = "error" in w && w.error.startsWith(ACTOR_MISMATCH);
       // an action the tree does not offer may be a line that cannot happen at all, and the cloud's own refusal says
       // which ("Incorrect actions" is a capture fault, final): it gets one poll's grace before the walk's word is taken
       const late = notOffered ? await Promise.race([direct, new Promise<null>((res) => setTimeout(() => res(null), POLL_MS))]) : null;
       if (late) node = late;
-      else if (renamed || notOffered) {
+      else if (renamed || notOffered || misActor) {
         abandon = true;
         node = { error: `NODE_DOES_NOT_EXIST (read off the tree, not waited for: ${renamed ? (w as { changed: string[] }).changed.join(", ") : (w as { error: string }).error})` };
       } else node = await direct;
@@ -2195,7 +2247,7 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
   if ("error" in node && /NODE_DOES_NOT_EXIST/i.test(node.error)) {
     // the tree has this line, just not under the sizes we named — walk it and find out
     tstep("Re-reading the line on GTO Wizard's sizes");
-    let fixed: { line: string; changed: string[] } | { error: string } = await repairLine(sol.solId, tokens, { end: true });
+    let fixed: { line: string; changed: string[] } | { error: string } = await repairLine(sol.solId, tokens, { end: true, ...actorCheck });
     // THE LINE FIT: EVERY FIT, ON THIS TREE, NO DEAD MONEY (2026-10-04, hand 4922379136). The tree holds three players
     // to the flop: a second cold-caller or limper is "not offered". From 2026-09-23 the earliest such caller was folded
     // and the tree REBUILT with his chips as `pot` — and chips in the pot before the first action are an ante: every
@@ -2338,6 +2390,7 @@ export async function solvePreflopGtowAi(hand: ParsedHand, heroPos: string | nul
     note: (selfLock ? `${heroSelfLockNote(selfLock, heroClass(hand.heroCards))} ` : "") +
       `GTO Wizard AI preflop (Ultra) answered because the 6-max charts could not: ${why}. Tree built from the table — ${shapeText}; solved in ${secs.toFixed(1)} s${stored ? " (from the GTO Wizard solve cache — no request)" : ansNode.cached ? " (cached)" : ""}.`
       + (snapped.length ? ` Sizes snapped to the tree's own: ${snapped.join(", ")}.` : "")
+      + (dropped.length ? ` Left out of the line (the seat was already all in): ${dropped.join("; ")}.` : "")
       + (fitReads.length ? ` ${fitNote(fitReads, villainLines)}` : villainLines.length ? ` ${exactLineNote(villainLines)}` : "")
       + (shape.stackCap ? ` ${stackCapNote(shape)}.` : "")
       + (shape.unconfirmed?.length ? ` ${stackNotConfirmedNote(shape.unconfirmed)}.` : ""),
@@ -4313,7 +4366,7 @@ export async function resumeAiPreflopRanges(
     heroPos = red.hand.positions[red.hand.heroSeatId] ?? null;
     tableSeat = { SB: red.keptPos[0], BB: red.keptPos[1] };
   }
-  const { tokens: tokensNow } = lineOf(walked, pin.shape);
+  const { tokens: tokensNow, seats: seatsNow } = lineOf(walked, pin.shape);
   const fit = pinRest(pin, tokensNow);
   if (!fit.ok) return fit;
   await pin.warm;   // the prefix pre-fetch, normally long done
@@ -4321,7 +4374,7 @@ export async function resumeAiPreflopRanges(
   if (network) prefetchPrefixes(pin.solId, [...pin.codes, ...fit.rest]);
   let reads = 0;
   const counted = async (line: string) => { const n = await read(line); if (!("error" in n) && !n.cached) reads++; return n; };
-  const repaired = await repairLineWith(tokensNow, counted);
+  const repaired = await repairLineWith(tokensNow, counted, { seats: seatsNow, positions: pin.shape.positions });
   if ("error" in repaired) return { ok: false, why: `pinned AI tree ${pin.id}: ${repaired.error}` };
   const codes = repaired.line ? repaired.line.split("-") : [];
   const r = await walkArrivalRanges(pin.shape, codes, counted, maxPlayers);
@@ -4349,13 +4402,17 @@ export async function resumeAiPreflopRanges(
 }
 
 /** repairLine over an injected node getter (the pin's resume counts its reads and tests feed synthetic nodes). */
-async function repairLineWith(tokens: string[], get: (line: string) => Promise<{ data: any } | { error: string }>): Promise<{ line: string; changed: string[] } | { error: string }> {
+export async function repairLineWith(tokens: string[], get: (line: string) => Promise<{ data: any } | { error: string }>,
+    opts: { seats?: string[]; positions?: readonly string[] } = {}): Promise<{ line: string; changed: string[] } | { error: string }> {
   const out: string[] = [];
   const changed: string[] = [];
-  for (const tok of tokens) {
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i]!;
     const at = out.join("-");
     const node = await get(at);
     if ("error" in node) return { error: `walking '${at || "root"}': ${node.error}` };
+    const mismatch = actorMismatch(tok, at, node.data, opts.seats?.[i], opts.positions);
+    if (mismatch) return { error: mismatch };
     const sols = (node.data?.action_solutions as any[]) ?? [];
     const pick = matchToken(tok, sols);
     if (!pick) {
