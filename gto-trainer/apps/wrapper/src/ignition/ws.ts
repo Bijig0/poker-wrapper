@@ -825,7 +825,10 @@ export function beginHand(hid: string | null): void {
   w.endedSince = null;
   w.lastHandNoSeen = false;
   w.cleared = false;
-  w.dealer = null;
+  // the button the table moved after the last hand ended (CO_DEALER_SEAT held while handOver): this hand's, until its
+  // own dealer frames say otherwise (they follow PLAY_STAGE_INFO and name the same seat)
+  w.dealer = w.nextDealer ?? null;
+  delete w.nextDealer;             // (present only while a frame is held: the recorded state snapshots carry no new key)
   w.dealt = [];
   w.heroDealt = null;
   w.domGraceUntil = time() + 2.5;
@@ -1001,7 +1004,22 @@ export function onGameMsg(d: Record<string, any>): void {
   } else if (pid === "PLAY_CLEAR_INFO") {
     w.cleared = true;
   } else if (pid === "CO_DEALER_SEAT") {
-    w.dealer = d.seat ?? null;
+    // THE BUTTON THAT MOVED BEFORE THE NEXT HAND OPENED (2026-10-14, the answer-path audit's archive labels: hands
+    // 4924409838, 4923632240, 4921655739 heads-up; 4924398437 four-handed). After PLAY_STAGE_END_REQ the client sends
+    // PLAY_CLEAR_INFO and one CO_DEALER_SEAT before the next PLAY_STAGE_INFO — normally the ended hand's own button again
+    // (ws_dump 2026-10-12 16:01:02: "6" after a hand dealt with the button on 6; the new hand's two dealer frames follow
+    // its PLAY_STAGE_INFO). When a seat sat out or left at the hand's end it is the hand TO COME's button instead:
+    // 4924409838 (seat 2 sat out at 00:42:34.236, CO_DEALER_SEAT 3 at .507, then the session stopped) was archived off
+    // that frame with hero — the big blind — as the dealer: labelled SB, roster.dealer 3, while his live answers had read
+    // him BB from the button in force at the deal. The 8-s flush (reader.maybeFlushEnded) and a session stop archive
+    // the ended hand AFTER that frame; the next PLAY_STAGE_INFO (the usual archive) comes before the new button moves.
+    // So a dealer frame after the hand is over is the next hand's: held, applied when it opens (beginHand), never this
+    // hand's — its positions and roster stay as dealt, in the live row and in the archive alike. UNLESS this hand's
+    // button was never heard (the socket joined mid-hand and missed its CO_DEALER_SEAT: reader golden
+    // session_20260922_194118, hand 4919909956): the post-end repeat is then the only word on it, and without one the
+    // hand has no positions and is never archived at all — so it is taken, as before.
+    if ((w.handOver || w.cleared) && w.dealer !== null && w.dealer !== undefined) w.nextDealer = d.seat ?? null;
+    else w.dealer = d.seat ?? null;
   } else if (pid === "CO_CARDTABLE_INFO") {
     const dealt: number[] = [];
     let faceUp: number | null = null;
