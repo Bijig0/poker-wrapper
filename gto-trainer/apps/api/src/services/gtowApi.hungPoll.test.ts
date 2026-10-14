@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 
 /**
  * THE HUNG-POLL BOUND (2026-10-08, core-real-4922578514 river: no answer after 19.0 s on a 15 s three-way node clock —
@@ -22,8 +22,9 @@ const prevHang = process.env.GTOW_POLL_HANG_MS;
 beforeAll(async () => {
   ({ GtowApi } = await import("./gtowApi"));
   ({ gtowSessions } = await import("./gtowSessions"));
-  for (const id of ["primary", "secondary"]) {
+  for (const id of ["primary", "secondary", "ultra-2"]) {
     const s = sess(id);
+    if (!s) continue;
     saved[id] = { token: s.token, tokenExpMs: s.tokenExpMs };
     s.token = `tok-${id}`;
     s.tokenExpMs = Date.now() + 3_600_000;
@@ -58,6 +59,8 @@ afterEach(() => {
   seen.length = 0;
   if (prevHang === undefined) delete process.env.GTOW_POLL_HANG_MS; else process.env.GTOW_POLL_HANG_MS = prevHang;
 });
+// a hung read comes back `hung` only while another account is idle (GTOW_HEDGE_IDLE_ONLY, 2026-10-14): nothing of ours in flight
+beforeEach(() => { (gtowSessions as any).flight.clear(); (gtowSessions as any).routed = []; });
 
 function apiOwning(solId: string, owner = "primary") {
   const api = new GtowApi();

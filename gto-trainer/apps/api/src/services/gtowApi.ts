@@ -93,6 +93,17 @@ export const pollHangMs = (env: Record<string, string | undefined> = process.env
 export const hungHedgeOn = (env: Record<string, string | undefined> = process.env): boolean =>
   !/^(off|0|false|no)$/i.test(env.GTOW_HUNG_HEDGE?.trim() ?? "");
 /**
+ * A HEDGE GOES ONLY TO AN IDLE ACCOUNT (2026-10-14, session_20261014_161508: three-seat decisions p50 14.8 s, 29 hedges in
+ * an hour, hand 4924571722 posted 18 solves for 8 trees). A hedge is a cold solve. Posted onto an account that already runs
+ * one of ours it queues behind it (GTO Wizard solves an account's trees in turn), that account's own reads then pass the
+ * cap and hedge back onto the first — the storm that turned slow three-seat solves into 15-35 s answers. So a hung read
+ * hedges only while some account other than the owner has NOTHING of ours in flight (trees just routed included —
+ * gtowSessions.idleFor); otherwise it polls its solve on to the clock, as a read with too little time left always did.
+ *   GTOW_HEDGE_IDLE_ONLY=on (unset) | off (2026-10-14 03:39-18:00: hedge whenever a cold tree fits the clock)
+ */
+export const hedgeIdleOnlyOn = (env: Record<string, string | undefined> = process.env): boolean =>
+  !/^(off|0|false|no)$/i.test(env.GTOW_HEDGE_IDLE_ONLY?.trim() ?? "");
+/**
  * A COLD TREE'S COST, tree + solution POSTs + its first node read, MEDIAN — the 40-hand core menus re-run of 2026-10-08
  * (721 requests, origin stress500-core-menus): two-seat 3.9 s (p90 6.3), three-seat 6.3 s (p90 11.5). A hung walk read
  * re-posts its tree on another account only when at least this much of its clock is left.
@@ -934,7 +945,26 @@ class GtowApi {
    * winner (adoptSolution). `avoid`: the account(s) whose solve hung. The hedge is a real solve like any other: owner,
    * age, seats, in-flight count, and its node replies go to the persistent store under the same tree key.
    */
+  /** the one hedge being POSTed per hung solve: reads that hang on the same solve in the same instant join it (below) */
+  private hedgePending = new Map<string, Promise<EnsureResult>>();
   async hedgeSolution(input: CustomTreeInput, opts: { avoid?: GtowSessionId[]; /** the solve this one hedges (hedgeSibling) */ of?: string } = {}): Promise<EnsureResult> {
+    // ONE HEDGE PER HUNG SOLVE (2026-10-14, session_20261014_161508): the street warm-up's walk and the live walk read the
+    // same solve, hang on it within milliseconds of each other, and each posted a hedge — hedgeSibling only knows a hedge
+    // once its POST has returned (hand 4924571722's flop: 3 trees, 7 solves). The second caller now joins the first's POST.
+    const ofKey = opts.of ? (isStoredSolId(opts.of) ? this.realOf.get(opts.of) ?? opts.of : opts.of) : null;
+    const pending = ofKey ? this.hedgePending.get(ofKey) : undefined;
+    if (pending) {
+      tstepDetail("joined the hedge another read posted");
+      return pending.then((r) => (r.ok ? { ...r, created: false, why: "hedge: joined the second solve another read of this solve posted" } : r));
+    }
+    const p = this.postHedge(input, opts);
+    if (ofKey) {
+      this.hedgePending.set(ofKey, p);
+      p.finally(() => this.hedgePending.delete(ofKey)).catch(() => { /* reported to the caller */ });
+    }
+    return p;
+  }
+  private async postHedge(input: CustomTreeInput, opts: { avoid?: GtowSessionId[]; of?: string }): Promise<EnsureResult> {
     const body = this.buildCustomTree(input);
     const solution = { actions: "", board: input.board };
     const made = await this.postCustomSolution(body, solution, { multiway: Boolean(input.mid) }, opts.avoid ?? []);
@@ -1144,6 +1174,16 @@ class GtowApi {
     return this.fetchOnSolve(solId, q, timeoutMs, caller, repostMs);
   }
 
+  /** May a hung read of `solId` come back `hung` (the walk hedges)? With the hedge on and GTOW_HEDGE_IDLE_ONLY on, only
+   *  while an account other than the owner is idle; else the reason the read polls on. */
+  private hedgeGate(solId: string, owner: GtowSessionId | null): { ok: true } | { ok: false; why: string } {
+    if (!hungHedgeOn() || !hedgeIdleOnlyOn()) return { ok: true };
+    const need: GtowNeed = { multiway: (this.solSeats.get(solId) ?? 2) >= 3 };
+    if (gtowSessions.idleFor(need, owner ? [owner] : []).length) return { ok: true };
+    const busy = gtowSessions.routeIgnoringBlocks(need).filter((id) => id !== owner).map((id) => `${id} ${gtowSessions.inFlight(id)}`);
+    return { ok: false, why: `no idle account to hedge on (solves of ours in flight: ${busy.join(" · ") || "no other account routable"})` };
+  }
+
   /** A node of a real solve: the readiness probe for the chain's single-street shape, then the poll. */
   private async fetchOnSolve(solId: string, q: NodeQuery, timeoutMs: number, caller?: string, repostMs?: number): Promise<NodeFetchResult> {
     const t0 = Date.now();
@@ -1177,12 +1217,19 @@ class GtowApi {
       if (!pr.ok && (pr as { hung?: boolean }).hung) return pr;   // the probe's own poll hung with time to re-post: as before
       if (repostMs != null && !pr.ok && Date.now() >= hangAt) {
         const left = deadline - Date.now();
-        const owner = this.solOwner.get(solId) ?? "?";
+        const ownerId = this.solOwner.get(solId) ?? null;
+        const owner = ownerId ?? "?";
         const age = ((Date.now() - (this.solCreatedAt.get(solId) ?? t0)) / 1000).toFixed(1);
-        if (left >= repostMs) {
+        const gate = left >= repostMs ? this.hedgeGate(solId, ownerId) : null;
+        if (gate?.ok) {
           console.log(`[gtow-hung] ${owner} solve ${solId.slice(0, 8)} not served after ${age} s, ${(left / 1000).toFixed(1)} s left on the read — hedged on another account (a cold ${this.solSeats.get(solId) ?? "?"}-seat tree needs ~${(repostMs / 1000).toFixed(1)} s)`);
           tmark("GTO Wizard solve slow", `${owner} solve ${solId.slice(0, 8)} not served after ${age} s — hedged on another account`);
           return { ok: false, status: 0, hung: true, error: `GTO Wizard solve hung on ${owner} (not served after ${age} s) — ${(left / 1000).toFixed(1)} s left, hedged on another account` };
+        }
+        if (gate && !gate.ok) {
+          // every other account is busy with a solve of ours: a hedge would only queue there — the solve is polled on
+          console.log(`[gtow-hung] ${owner} solve ${solId.slice(0, 8)} not served after ${age} s, ${(left / 1000).toFixed(1)} s left on the read — ${gate.why}: polling on`);
+          tmark("GTO Wizard solve slow", `${owner} solve ${solId.slice(0, 8)} not served after ${age} s — ${gate.why}: polling on`);
         }
         if (Date.now() >= deadline) return pr;
         // too little left to hedge: wait for the probe to the clock, as before
@@ -1293,12 +1340,13 @@ class GtowApi {
         if (hung) {
           const left = deadline - Date.now();
           const line = `${owner ?? "?"} poll of solution ${solId.slice(0, 8)} [${line0()}] hung ${(hangMs / 1000).toFixed(1)} s, ${(Math.max(0, left) / 1000).toFixed(1)} s left on the read`;
-          if (repostMs != null && left >= repostMs) {
+          const gate = repostMs != null && left >= repostMs ? this.hedgeGate(solId, owner) : null;
+          if (gate?.ok && repostMs != null) {
             console.log(`[gtow-hung] ${line} — the tree is re-posted on another account (a cold ${this.solSeats.get(solId) ?? "?"}-seat tree needs ~${(repostMs / 1000).toFixed(1)} s)`);
             tmark("GTO Wizard poll hung", `${line} — re-post on another account`);
             return { ok: false, status: 0, hung: true, error: `GTO Wizard poll hung on ${owner ?? "the owning account"} (no reply in ${(hangMs / 1000).toFixed(1)} s) — ${(left / 1000).toFixed(1)} s left, the tree is re-posted on another account` };
           }
-          console.log(`[gtow-hung] ${line} — ${repostMs != null ? `too little left to re-post (a cold tree needs ~${(repostMs / 1000).toFixed(1)} s): polling on` : "polling on (no re-post for this read)"}`);
+          console.log(`[gtow-hung] ${line} — ${gate && !gate.ok ? `${gate.why}: polling on` : repostMs != null ? `too little left to re-post (a cold tree needs ~${(repostMs / 1000).toFixed(1)} s): polling on` : "polling on (no re-post for this read)"}`);
           tmark("GTO Wizard poll hung", line);
           if (caller !== "prefetch") tstepDetail("poll hung — re-asking");
         }

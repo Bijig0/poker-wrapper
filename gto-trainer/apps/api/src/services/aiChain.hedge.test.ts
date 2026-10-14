@@ -195,6 +195,52 @@ describe("the late lock's fallback (OFFTREE_LOCK_FALLBACK, default on)", () => {
     expect(s.reads.indexOf("sol-FLOP|R5")).toBeGreaterThan(s.reads.indexOf("sol-FLOP-locked|R5"));
   });
 
+  // 2026-10-14, session_20261014_161508, hand 4924571783: the hung child 81227e90 was "hedged" with the UNLOCKED tree
+  it("a hung read on the node-locked child is polled on — never hedged with the unlocked tree, nothing adopted", async () => {
+    delete process.env.OFFTREE_RANGE; delete process.env.OFFTREE_LOCK; delete process.env.OFFTREE_LOCK_FALLBACK; delete process.env.GTOW_HUNG_HEDGE;
+    const s = script({
+      "sol-FLOP|": [node("BB", offTreeBet)],
+      "sol-FLOP|R5": [node("BTN", heroFacing, "parent-hero")],
+      "sol-FLOP-locked|R5": [{ hung: true }, node("BTN", heroFacing, "locked-hero")],    // hangs once, then answers
+      "sol-TURN|": [node("BB", checkOrBet)],
+      "sol-TURN|X": [heroNode("turn-hero")],
+    }); restore = s.restore;
+    const r = await solveAiChain({ ...offTree, streets: [["R5", "C"], ["X"]] });
+    expect(r.ok).toBe(true);
+    expect(s.hedges).toHaveLength(0);
+    expect(s.adopted).toEqual([]);
+    expect(s.trees).toHaveLength(2);                                              // flop + turn: the flop tree was never re-posted
+    const flop = r.trace!.streets.find((x: any) => x.street === "FLOP")!;
+    expect(flop.leak).toBeFalsy();                                                // no tree:hung-hedge, no lock:late-parent
+    const soft = r.trace!.nodes.find((n) => n.street === "FLOP" && n.codes.length === 0)!.offTree!.soft!;
+    expect(soft.lock?.solId).toBe("sol-FLOP-locked");
+    expect(soft.lock?.late).toBeUndefined();
+    expect(soft.lock?.slow).toEqual({ ms: expect.any(Number), answered: true });
+    expect(s.reads.filter((x) => x === "sol-FLOP-locked|R5")).toHaveLength(2);    // the child, polled on
+    expect(s.reads).not.toContain("sol-FLOP|R5");                                 // hero's node never came from the parent
+  });
+
+  it("a child that hangs and then stays late falls to the unlocked parent (lock:late-parent), still without a hedge", async () => {
+    delete process.env.OFFTREE_RANGE; delete process.env.OFFTREE_LOCK; delete process.env.OFFTREE_LOCK_FALLBACK; delete process.env.GTOW_HUNG_HEDGE;
+    const s = script({
+      "sol-FLOP|": [node("BB", offTreeBet)],
+      "sol-FLOP|R5": [node("BTN", heroFacing, "parent-hero")],
+      "sol-FLOP-locked|R5": [{ hung: true }, { failAfterMs: 30 }],
+      "sol-TURN|": [node("BB", checkOrBet)],
+      "sol-TURN|X": [heroNode("turn-hero")],
+    }); restore = s.restore;
+    const r = await solveAiChain({ ...offTree, streets: [["R5", "C"], ["X"]] });
+    expect(r.ok).toBe(true);
+    expect(s.hedges).toHaveLength(0);
+    expect(s.adopted).toEqual([]);
+    const flop = r.trace!.streets.find((x: any) => x.street === "FLOP")!;
+    expect(flop.leak?.code).toBe("lock:late-parent");
+    const soft = r.trace!.nodes.find((n) => n.street === "FLOP" && n.codes.length === 0)!.offTree!.soft!;
+    expect(soft.lock?.slow).toEqual({ ms: expect.any(Number), answered: false });
+    expect(soft.lock?.late?.parent).toBe("sol-FLOP");
+    expect(s.reads.indexOf("sol-FLOP|R5")).toBeGreaterThan(s.reads.lastIndexOf("sol-FLOP-locked|R5"));
+  });
+
   it("OFFTREE_LOCK_FALLBACK=off: a late child fails the answer, as on 2026-10-13", async () => {
     delete process.env.OFFTREE_RANGE; delete process.env.OFFTREE_LOCK;
     process.env.OFFTREE_LOCK_FALLBACK = "off";

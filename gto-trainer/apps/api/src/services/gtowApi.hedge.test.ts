@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 
 /**
  * THE HEDGE SOLVE and THE IN-FLIGHT COUNT (2026-10-14, hand 4924409679 — gtowApi header "WHAT A HUNG POLL IS"). A real
@@ -97,6 +97,103 @@ describe("hedgeSolution", () => {
     expect(none.ok).toBe(false);
     expect((none as any).error).toMatch(/no other GTO Wizard account/);
     expect(seen.filter((x) => x.path.endsWith("/custom-trees/"))).toHaveLength(0);
+  });
+
+  // ONE HEDGE PER HUNG SOLVE (2026-10-14, session_20261014_161508): the warm-up's walk and the live walk hang on the same solve
+  // within milliseconds and each posted a hedge — the sibling is only known once its POST returned
+  it("two reads hanging on the same solve at once post ONE hedge: the second joins the first's POST", async () => {
+    const api = new GtowApi();
+    const first = await api.ensureCustomSolution(input(12), { noCache: true });
+    expect(first.ok).toBe(true);
+    const owner = (first as any).session as string, of = (first as any).solId as string;
+    const [a, b] = await Promise.all([api.hedgeSolution(input(12), { avoid: [owner], of }), api.hedgeSolution(input(12), { avoid: [owner], of })]);
+    expect(a.ok && b.ok).toBe(true);
+    expect((a as any).solId).toBe((b as any).solId);
+    expect([(a as any).created, (b as any).created].sort()).toEqual([false, true]);
+    expect(([a, b].find((x) => !(x as any).created) as any).why).toMatch(/joined the second solve/);
+    expect(seen.filter((x) => x.path.endsWith("/custom-trees/"))).toHaveLength(2);     // the first solve's tree + ONE hedge
+    expect(api.hedgeSibling(of)).toBe((a as any).solId);
+    // once the POST is back, a later hedge of the same solve is a new one (the caller checks hedgeSibling first, as aiChain does)
+    const c = await api.hedgeSolution(input(12), { avoid: [owner], of });
+    expect(seen.filter((x) => x.path.endsWith("/custom-trees/"))).toHaveLength(3);
+    for (const id of [of, (a as any).solId, (c as any).solId]) gtowSessions.noteSolveReady(id);
+  });
+
+  it("hedges of different solves never join each other, nor do hedges with no `of`", async () => {
+    const api = new GtowApi();
+    const two = await Promise.all([api.hedgeSolution(input(13), { of: "sol-x" }), api.hedgeSolution(input(13), { of: "sol-y" })]);
+    expect(seen.filter((x) => x.path.endsWith("/custom-trees/"))).toHaveLength(2);
+    const more = await Promise.all([api.hedgeSolution(input(13), {}), api.hedgeSolution(input(13), {})]);
+    expect(seen.filter((x) => x.path.endsWith("/custom-trees/"))).toHaveLength(4);
+    // (the fake server's ids can collide under concurrency — the POST count is the evidence)
+    for (const r of [...two, ...more]) if (r.ok) gtowSessions.noteSolveReady(r.solId);
+  });
+});
+
+/** the accounts the hedge test's beforeAll gave a token */
+const accounts = () => ["primary", "secondary", "ultra-2"].filter((id) => sess(id));
+
+describe("a hedge goes only to an idle account (GTOW_HEDGE_IDLE_ONLY, default on)", () => {
+  const prevHang = process.env.GTOW_POLL_HANG_MS, prevIdle = process.env.GTOW_HEDGE_IDLE_ONLY;
+  // the in-flight count is the singleton's: start each case with nothing of ours running anywhere
+  beforeEach(() => { (gtowSessions as any).flight.clear(); (gtowSessions as any).routed = []; });
+  afterEach(() => {
+    if (prevHang === undefined) delete process.env.GTOW_POLL_HANG_MS; else process.env.GTOW_POLL_HANG_MS = prevHang;
+    if (prevIdle === undefined) delete process.env.GTOW_HEDGE_IDLE_ONLY; else process.env.GTOW_HEDGE_IDLE_ONLY = prevIdle;
+  });
+  /** a solve on some account that never answers, every OTHER account given a solve of ours in flight */
+  const hungSolveEverybodyBusy = async (api: InstanceType<typeof GtowApi>, pot: number) => {
+    const made = await api.ensureCustomSolution(input(pot), { noCache: true });
+    expect(made.ok).toBe(true);
+    const owner = (made as any).session as string, solId = (made as any).solId as string;
+    hang.add(solId);
+    const busy = accounts().filter((id) => id !== owner).map((id) => `busy-${pot}-${id}`);
+    for (const id of accounts()) if (id !== owner) gtowSessions.noteSolvePosted(id, `busy-${pot}-${id}`);
+    return { owner, solId, release: () => { for (const b of busy) gtowSessions.noteSolveReady(b); gtowSessions.noteSolveReady(solId); } };
+  };
+
+  it("every other account busy with a solve of ours: the hung read polls on to its clock instead of coming back `hung`", async () => {
+    process.env.GTOW_POLL_HANG_MS = "300";
+    delete process.env.GTOW_HEDGE_IDLE_ONLY;
+    const api = new GtowApi();
+    const h = await hungSolveEverybodyBusy(api, 14);
+    const t0 = Date.now();
+    const r = await api.customNode(h.solId, { flopActions: "", board }, 1_500, "walk", { repostMs: 500 });
+    const ms = Date.now() - t0;
+    h.release();
+    expect(r.ok).toBe(false);
+    expect((r as any).hung).toBeUndefined();
+    expect((r as any).status).toBe(504);
+    expect(ms).toBeGreaterThanOrEqual(1_400);
+    expect(ms).toBeLessThan(2_300);
+  });
+
+  it("an idle account exists: `hung` at the cap, as before", async () => {
+    process.env.GTOW_POLL_HANG_MS = "300";
+    delete process.env.GTOW_HEDGE_IDLE_ONLY;
+    const api = new GtowApi();
+    const h = await hungSolveEverybodyBusy(api, 15);
+    const idle = accounts().find((id) => id !== h.owner)!;
+    gtowSessions.noteSolveReady(`busy-15-${idle}`);          // one other account has nothing running
+    const t0 = Date.now();
+    const r = await api.customNode(h.solId, { flopActions: "", board }, 3_000, "walk", { repostMs: 500 });
+    h.release();
+    expect(Date.now() - t0).toBeLessThan(1_200);
+    expect(r.ok).toBe(false);
+    expect((r as any).hung).toBe(true);
+  });
+
+  it("GTOW_HEDGE_IDLE_ONLY=off: `hung` even while every other account is busy (2026-10-14 03:39 behaviour)", async () => {
+    process.env.GTOW_POLL_HANG_MS = "300";
+    process.env.GTOW_HEDGE_IDLE_ONLY = "off";
+    const api = new GtowApi();
+    const h = await hungSolveEverybodyBusy(api, 16);
+    const t0 = Date.now();
+    const r = await api.customNode(h.solId, { flopActions: "", board }, 3_000, "walk", { repostMs: 500 });
+    h.release();
+    expect(Date.now() - t0).toBeLessThan(1_200);
+    expect(r.ok).toBe(false);
+    expect((r as any).hung).toBe(true);
   });
 });
 
