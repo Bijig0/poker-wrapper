@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import fxJson from "./__fixtures__/servedNarrowing11381.json";
 import { gtowApi, type CustomTreeInput } from "./gtowApi";
+import { checkHeroCombo } from "./chainChecks";
 import { dropAnsweredNodes, forgetCheckpoints, solveAiChain, type AiChainResult, type AiChainSpec } from "./aiChain";
 import { blendWalks, dropServed, heroAtOfTrace, recordServed, runsOf, servedActionIndex, servedFromRun, servedHeroStrategy, servedMixOf, servedTraceField } from "./servedStrategy";
 import { alignStrategy, blendStrategies } from "./multiwayCollapse";
@@ -137,15 +138,20 @@ describe("11381: hero's earlier turn actions on another plan are narrowed by the
     expect(b.retreeNotes?.join(" ") ?? "").not.toContain("mix he was served");
   });
 
-  it("switch off = the rule before: no narrowing by any answer, hero under 1e-3, #17 fails covered", async () => {
+  it("switch off = the rule before: no narrowing by any answer, hero under 1e-3 absolute — and since 2026-10-14 #17 reads him RELATIVE to his heaviest live combo: his class is his whole range here, so he is present", async () => {
     process.env.HERO_STREET_AS_ANSWERED = "off";
     const { c } = await threeDecisions();
     if (!c.ok) return;
     expect(c.trace.nodes.some((n) => n.heroAnswered)).toBe(false);
     expect(c.heroWeight!).toBeLessThan(1e-3);
+    // the absolute rule (until 2026-10-14) failed this as absent; the relative bound (chainChecks.heroAbsentBound, the
+    // hero-floor A/B) does not: his 2d2h weighs what his heaviest combo weighs — the range is residue, not his hand
+    expect(c.heroMaxLive!).toBeGreaterThan(0);
+    expect(c.heroWeight! / c.heroMaxLive!).toBeGreaterThan(0.1);
     const c17 = c.trace.streets.find((x) => x.street === "TURN")!.checks!.find((x) => x.id === 17)!;
-    expect(c17.status).toBe("fail");
-    expect(c17.covered).toBe("postflop:hero-absent");
+    expect(c17.status).toBe("pass");
+    expect(c17.text).toContain("% of his heaviest live combo");
+    expect(checkHeroCombo({ heroCombo: HERO, weight: c.heroWeight! }).status).toBe("fail");   // the absolute reading, for the record
   });
 
   it("nothing kept anywhere (no record, no stored row): this tree's strategy, as before — hero absent", async () => {

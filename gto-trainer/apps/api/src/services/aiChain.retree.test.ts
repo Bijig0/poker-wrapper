@@ -108,7 +108,7 @@ describe("core-bvb-007: the re-tree carries tree A's menus", () => {
     ]);
   });
 
-  it("switch off = today: only the 7.5 pinned, hero AUTOMATIC, his check narrowed by tree B → absent, #17 FAILS", async () => {
+  it("switch off = the rule before: only the 7.5 pinned, hero AUTOMATIC, his check narrowed by tree B → under 1e-3 absolute; since 2026-10-14 #17 reads him relative to his heaviest live combo", async () => {
     process.env.HERO_STREET_AS_ANSWERED = "off";
     const { s, second } = await twoDecisions();
     if (!second.ok) throw new Error(second.why);
@@ -119,10 +119,13 @@ describe("core-bvb-007: the re-tree carries tree A's menus", () => {
     expect(ip.bet_sizes).toEqual(["7.5bb", "96.7bb"]);
     expect(second.heroWeight!).toBeLessThan(1e-3);
     expect(second.retreeNotes).toBeUndefined();
+    // the absolute 1e-3 (until 2026-10-14) failed this as absent; the relative bound (chainChecks.heroAbsentBound, the
+    // hero-floor A/B) reads his weight against his heaviest live combo in the same narrowed range
+    expect(checkHeroCombo({ heroCombo: 592, weight: second.heroWeight! }).status).toBe("fail");
     const c17 = second.trace.streets[0]!.checks!.find((c) => c.id === 17)!;
-    expect(c17.status).toBe("fail");
-    expect(c17.covered).toBe("postflop:hero-absent");
-    expect(c17.text).toContain("ABSENT");
+    const absent = second.heroWeight! < Math.max(1e-3 * second.heroMaxLive!, 1e-6);
+    expect(c17.status).toBe(absent ? "fail" : "pass");
+    expect(c17.text).toContain(absent ? "ABSENT" : "% of his heaviest live combo");
   });
 
   it("no answered record anywhere (a synthetic hand nobody answered): narrowed by the tree's own strategy, as before", async () => {
@@ -209,6 +212,11 @@ describe("hero absent at his node (live answer 13033, hand 4922572952: Th9s turn
     expect(c.covered).toBe("postflop:hero-absent");
     expect(c.text).toContain("9.5e-5");
     expect(checkHeroCombo({ heroCombo: 592, weight: 0.0128 }).status).toBe("pass");
+    // the bound relative to his heaviest live combo (2026-10-14): the same 9.5e-5 on a full-weight range still fails,
+    // on a range whose heaviest combo weighs 0.01 it is 1 % of it — present
+    expect(checkHeroCombo({ heroCombo: 592, weight: 9.5e-5, maxLive: 1 }).status).toBe("fail");
+    expect(checkHeroCombo({ heroCombo: 592, weight: 9.5e-5, maxLive: 0.01 }).status).toBe("pass");
+    expect(heroAbsentAnswer({ actions: mix(), trees: [{ plan: null, w: 9.5e-5, max: 0.01 }], street: "turn", hand: "x", who: "y", passive: true })).toBeNull();
   });
 
   it("the passive pick: CALL, never the ALLIN; the warning opens HERO ABSENT AT HIS NODE:, the path code fails", () => {

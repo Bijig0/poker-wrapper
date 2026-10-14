@@ -2315,6 +2315,8 @@ async function solvePostflopViaChainOnce(
     heroPreload?: number;
     /** hero's combo weight in his conditioned range at his node (services/heroAbsent) */
     heroWeight?: number | null;
+    /** the heaviest live combo weight in that range — the absent bound's unit (chainChecks.heroAbsentBound, 2026-10-14) */
+    heroMaxLive?: number | null;
     /** hero's node: the street and his action number on it (servedStrategy's key) */
     heroAt?: { k: number; n: number } }[] = [];
   const walkFails: string[] = [];
@@ -2470,7 +2472,7 @@ async function solvePostflopViaChainOnce(
     const heroPre = heroPreloadAtNode(w, w.seatSpec.heroSeat === "oop" ? w.seatSpec.oopPos : w.seatSpec.heroSeat === "mid" ? w.seatSpec.midPos : w.seatSpec.ipPos);
     const walk: (typeof walks)[number] = {
       kind: w.kind, data: chain.data, line: `${preTokens.join("-")} / ${chain.line}`, trace: chain.trace, ...(w.members ? { members: w.members } : {}),
-      ...(heroPre > 0 ? { heroPreload: heroPre } : {}), heroWeight: chain.heroWeight ?? null, ...(chain.heroAt ? { heroAt: chain.heroAt } : {}),
+      ...(heroPre > 0 ? { heroPreload: heroPre } : {}), heroWeight: chain.heroWeight ?? null, heroMaxLive: chain.heroMaxLive ?? null, ...(chain.heroAt ? { heroAt: chain.heroAt } : {}),
       solveId: null,
     };
     walks.push(walk);
@@ -2667,12 +2669,13 @@ async function solvePostflopViaChainOnce(
     const notes = press.filter((e) => e.kind === "dropped").map((e) => dropNote(e, d.toPassive));
     sixNote = [...notes, sixNote].filter(Boolean).join(" · ");
   }
-  // HERO ABSENT AT HIS NODE (services/heroAbsent, 2026-10-08): his weight there under 1e-3 in a tree the mix was read from
+  // HERO ABSENT AT HIS NODE (services/heroAbsent, 2026-10-08): his weight there under the absent bound (1e-3 of his heaviest
+  // live combo at the node since 2026-10-14) in a tree the mix was read from
   // — LOUD always (check #17 failed, path postflop:hero-absent, the warning, the log line); the pick passive unless
   // HERO_ABSENT_PASSIVE=off. After the short all-in drop: a dropped all-in is already out of the mix.
   const absentAlso: PathReason[] = [];
   const absent = heroComboIdx == null ? null : heroAbsentAnswer({
-    actions, trees: (blended ? alignedWalks : [ref]).map((w) => ({ plan: w.kind, w: w.heroWeight })),
+    actions, trees: (blended ? alignedWalks : [ref]).map((w) => ({ plan: w.kind, w: w.heroWeight, max: w.heroMaxLive ?? null })),
     street: cur, hand: String(hand.clientHandId ?? hand.handId ?? "?"), who: `${heroCards.join("")} ${heroPosName}`,
   });
   if (absent) {

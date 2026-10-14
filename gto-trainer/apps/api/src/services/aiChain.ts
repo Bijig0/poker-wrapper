@@ -279,6 +279,10 @@ export interface ChainTrace {
     /** THE RE-TREE (2026-10-08, retree-consistency): this street's pinned tree carries the menus of the tree before the
      *  disagreement (retreeInputs) — which tree, each seat's source, the wager added */
     retree?: RetreeCarry;
+    /** WHAT HERO'S CLASS FLOOR DID at this street's entry (HERO_CLASS_FLOOR, 2026-10-14): the mode, the lift, his live
+     *  mass / class mass / own combo before and after. On a resumed street the range was floored when first entered, so
+     *  before = after there. Absent when hero's cards are unknown. */
+    heroFloor?: HeroFloorRecord;
   }[];
   nodes: ChainTraceNode[];
   /** where this walk started (2026-09-24): from the hand's checkpoint after `from`, or from the flop with the
@@ -571,9 +575,11 @@ export type AiChainResult =
       /** "RE-TREE: …" lines (retree-consistency, 2026-10-08): a street re-solved with its menus carried, hero's earlier
        *  action on it narrowed by his answered strategy */
       retreeNotes?: string[];
-      /** hero's combo weight in his conditioned range at his node (null = cards unknown) — under HERO_ABSENT_WEIGHT he
-       *  is absent there (services/heroAbsent) */
+      /** hero's combo weight in his conditioned range at his node (null = cards unknown) — under the absent bound
+       *  (HERO_ABSENT_WEIGHT × heroMaxLive, services/heroAbsent) he is absent there */
       heroWeight?: number | null;
+      /** the heaviest live combo weight in that same range (board removed): the unit the bound is measured in (2026-10-14) */
+      heroMaxLive?: number | null;
       /** hero's node: the street (0 flop .. 2 river) and his action number on it — the served mix's key (servedStrategy) */
       heroAt?: { k: number; n: number };
       trace: ChainTrace;
@@ -637,6 +643,95 @@ const classCombos = (idx: number): number[] => {
   }
   return out;
 };
+
+// ---- hero's class floor (HERO_CLASS_FLOOR, 2026-10-14 A/B — docs/2026-10-14-hero-floor-ab.md) ---------------------
+/**
+ * HOW HERO'S OWN HAND CLASS IS KEPT ALIVE in his entering range at every street (the floor block in the walk):
+ *   abs   — today, the default: every unblocked combo of his class is lifted to >= 0.05, an ABSOLUTE weight. On a thin
+ *           range (a rare line, or his own earlier actions narrowing him under ~20 combos) 0.05 is the heaviest weight he
+ *           holds and his class becomes 15-100 % of what villain believes he has: villain is solved against a hero who
+ *           all but shows his hand (answer-path audit 2026-10-14, finding 2).
+ *   rel5  — the lift is RELATIVE: >= 0.05 x the heaviest live combo weight in his range (board cards removed). On a
+ *           full-weight range (max 1) it is abs exactly; on a thin range it keeps his class the share the floor meant.
+ *   rel1  — the same at 0.01 x.
+ *   none  — no lift but an epsilon (1e-6 x max, at least 1e-6: GTO Wizard keeps weights down to ~1e-7, probed
+ *           2026-10-05) so his combo exists and a strategy can be read at his node: the natural reference.
+ * Every mode lifts the WHOLE class (suit isomorphism — GTO Wizard rejects beliefs that break it on the street's board,
+ * 2026-09-17), card removal stays absolute (a combo sharing a card with the board is never lifted), and a weight already
+ * above the floor is left alone. Idempotent: applying a mode twice to a range is applying it once (a resumed street
+ * re-applies it to a range that was floored when the street was entered).
+ */
+export type HeroClassFloorMode = "abs" | "rel5" | "rel1" | "none";
+/** the absolute floor that ran 2026-09-17 .. 2026-10-14 (HERO_CLASS_FLOOR=abs restores it) */
+export const HERO_CLASS_FLOOR_ABS = 0.05;
+export const HERO_CLASS_FLOOR_EPS = 1e-6;
+/** THE DEFAULT IS rel5 SINCE 2026-10-14 (Brady, on the A/B: "go ahead, flip to rel5"): on the 47 decisions where the floor
+ *  bites (hero under 5 combos, 1.9 % of postflop decisions) abs's mix lost 0.134 bb a decision against the natural
+ *  villain (max 2.68: a folded AdQc / KhKs), rel5 0.000 and the natural reference's picks on 47 of 47; above 5 combos
+ *  the modes are identical. Register: services/approximations.ts `hero-class-floor`. An unknown value reads as rel5. */
+export const heroClassFloorMode = (env: Record<string, string | undefined> = process.env): HeroClassFloorMode => {
+  const v = String(env.HERO_CLASS_FLOOR ?? "rel5").trim().toLowerCase();
+  return v === "abs" || v === "rel1" || v === "none" ? v : "rel5";
+};
+/** The heaviest live combo weight in a range (board cards removed) — the unit the relative floor and check #17's
+ *  absent bound are measured in. */
+export function heaviestLive(range: ArrayLike<number>, boardIdx: ReadonlySet<number>): number {
+  let max = 0;
+  for (let i = 0; i < 1326; i++) {
+    const w = range[i] ?? 0;
+    if (!(w > max)) continue;
+    const [a, b] = comboCards(i);
+    if (boardIdx.has(a) || boardIdx.has(b)) continue;
+    max = w;
+  }
+  return max;
+}
+/** The weight a mode lifts hero's class to, given the heaviest live combo weight in his range. */
+export function heroClassFloorOf(mode: HeroClassFloorMode, maxLive: number): number {
+  const m = Math.max(0, maxLive);
+  switch (mode) {
+    case "abs": return HERO_CLASS_FLOOR_ABS;
+    case "rel5": return 0.05 * m;
+    case "rel1": return 0.01 * m;
+    case "none": return Math.max(HERO_CLASS_FLOOR_EPS * m, HERO_CLASS_FLOOR_EPS);
+  }
+}
+/** What the floor did at a street entry (the trace's `heroFloor`): the lift, and hero's range before and after it —
+ *  live mass (board removed), his class's mass, his own combo's weight, and how many class combos were lifted. */
+export interface HeroFloorRecord {
+  mode: HeroClassFloorMode; floor: number; maxLive: number;
+  liveBefore: number; liveAfter: number; classBefore: number; classAfter: number; comboBefore: number; comboAfter: number;
+  lifted: number;
+}
+/**
+ * Apply the mode's floor to hero's class in `range` (in place), card removal by `boardIdx` (card indexes on the board).
+ * Returns what it did. `maxLive` is read from the range as given (before the lift), over every unblocked combo.
+ */
+export function applyHeroClassFloor(range: number[], heroComboIdx: number, boardIdx: ReadonlySet<number>, mode: HeroClassFloorMode): HeroFloorRecord {
+  const blocked = (idx: number): boolean => { const [a, b] = comboCards(idx); return boardIdx.has(a) || boardIdx.has(b); };
+  let maxLive = 0, liveBefore = 0;
+  for (let i = 0; i < 1326; i++) {
+    const w = range[i] ?? 0;
+    if (!(w > 0) || blocked(i)) continue;
+    liveBefore += w;
+    if (w > maxLive) maxLive = w;
+  }
+  const cls = classCombos(heroComboIdx).filter((idx) => !blocked(idx));
+  const classBefore = cls.reduce((s, idx) => s + Math.max(0, range[idx] ?? 0), 0);
+  const comboBefore = blocked(heroComboIdx) ? 0 : Math.max(0, range[heroComboIdx] ?? 0);
+  const floor = heroClassFloorOf(mode, maxLive);
+  let lifted = 0;
+  for (const idx of cls) {
+    const w = range[idx] ?? 0;
+    if (w < floor) { range[idx] = floor; lifted++; }
+    else if (!(w > 0)) range[idx] = 0;
+  }
+  const classAfter = cls.reduce((s, idx) => s + (range[idx] ?? 0), 0);
+  return {
+    mode, floor, maxLive, liveBefore, liveAfter: liveBefore + (classAfter - classBefore), classBefore, classAfter,
+    comboBefore, comboAfter: blocked(heroComboIdx) ? 0 : (range[heroComboIdx] ?? 0), lifted,
+  };
+}
 
 export type ActionKind = "Fold" | "Check" | "Call" | "Bet" | "Raise" | "AllIn";
 
@@ -1362,14 +1457,12 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
     // construction and changes villain's picture of hero by a rounding error.
     /** hero's combo weight BEFORE the floor (#2 says when the floor lifted it); unknown on a resumed street */
     const heroBefore = !resuming && spec.heroComboIdx != null ? (seats[heroIdx]!.range[spec.heroComboIdx] ?? 0) : null;
+    // THE LIFT IS THE MODE'S (HERO_CLASS_FLOOR, 2026-10-14 — applyHeroClassFloor above): abs = 0.05, today's, the default;
+    // rel5 / rel1 = a share of his heaviest live combo; none = an epsilon. Recorded on the street (`heroFloor`).
+    let heroFloor: HeroFloorRecord | null = null;
     if (spec.heroComboIdx != null) {
-      const heroArr = seats[heroIdx]!.range;
       const boardIdx = new Set(cards.slice(0, 3 + k).map(cardIdx));
-      for (const idx of classCombos(spec.heroComboIdx)) {
-        const [a, b] = comboCards(idx);
-        if (boardIdx.has(a) || boardIdx.has(b)) continue;   // card removal stays absolute
-        heroArr[idx] = Math.max(heroArr[idx] ?? 0, 0.05);
-      }
+      heroFloor = applyHeroClassFloor(seats[heroIdx]!.range, spec.heroComboIdx, boardIdx, heroClassFloorMode());
     }
 
     /** the seats as they enter the street, post-floor — what the tree is keyed on and what a mid-street checkpoint restores */
@@ -1558,6 +1651,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       rangeCheck: undefined as RangeCheck | undefined,
       checks: undefined as CheckResult[] | undefined,
       retree: undefined as RetreeCarry | undefined,
+      ...(heroFloor ? { heroFloor } : {}),
     };
     trace.streets.push(streetRec);
     streetRec.rangeCheck = rangeCheckOf({
@@ -1714,7 +1808,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       solveTimes.record(timeKey, ms);
       if (atHero) {
         out.push(guardCheck(14, () => checkHeroNode({ heroPos, nodeSaid: heroNodeSaid })));
-        out.push(guardCheck(17, () => checkHeroCombo({ heroCombo: spec.heroComboIdx, weight: spec.heroComboIdx != null ? seats[heroIdx]!.range[spec.heroComboIdx] : null })));
+        out.push(guardCheck(17, () => checkHeroCombo({ heroCombo: spec.heroComboIdx, weight: spec.heroComboIdx != null ? seats[heroIdx]!.range[spec.heroComboIdx] : null,
+          maxLive: spec.heroComboIdx != null ? heaviestLive(seats[heroIdx]!.range, new Set(cards.slice(0, 3 + k).map(cardIdx))) : null })));
       }
       streetRec.checks = out;
     };
@@ -1964,6 +2059,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         return { ok: true, data: nq.data, potNode, stackStreet: stack, line, solves, trace, ...(sizeSnaps.length ? { snaps: sizeSnaps } : {}),
           ...(stackNotes.length ? { stackNotes } : {}), ...(retreeNotes.length ? { retreeNotes } : {}),
           heroWeight: spec.heroComboIdx != null ? seats[heroIdx]!.range[spec.heroComboIdx] ?? 0 : null,
+          heroMaxLive: spec.heroComboIdx != null ? heaviestLive(seats[heroIdx]!.range, new Set(cards.slice(0, 3 + k).map(cardIdx))) : null,
           heroAt: { k, n: actorsOf(labels, seats.length, caps).filter((x) => x === heroIdx).length } };
       }
 

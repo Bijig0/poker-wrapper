@@ -4,8 +4,9 @@
  *
  * The chain conditions hero's range on every action he took, and floors his hand class on each street's entry so his
  * combo never vanishes from his own range. Inside a street nothing re-floors it: when his weight at his node falls under
- * HERO_ABSENT_WEIGHT (1e-3) the strategy read for his combo is the solver's untrained noise for a hand the model does
- * not hold. Stress core-bvb-007 (a re-tree that gave him another bet menu: 0.0005) and live answer 13033 (hand
+ * the absent bound (HERO_ABSENT_WEIGHT = 1e-3 × his heaviest live combo at the node since 2026-10-14; an absolute 1e-3
+ * before — chainChecks.heroAbsentBound) the strategy read for his combo is the solver's untrained noise for a hand the
+ * model does not hold. Stress core-bvb-007 (a re-tree that gave him another bet menu: 0.0005) and live answer 13033 (hand
  * 4922572952, Th9s on the turn, 0.000 → ALLIN 48% / CALL 52%, the roll pressed the ALLIN) are the two seen; 5 of ~2,500
  * live postflop walks since 2026-09-21. The re-tree half is fixed at its cause (aiChain retree-consistency); this is the
  * net for whatever else gets there.
@@ -20,9 +21,9 @@
  * (allInPress): a DROPPED all-in is out of the mix before this reads it, so nothing here can bring it back.
  * Register: services/approximations.ts `hero-absent-passive`.
  */
-import { HERO_ABSENT_WEIGHT } from "./chainChecks";
+import { HERO_ABSENT_WEIGHT, heroAbsentBound } from "./chainChecks";
 
-export { HERO_ABSENT_WEIGHT };
+export { HERO_ABSENT_WEIGHT, heroAbsentBound };
 export const HERO_ABSENT_TAG = "HERO ABSENT AT HIS NODE:";
 /** one action at this share of the mix or more is taken as it is */
 export const HERO_ABSENT_TAKE = 0.9;
@@ -33,7 +34,8 @@ export const HERO_ABSENT_CALL_MIN = 0.01;
 export const heroAbsentPassiveOn = (env: Record<string, string | undefined> = process.env): boolean =>
   String(env.HERO_ABSENT_PASSIVE ?? "on").trim().toLowerCase() !== "off";
 
-export const isHeroAbsent = (w: number | null | undefined): boolean => w != null && Number.isFinite(w) && w < HERO_ABSENT_WEIGHT;
+/** `maxLive` = the heaviest live combo weight in the same range (the bound's unit); absent = the absolute 1e-3 */
+export const isHeroAbsent = (w: number | null | undefined, maxLive?: number | null): boolean => w != null && Number.isFinite(w) && w < heroAbsentBound(maxLive);
 
 const kindOf = (label: string): "fold" | "check" | "call" | "wager" => {
   const l = label.trim().toLowerCase();
@@ -77,10 +79,10 @@ const wText = (w: number) => (w < 0.001 && w > 0 ? w.toExponential(1) : w.toFixe
  * serve, the warning line, the path reason (failed, postflop:hero-absent) and the API log line.
  */
 export function heroAbsentAnswer<T extends { action: string; frequency: number }>(a: {
-  actions: T[]; trees: { plan: string | null; w: number | null | undefined }[]; street: string; hand: string; who: string;
+  actions: T[]; trees: { plan: string | null; w: number | null | undefined; max?: number | null }[]; street: string; hand: string; who: string;
   passive?: boolean;
 }): { actions: T[]; note: string; reason: { v: "failed"; code: "postflop:hero-absent"; text: string }; log: string; pick: string | null } | null {
-  const absent = a.trees.filter((t) => isHeroAbsent(t.w)).map((t) => ({ plan: t.plan, w: Number(t.w) }));
+  const absent = a.trees.filter((t) => isHeroAbsent(t.w, t.max)).map((t) => ({ plan: t.plan, w: Number(t.w), max: t.max ?? null }));
   if (!absent.length) return null;
   const passive = a.passive ?? heroAbsentPassiveOn();
   const read = a.actions.map((x) => ({ action: String(x.action), frequency: x.frequency }));
@@ -97,11 +99,12 @@ export function heroAbsentAnswer<T extends { action: string; frequency: number }
 }
 
 /** The answer's line (one segment — no " · " inside). `weights` = hero's weight at his node in each tree read. */
-export function heroAbsentNote(a: { weights: { plan: string | null; w: number }[]; mix: { action: string; frequency: number }[]; pick: { pick: string; why: string } | null; passive: boolean }): string {
+export function heroAbsentNote(a: { weights: { plan: string | null; w: number; max?: number | null }[]; mix: { action: string; frequency: number }[]; pick: { pick: string; why: string } | null; passive: boolean }): string {
   const sum = a.mix.reduce((t, x) => t + (x.frequency > 0 ? x.frequency : 0), 0) || 1;
   const read = a.mix.filter((x) => x.frequency > 0).map((x) => `${x.action} ${pct((x.frequency / sum) * 100)}`).join(" / ");
   const ws = a.weights.map((x) => `${wText(x.w)}${x.plan ? ` (${x.plan})` : ""}`).join(", ");
-  const head = `${HERO_ABSENT_TAG} hero's hand carries weight ${ws} in his own range at this node (under ${HERO_ABSENT_WEIGHT}) — something upstream has gone wrong; the mix read (${read || "empty"}) is noise for a hand the model does not hold`;
+  const bounds = [...new Set(a.weights.map((x) => wText(heroAbsentBound(x.max))))].join(" / ");
+  const head = `${HERO_ABSENT_TAG} hero's hand carries weight ${ws} in his own range at this node (under the absent bound ${bounds}: ${HERO_ABSENT_WEIGHT} of his heaviest live combo there) — something upstream has gone wrong; the mix read (${read || "empty"}) is noise for a hand the model does not hold`;
   if (!a.passive) return `${head}; served as read (HERO_ABSENT_PASSIVE=off)`;
   if (!a.pick) return `${head}; nothing to pick`;
   const how = a.pick.why === "dominant" ? `its one action at ${HERO_ABSENT_TAKE * 100}%+ is taken`
