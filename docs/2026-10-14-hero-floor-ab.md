@@ -162,6 +162,14 @@ the case rests on the mean and the tail, not on any one hand; regime b (hero dev
 14 days and is unmeasured — there rel5 still lifts him to 5 % of his heaviest combo, a belief, not the truth. The
 default is NOT flipped here: `HERO_CLASS_FLOOR=rel5` in `config/local.env` is Brady's call.
 
+**2026-10-14, later — Brady: "go ahead, flip to rel5 and merge both."** The default is `rel5` (`HERO_CLASS_FLOOR=abs`
+restores the absolute 0.05); check #17's absent bound is relative (`chainChecks.heroAbsentBound`: 1e-3 × hero's
+heaviest live combo at the node, never under 1e-6 — the solver's dust; the walk returns `heroMaxLive` beside
+`heroWeight` and the hero-absent net reads both); the floor is registered as `hero-class-floor` in
+`services/approximations.ts` (it emits no path code and no warning — the trace's `heroFloor` record is its only mark).
+Two tests that asserted the absolute reading of a thin range (11381's 2♦2♥ with the served narrowing off, core-bvb-007's
+re-tree with the carry off) now assert the relative one and keep the absolute reading for the record.
+
 ## Appendix — the generated report (`bun src/scripts/heroFloorAb.ts --report <dir>`)
 
 
