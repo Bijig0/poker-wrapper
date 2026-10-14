@@ -142,8 +142,11 @@ function oursActs(rows: { seatId: number; type: string; street: string; amount?:
   return out;
 }
 
-/** Ignition's actions in the same terms (its "Posts chip" is the post-in; "All-in" carries the level for a raise and
- *  the chips added for a call). */
+/** Ignition's actions in the same terms (its "Posts chip" is the post-in). An "All-in" arrives from parseIgnitionHh
+ *  (2026-10-14) with `amountBb` already the seat's STREET TOTAL — a plain "All-in" line's chips added have had his
+ *  earlier money on the street put on top there (`addedBb` keeps the increment) — so it is the level, like a raise;
+ *  adding `prior` again doubled it (hand 4920637719: s6 bet 13.4, called all-in for 8.2 more = 21.6, read as 35.0 and
+ *  "aggr" over the 26.8 raise). A level at or under the street's max is the call it is. */
 function ignitionActs(g: any): Act[] {
   const lv = new Map<number, number>();
   let street = "preflop", max = 0;
@@ -155,7 +158,7 @@ function ignitionActs(g: any): Act[] {
     if (a.label === "Posts chip") { kind = "post"; to = prior + amt; }
     else if (a.type === "post-sb" || a.type === "post-bb" || a.type === "call") to = prior + amt;
     else if (a.type === "bet" || a.type === "raise") { to = amt; kind = "aggr"; }
-    else if (a.type === "all-in") { to = amt > max ? amt : prior + amt; kind = "aggr"; }
+    else if (a.type === "all-in") { to = amt; kind = "aggr"; }
     if (kind === "aggr" && to <= max) kind = "call";
     lv.set(a.seat, to);
     max = Math.max(max, to);
