@@ -84,7 +84,7 @@ import { port } from "../services/ports";
 /**
  * Study dashboard backend: reads the wrapper's hand archive (hands.db),
  * decorates every hand with H2N-style facts (utils/handSummary), the
- * feed-spot discrepancy audit, the study answers that were pushed live
+ * study answers that were pushed live
  * (services/answerLog), and best-effort net bb; re-solves any archived node
  * through the SAME live chain the table answers use (POST /resolve-chain →
  * services/fastSolve → services/aiChain, trace stored in services/solveStore).
@@ -148,7 +148,6 @@ export interface Enriched {
   summary: HandSummary;
   hand: ParsedHand;
   raw: any;
-  discrepancies: { field: string; actual: unknown; shown: unknown; severity: string; note?: string }[] | null;
   /** the wrapper is still playing this hand (its row is live) */
   live: boolean;
   /** the row's last write — a live row (or a finished one the award box patched later) is re-read when it moves */
@@ -157,15 +156,7 @@ export interface Enriched {
 
 const cache = new Map<number, Enriched>();
 
-/**
- * Parse + summarize a row (cached by rowid). The discrepancy audit is NOT
- * done here: it is a self-request to /api/feed-spot (~70ms each) and doing
- * it inline for every row made the first /hands after a restart fire 300+
- * of them at once with a 10s timeout — the tail timed out, and the null
- * result was cached for the life of the process ("?" in the disc column for
- * the newest third of the table). Audits now go through a sequential
- * background queue (see scheduleAudit) and a failed one is retried later.
- */
+/** Parse + summarize a row (cached by rowid). */
 export function enrichSync(row: HandRow): Enriched | null {
   const hit = cache.get(row.rowid);
   if (hit && hit.updatedAt === (row.updated_at ?? null) && hit.live === (row.status === "live")) return hit;
@@ -192,7 +183,6 @@ export function enrichSync(row: HandRow): Enriched | null {
     summary,
     hand,
     raw,
-    discrepancies: row.status === "live" ? null : storedAudit(row.rowid, row.updated_at ?? null),
     live: row.status === "live",
     updatedAt: row.updated_at ?? null,
   };
@@ -200,144 +190,28 @@ export function enrichSync(row: HandRow): Enriched | null {
   return e;
 }
 
-/** Enrich and make sure an audit is on its way (non-blocking). */
+/** Enrich. (The feed-spot audit used to be scheduled from here — retired, see below.) */
 async function enrich(row: HandRow): Promise<Enriched | null> {
-  const e = enrichSync(row);
-  if (e && !e.live && e.discrepancies == null) scheduleAudit(e);   // a hand still in play is audited once it is finished
-  return e;
+  return enrichSync(row);
 }
 
 /**
- * Discrepancy audit — local computation (charts only, no cloud). Resolves
- * with the audit stored on the hand; leaves it null (to be retried) only
- * when the audit route could not be reached at all. A reply the route
- * itself rejected is stored as an empty audit — retrying would not change it.
+ * THE FEED-SPOT AUDIT IS RETIRED (2026-10-14). Until then every finished hand was POSTed back to /api/feed-spot and the
+ * "discrepancies" it named were kept in the central DB's hand_audits (6,575 rows by then) and shown as the hands
+ * table's disc column, the hand page's Discrepancies card and the "discrepancies / 100" tiles. That audit compared the
+ * hand against the DEAD 3-max library (services/hrc3max + resolved-charts.json of 2026-08-26): every class it reported
+ * was noise against the 6-max answers actually served — "table size" = the real seat count, "limpers 0" where the
+ * live line holds the limp, "effective stack 100 vs 30" = the registered rung, "dealer reads as BTN" = the archive's
+ * dealer off by one while the answer's hero_pos was right (the 2026-10-14 answer-path audit, finding 9). The route
+ * stays (the panel's Feed section and the rig's spotAudit use it); nothing writes or reads hand_audits any more — the
+ * table is kept as history. What the answers were really built on is checked per hand against Ignition's own record
+ * instead (services/hhCheck; the hand page's Actual tab, /api/ignition-hh/session/:sid).
  */
-async function audit(e: Enriched): Promise<void> {
-  if (e.discrepancies != null) return;
-  try {
-    const res = await fetch(`${SELF()}/api/feed-spot`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hand: e.raw }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    const j: any = await res.json().catch(() => null);
-    if (j == null) return; // no usable reply — retry on a later request
-    e.discrepancies = j.ok ? j.discrepancies ?? [] : [];
-    storeAudit(e);
-  } catch {
-    /* audit unavailable — leave null, retried by the next scheduleAudit */
-  }
-}
 
-/**
- * AUDITS ARE KEPT (2026-09-26): the audit used to live only in this process's `cache`, so every API start re-audited
- * every finished hand on the first /hands — ~1,200 self-requests to /api/feed-spot per restart (four restarts in the
- * 17Z hour: 2,348/h), each one synchronous chart work. Now each result is stored in the central DB's hand_audits,
- * keyed by the hand's row, its last write (updated_at: the award box patches finished rows) and AUDIT_BASIS — what the
- * audit read (the preflop DB and resolved charts, by size and mtime, plus AUDIT_VERSION for a change to the audit's
- * own rules). A hand whose row or basis moved is audited again.
- */
-const AUDIT_VERSION = 1;
-let auditBasisMemo: string | null = null;
-function auditBasis(): string {
-  if (auditBasisMemo) return auditBasisMemo;
-  const sig = (rel: string) => {
-    try {
-      const st = fsStat(rel === "resolved-charts.json" ? factoryFile(rel) : join(import.meta.dir, "..", "..", "data", rel));
-      return `${st.size}:${Math.trunc(st.mtimeMs)}`;
-    } catch {
-      return "-";
-    }
-  };
-  return (auditBasisMemo = `v${AUDIT_VERSION}|${sig("preflop-db.sqlite")}|${sig("resolved-charts.json")}`);
-}
-
-type StoredAudit = { updatedAt: number | null; disc: NonNullable<Enriched["discrepancies"]> };
-let storedAudits: Map<number, StoredAudit> | null = null;
-function auditsLoaded(): Map<number, StoredAudit> {
-  if (storedAudits) return storedAudits;
-  storedAudits = new Map();
-  const d = openDb();
-  if (!d) return storedAudits;
-  try {
-    d.run(`CREATE TABLE IF NOT EXISTS hand_audits (hand_rowid INTEGER PRIMARY KEY, updated_at INTEGER, basis TEXT NOT NULL,
-             discrepancies TEXT NOT NULL, at INTEGER NOT NULL)`);
-    // one read of the lot on first use (the first /hands enriches every row): a map lookup per row after that
-    for (const r of d.query<{ hand_rowid: number; updated_at: number | null; discrepancies: string }, [string]>(
-      "SELECT hand_rowid, updated_at, discrepancies FROM hand_audits WHERE basis = ?").all(auditBasis())) {
-      try {
-        storedAudits.set(r.hand_rowid, { updatedAt: r.updated_at, disc: JSON.parse(r.discrepancies) });
-      } catch { /* a torn row: audited again */ }
-    }
-  } catch (err) {
-    console.log(`[audit] hand_audits unreadable — audits run in memory only: ${err instanceof Error ? err.message : err}`);
-  }
-  return storedAudits;
-}
-
-/** The stored audit for this row as it is now, or null (never audited, or the row / the charts moved since). */
-function storedAudit(rowid: number, updatedAt: number | null): Enriched["discrepancies"] {
-  const hit = auditsLoaded().get(rowid);
-  return hit && hit.updatedAt === updatedAt ? hit.disc : null;
-}
-
-function storeAudit(e: Enriched): void {
-  if (e.live || e.discrepancies == null) return;
-  auditsLoaded().set(e.dbId, { updatedAt: e.updatedAt, disc: e.discrepancies });
-  try {
-    openDb()?.run(`INSERT INTO hand_audits (hand_rowid, updated_at, basis, discrepancies, at) VALUES (?, ?, ?, ?, ?)
-                   ON CONFLICT(hand_rowid) DO UPDATE SET updated_at = excluded.updated_at, basis = excluded.basis,
-                   discrepancies = excluded.discrepancies, at = excluded.at`,
-                  [e.dbId, e.updatedAt, auditBasis(), JSON.stringify(e.discrepancies), Date.now()]);
-  } catch (err) {
-    console.log(`[audit] could not store the audit of row ${e.dbId}: ${err instanceof Error ? err.message : err}`);
-  }
-}
-
-/** Test hook: what a restart forgets — the enriched rows and the audits read from hand_audits. */
+/** Test hook: what a restart forgets — the enriched rows. */
 export function _restartForTests(): void {
   cache.clear();
-  storedAudits = null;
-  auditBasisMemo = null;
 }
-
-const auditQueue: Enriched[] = [];
-const auditQueued = new Set<number>();
-let auditPumping = false;
-function scheduleAudit(e: Enriched): void {
-  if (e.discrepancies != null || auditQueued.has(e.dbId)) return;
-  auditQueued.add(e.dbId);
-  // Newest first: it is what the table shows at the top.
-  auditQueue.unshift(e);
-  if (!auditPumping) void pumpAudits();
-}
-/** while a session is live (or the setup page is open) the audits wait — each one is synchronous chart work on the
- *  answering thread (2026-10-09 10:27Z: one self-request to /api/feed-spot held the loop 23.2 s mid-session) */
-const AUDIT_LIVE_POLL_MS = 30_000;
-let auditHeldNoted = false;
-async function pumpAudits(): Promise<void> {
-  auditPumping = true;
-  try {
-    while (auditQueue.length) {
-      while (liveForCaches()) {
-        if (!auditHeldNoted) { auditHeldNoted = true; console.log(`[audit] ${auditQueue.length} hand audit(s) held while a poker session is live (or the setup page is open)`); }
-        await new Promise((r) => setTimeout(r, AUDIT_LIVE_POLL_MS));
-      }
-      auditHeldNoted = false;
-      // after a restart every finished hand is re-audited (~1.2k self-requests back to back): never ahead of a live answer
-      await yieldToLive();
-      const e = auditQueue.shift()!;
-      await audit(e);
-      auditQueued.delete(e.dbId);
-    }
-  } finally {
-    auditPumping = false;
-  }
-}
-/** Audits still queued/running — the page polls while this is > 0. */
-const auditPending = (): number => auditQueued.size;
 
 /**
  * THE FINISHED HANDS FROM MEMORY (2026-10-09, catalogue-incremental; services/handsView.ts): seeded once off the loop,
@@ -575,7 +449,7 @@ app.get("/hands", async (c) => {
     table: typeof e.raw?.tableSlot === "number" ? e.raw.tableSlot : null,
     answerStatus: answerStatusOf(e, byCid),
     integrityFaults: integrityTotals(e.clientHandId ? byCid.get(e.clientHandId) ?? [] : []).faults,
-    summary: e.summary, discrepancies: null,
+    summary: e.summary,
     live: r.stale ? "unfinished" : "live", updatedAt: e.updatedAt,
   })).reverse();
   const hands = enriched
@@ -599,16 +473,9 @@ app.get("/hands", async (c) => {
       // severe integrity faults among THIS hand's answers — normally 0
       integrityFaults: integrityTotals(e.clientHandId ? byCid.get(e.clientHandId) ?? [] : []).faults,
       summary: e.summary,
-      discrepancies: e.discrepancies
-        ? {
-            major: e.discrepancies.filter((d) => d.severity === "major").length,
-            minor: e.discrepancies.filter((d) => d.severity === "minor").length,
-            info: e.discrepancies.filter((d) => d.severity === "info").length,
-          }
-        : null,
     }))
     .reverse(); // newest first
-  return c.json({ ok: true, total: hands.length, live: liveHands.filter((h) => h.live === "live").length, auditPending: auditPending(), sessions: sess.list, hands: [...liveHands, ...hands] });
+  return c.json({ ok: true, total: hands.length, live: liveHands.filter((h) => h.live === "live").length, sessions: sess.list, hands: [...liveHands, ...hands] });
 });
 
 /** Session per hand, for the Hands tab filter: the declared session the hand
@@ -924,7 +791,7 @@ function narrowHands(all: Enriched[], idx: SessionsIdx, profile: string | null |
 }
 
 /** The analytics core's aggregate over one set of hands: frequencies, net with
- *  its standard error, and discrepancy counts. */
+ *  its standard error. */
 export function aggregateHands(hs: Enriched[], nets: Map<number, number | null>) {
   const n = hs.length;
   const pct = (k: (s: HandSummary) => boolean, base?: (s: HandSummary) => boolean) => {
@@ -969,14 +836,6 @@ export function aggregateHands(hs: Enriched[], nets: Map<number, number | null>)
   const netAfterRakeBb = Math.round((netBb - rakeUnseenBb) * 100) / 100;
   const mean = known.length ? netBb / known.length : 0;
   const sd = known.length > 1 ? Math.sqrt(known.reduce((s, x) => s + (x - mean) ** 2, 0) / (known.length - 1)) : null;
-  const disc = { major: 0, minor: 0, info: 0 };
-  for (const h of hs) {
-    for (const dd of h.discrepancies ?? []) {
-      if (dd.severity === "major") disc.major++;
-      else if (dd.severity === "minor") disc.minor++;
-      else disc.info++;
-    }
-  }
   return {
     hands: n,
     vpip: pct((s) => s.vpip),
@@ -999,8 +858,6 @@ export function aggregateHands(hs: Enriched[], nets: Map<number, number | null>)
     bb100AfterRake: known.length ? Math.round((10000 * netAfterRakeBb) / known.length) / 100 : null,
     // 100 × SE of the per-hand mean, over the hands whose net is known
     bb100Se: sd != null && known.length ? Math.round((10000 * sd) / Math.sqrt(known.length)) / 100 : null,
-    discrepancies: disc,
-    discPer100: n ? Math.round((10000 * (disc.major + disc.minor)) / n) / 100 : null,
   };
 }
 
@@ -1013,8 +870,7 @@ export function aggregateHands(hs: Enriched[], nets: Map<number, number | null>)
 function answersFor(hs: Enriched[], rows: LoggedAnswer[]) {
   const byCid = new Map<string, Enriched>();
   for (const e of hs) if (e.clientHandId) byCid.set(e.clientHandId, e);
-  // answers that disagreed with their own mix — a bug counter, normally 0, kept
-  // apart from the discrepancy audit so it can never be buried in it
+  // answers that disagreed with their own mix — a bug counter, normally 0
   const integrity = integrityTotals(rows.filter((a) => a.client_hand_id && byCid.has(a.client_hand_id)));
   let answers = 0, failed = 0;
   const tiers: Record<string, { n: number; lat: number[] }> = {};
@@ -1128,7 +984,6 @@ app.get("/analytics", async (c) => {
   const vs = c.req.query("vs");
   return c.json({
     ok: true,
-    auditPending: auditPending(),
     profile, window: win,
     options: {
       sessions: idx.list.filter((s) => seenIds.has(s.id)),
@@ -1169,8 +1024,6 @@ app.get("/hand/:dbId", async (c) => {
   if (!row) return c.json({ ok: false, error: `no hand #${dbId}` }, 404);
   const e = enrichSync(row);
   if (!e) return c.json({ ok: false, error: "hand blob unreadable" }, 500);
-  // The detail page wants this hand's audit now, not when the queue gets to it.
-  if (e.discrepancies == null) await audit(e);
   // Every logged answer, pinned to the action index it was given at: the
   // decision key carries the action count at that moment, which is the
   // index of hero's next action in the archived hand.
@@ -1230,7 +1083,6 @@ app.get("/hand/:dbId", async (c) => {
     rake: recordedRake(e.raw),
     // did auto-execute play the hand, and how many presses it took (utils/autoExec)
     autoExec: autoExecOf(e.raw),
-    discrepancies: e.discrepancies ?? [],
     answers,
     session,
     nav,

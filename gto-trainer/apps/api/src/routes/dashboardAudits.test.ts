@@ -1,6 +1,7 @@
 /**
- * A hand's feed-spot audit is kept (hand_audits in the central DB): an API restart no longer re-audits every finished
- * hand (2026-09-26: ~1,200 self-requests to /api/feed-spot per start). A row the wrapper rewrote since is audited again.
+ * The feed-spot audit is RETIRED (2026-10-14, routes/dashboard.ts): the hand page no longer asks the API itself for
+ * /api/feed-spot (until then every finished hand was audited against the dead 3-max library and the result kept in
+ * hand_audits), and a hand carries no "discrepancies" any more. The table is history: never written.
  */
 import { afterAll, describe, expect, it, mock, spyOn } from "bun:test";
 import * as gtowApiMod from "../services/gtowApi";
@@ -16,14 +17,11 @@ ensureHandsSchema(db);
 const rowid = Number(db.query(`INSERT INTO hands (hand_id, played_at, stakes, street, hero_cards, action_count, data, client_hand_id, status, updated_at)
   VALUES (?,?,?,?,?,?,?,?,?,?)`).run(901, Date.now(), HAND.stakes, "preflop", "5♠,5♣", HAND.actions.length, JSON.stringify(HAND), HAND.clientHandId, "done", 1000).lastInsertRowid);
 
-// the audit is the API asking itself: count those requests and answer them
+// the retired audit was the API asking itself: count any such request
 let audits = 0;
 const realFetch = globalThis.fetch;
 globalThis.fetch = (async (input: any, init?: any) => {
-  if (String(input).endsWith("/api/feed-spot")) {
-    audits++;
-    return new Response(JSON.stringify({ ok: true, discrepancies: [{ field: "open", actual: 2.5, shown: 2.3, severity: "minor" }] }));
-  }
+  if (String(input).endsWith("/api/feed-spot")) { audits++; return new Response(JSON.stringify({ ok: true, discrepancies: [] })); }
   return realFetch(input, init);
 }) as typeof fetch;
 const { default: app, _restartForTests } = await import("./dashboard");
@@ -33,28 +31,20 @@ afterAll(() => {
   globalThis.fetch = realFetch;
   mock.restore();
   db.run("DELETE FROM hands WHERE rowid = ?", [rowid]);
-  db.run("DELETE FROM hand_audits WHERE hand_rowid = ?", [rowid]);
   db.close();
   _restartForTests();
 });
-const hand = async () => (await app.request(`/hand/${rowid}`)).json() as Promise<any>;
 
-describe("hand audits survive a restart", () => {
-  it("audited once, kept across a restart, audited again only when the row moves", async () => {
-    const first = await hand();
-    expect(audits).toBe(1);
-    expect(first.discrepancies).toEqual([{ field: "open", actual: 2.5, shown: 2.3, severity: "minor" }]);
-    expect(db.query("SELECT hand_rowid, updated_at FROM hand_audits WHERE hand_rowid = ?").get(rowid)).toEqual({ hand_rowid: rowid, updated_at: 1000 });
-
-    _restartForTests();
-    const again = await hand();
-    expect(audits).toBe(1);                                  // read back, not re-asked
-    expect(again.discrepancies).toEqual(first.discrepancies);
-
-    db.run("UPDATE hands SET updated_at = 2000 WHERE rowid = ?", [rowid]);   // the award box patched the row
-    _restartForTests();
-    await hand();
-    expect(audits).toBe(2);
-    expect(db.query("SELECT updated_at FROM hand_audits WHERE hand_rowid = ?").get(rowid)).toEqual({ updated_at: 2000 });
+describe("the feed-spot audit is retired", () => {
+  it("the hand page and the hands list ask for no audit and carry no discrepancies; hand_audits is not written", async () => {
+    const hand: any = await (await app.request(`/hand/${rowid}`)).json();
+    expect(hand.ok).toBe(true);
+    expect(hand.discrepancies).toBeUndefined();
+    const list: any = await (await app.request("/hands")).json();
+    expect(list.auditPending).toBeUndefined();
+    expect(list.hands.find((h: any) => h.dbId === rowid)?.discrepancies).toBeUndefined();
+    expect(audits).toBe(0);
+    const table = db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'hand_audits'").get();
+    if (table) expect(db.query("SELECT count(*) AS n FROM hand_audits WHERE hand_rowid = ?").get(rowid)).toEqual({ n: 0 });
   });
 });
