@@ -5,7 +5,7 @@
  * class, never a combo the board blocks, never a weight already above the floor, and is idempotent.
  */
 import { describe, expect, it } from "bun:test";
-import { HERO_CLASS_FLOOR_ABS, HERO_CLASS_FLOOR_EPS, applyHeroClassFloor, heroClassFloorMode, heroClassFloorOf } from "./aiChain";
+import { HERO_CLASS_FLOOR_ABS, HERO_CLASS_FLOOR_EPS, applyHeroClassFloor, heaviestLive, heroClassFloorMode, heroClassFloorOf } from "./aiChain";
 import { cardIndex, comboIndex } from "../utils/comboIndex/comboIndex";
 
 const KQs = [comboIndex("Kc", "Qc"), comboIndex("Kd", "Qd"), comboIndex("Kh", "Qh"), comboIndex("Ks", "Qs")];
@@ -22,12 +22,19 @@ function range(classW: number, top = 1): number[] {
 const live = (r: number[], b: ReadonlySet<number>) => r.reduce((s, w, i) => (w > 0 ? s + w : s), 0);
 
 describe("heroClassFloorMode", () => {
-  it("defaults to abs and refuses anything but the four modes", () => {
-    expect(heroClassFloorMode({})).toBe("abs");
-    expect(heroClassFloorMode({ HERO_CLASS_FLOOR: " REL5 " })).toBe("rel5");
+  it("defaults to rel5 (since 2026-10-14; abs restores the absolute floor) and reads anything else as rel5", () => {
+    expect(heroClassFloorMode({})).toBe("rel5");
+    expect(heroClassFloorMode({ HERO_CLASS_FLOOR: " ABS " })).toBe("abs");
+    expect(heroClassFloorMode({ HERO_CLASS_FLOOR: "rel5" })).toBe("rel5");
     expect(heroClassFloorMode({ HERO_CLASS_FLOOR: "rel1" })).toBe("rel1");
     expect(heroClassFloorMode({ HERO_CLASS_FLOOR: "none" })).toBe("none");
-    expect(heroClassFloorMode({ HERO_CLASS_FLOOR: "off" })).toBe("abs");
+    expect(heroClassFloorMode({ HERO_CLASS_FLOOR: "off" })).toBe("rel5");
+  });
+  it("heaviestLive: the heaviest unblocked combo", () => {
+    const r = range(0.004, 0.2);
+    expect(heaviestLive(r, board)).toBeCloseTo(0.2, 12);
+    expect(heaviestLive(r, new Set(["As", "Ah", "6d"].map(cardIndex)))).toBeCloseTo(0.08, 12);   // AsAh blocked: JcTc 0.4 × 0.2
+    expect(heaviestLive(new Array(1326).fill(0), board)).toBe(0);
   });
 });
 

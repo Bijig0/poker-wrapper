@@ -3,7 +3,8 @@
  * approach and whether or not this floor is a good move or not"). Report: docs/2026-10-14-hero-floor-ab.md.
  *
  * Re-walks REAL decisions' postflop chains offline (services/aiChain.solveAiChain on each decision's stored spec, the
- * solves table's trace) under each HERO_CLASS_FLOOR mode — abs (today), rel5, rel1, none (aiChain.applyHeroClassFloor) —
+ * solves table's trace) under each HERO_CLASS_FLOOR mode — abs (the floor until 2026-10-14), rel5 (the default since),
+ * rel1, none (aiChain.applyHeroClassFloor) —
  * and records, at hero's decision node, his combo's mix and per-action EVs, his live mass and class share entering each
  * street, and what each walk cost. GTO Wizard IS asked (through the account pool, every request in the live ledger under
  * origin `heroFloorAb`): a tree whose ranges the floor did not change is a cache hit (the copied solve cache, below) and

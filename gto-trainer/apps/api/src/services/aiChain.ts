@@ -547,9 +547,11 @@ export type AiChainResult =
       /** "RE-TREE: …" lines (retree-consistency, 2026-10-08): a street re-solved with its menus carried, hero's earlier
        *  action on it narrowed by his answered strategy */
       retreeNotes?: string[];
-      /** hero's combo weight in his conditioned range at his node (null = cards unknown) — under HERO_ABSENT_WEIGHT he
-       *  is absent there (services/heroAbsent) */
+      /** hero's combo weight in his conditioned range at his node (null = cards unknown) — under the absent bound
+       *  (HERO_ABSENT_WEIGHT × heroMaxLive, services/heroAbsent) he is absent there */
       heroWeight?: number | null;
+      /** the heaviest live combo weight in that same range (board removed): the unit the bound is measured in (2026-10-14) */
+      heroMaxLive?: number | null;
       /** hero's node: the street (0 flop .. 2 river) and his action number on it — the served mix's key (servedStrategy) */
       heroAt?: { k: number; n: number };
       trace: ChainTrace;
@@ -632,13 +634,30 @@ const classCombos = (idx: number): number[] => {
  * re-applies it to a range that was floored when the street was entered).
  */
 export type HeroClassFloorMode = "abs" | "rel5" | "rel1" | "none";
-/** the absolute floor that has been live since 2026-09-17 */
+/** the absolute floor that ran 2026-09-17 .. 2026-10-14 (HERO_CLASS_FLOOR=abs restores it) */
 export const HERO_CLASS_FLOOR_ABS = 0.05;
 export const HERO_CLASS_FLOOR_EPS = 1e-6;
+/** THE DEFAULT IS rel5 SINCE 2026-10-14 (Brady, on the A/B: "go ahead, flip to rel5"): on the 47 decisions where the floor
+ *  bites (hero under 5 combos, 1.9 % of postflop decisions) abs's mix lost 0.134 bb a decision against the natural
+ *  villain (max 2.68: a folded AdQc / KhKs), rel5 0.000 and the natural reference's picks on 47 of 47; above 5 combos
+ *  the modes are identical. Register: services/approximations.ts `hero-class-floor`. An unknown value reads as rel5. */
 export const heroClassFloorMode = (env: Record<string, string | undefined> = process.env): HeroClassFloorMode => {
-  const v = String(env.HERO_CLASS_FLOOR ?? "abs").trim().toLowerCase();
-  return v === "rel5" || v === "rel1" || v === "none" ? v : "abs";
+  const v = String(env.HERO_CLASS_FLOOR ?? "rel5").trim().toLowerCase();
+  return v === "abs" || v === "rel1" || v === "none" ? v : "rel5";
 };
+/** The heaviest live combo weight in a range (board cards removed) — the unit the relative floor and check #17's
+ *  absent bound are measured in. */
+export function heaviestLive(range: ArrayLike<number>, boardIdx: ReadonlySet<number>): number {
+  let max = 0;
+  for (let i = 0; i < 1326; i++) {
+    const w = range[i] ?? 0;
+    if (!(w > max)) continue;
+    const [a, b] = comboCards(i);
+    if (boardIdx.has(a) || boardIdx.has(b)) continue;
+    max = w;
+  }
+  return max;
+}
 /** The weight a mode lifts hero's class to, given the heaviest live combo weight in his range. */
 export function heroClassFloorOf(mode: HeroClassFloorMode, maxLive: number): number {
   const m = Math.max(0, maxLive);
@@ -1756,7 +1775,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       solveTimes.record(timeKey, ms);
       if (atHero) {
         out.push(guardCheck(14, () => checkHeroNode({ heroPos, nodeSaid: heroNodeSaid })));
-        out.push(guardCheck(17, () => checkHeroCombo({ heroCombo: spec.heroComboIdx, weight: spec.heroComboIdx != null ? seats[heroIdx]!.range[spec.heroComboIdx] : null })));
+        out.push(guardCheck(17, () => checkHeroCombo({ heroCombo: spec.heroComboIdx, weight: spec.heroComboIdx != null ? seats[heroIdx]!.range[spec.heroComboIdx] : null,
+          maxLive: spec.heroComboIdx != null ? heaviestLive(seats[heroIdx]!.range, new Set(cards.slice(0, 3 + k).map(cardIdx))) : null })));
       }
       streetRec.checks = out;
     };
@@ -1948,6 +1968,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         return { ok: true, data: nq.data, potNode, stackStreet: stack, line, solves, trace, ...(sizeSnaps.length ? { snaps: sizeSnaps } : {}),
           ...(stackNotes.length ? { stackNotes } : {}), ...(retreeNotes.length ? { retreeNotes } : {}),
           heroWeight: spec.heroComboIdx != null ? seats[heroIdx]!.range[spec.heroComboIdx] ?? 0 : null,
+          heroMaxLive: spec.heroComboIdx != null ? heaviestLive(seats[heroIdx]!.range, new Set(cards.slice(0, 3 + k).map(cardIdx))) : null,
           heroAt: { k, n: actorsOf(labels, seats.length, caps).filter((x) => x === heroIdx).length } };
       }
 

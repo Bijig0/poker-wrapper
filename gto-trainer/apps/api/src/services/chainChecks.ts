@@ -890,20 +890,33 @@ export function checkFresh(a: { answerStreet: string | null | undefined; handStr
 
 // ── #17 strategy for hero's combo ───────────────────────────────────────────────────────────────────────────────
 /** HERO ABSENT AT HIS NODE (2026-10-08): under this weight in his conditioned range the strategy read for his combo is the
- *  solver's untrained noise (stress core-bvb-007: 0.0005 after a re-tree; live answer 13033 ALLIN from 0.000) */
+ *  solver's untrained noise (stress core-bvb-007: 0.0005 after a re-tree; live answer 13033 ALLIN from 0.000).
+ *  RELATIVE SINCE 2026-10-14 (the hero-floor A/B, docs/2026-10-14-hero-floor-ab.md): the bound is this share of hero's
+ *  HEAVIEST LIVE COMBO at the node (heroAbsentBound) — on a full-weight range exactly the 1e-3 it was; on a thin range,
+ *  where the rel5 floor keeps his class at 5 % of his heaviest combo, an absolute 1e-3 would have failed 12 of the 47
+ *  tier-1 nodes that are perfectly readable. Without the heaviest combo (older callers) the bound stays absolute. */
 export const HERO_ABSENT_WEIGHT = 1e-3;
+/** the bound's floor: GTO Wizard keeps range weights down to ~1e-7 (probed 2026-10-05) — a combo under 1e-6 is dust the
+ *  solver may have dropped, whatever the rest of the range weighs */
+export const HERO_ABSENT_DUST = 1e-6;
+/** the absent bound for a range whose heaviest live combo weighs `maxLive` (null / unknown = the absolute bound) */
+export const heroAbsentBound = (maxLive: number | null | undefined): number =>
+  maxLive != null && Number.isFinite(maxLive) && maxLive > 0 ? Math.max(HERO_ABSENT_WEIGHT * maxLive, HERO_ABSENT_DUST) : HERO_ABSENT_WEIGHT;
 const weightText = (w: number): string => (w >= 0.001 || w === 0 ? w.toFixed(3) : w.toExponential(1));
-export function checkHeroCombo(a: { heroCombo: number | null; weight: number | null | undefined }): CheckResult {
+export function checkHeroCombo(a: { heroCombo: number | null; weight: number | null | undefined; maxLive?: number | null }): CheckResult {
   if (a.heroCombo == null) return na(17, "hero's cards unknown");
   const name = comboName(a.heroCombo) ?? "hero's combo";
   const w = a.weight ?? 0;
   if (!(w > 0)) return fail(17, `hero's ${name} has no weight in his range at the node — the strategy read is not his hand's`, "postflop:hero-absent");
+  const bound = heroAbsentBound(a.maxLive);
+  const rel = a.maxLive != null && Number.isFinite(a.maxLive) && a.maxLive > 0;
+  const boundText = rel ? `${HERO_ABSENT_WEIGHT} × his heaviest live combo (${weightText(a.maxLive!)}) = ${weightText(bound)}` : `${HERO_ABSENT_WEIGHT}`;
   // NEVER A SILENT PASS UNDER THE FLOOR (2026-10-08, Brady): "carries weight 0.000" passed on the re-treed turn of
   // core-bvb-007 and on 5 live answers — one an ALLIN executed from noise
-  if (w < HERO_ABSENT_WEIGHT) {
-    return fail(17, `hero's ${name} carries weight ${weightText(w)} in his range at the node — under ${HERO_ABSENT_WEIGHT}: he is ABSENT there, the mix is noise for a hand the model does not hold`, "postflop:hero-absent");
+  if (w < bound) {
+    return fail(17, `hero's ${name} carries weight ${weightText(w)} in his range at the node — under ${boundText}: he is ABSENT there, the mix is noise for a hand the model does not hold`, "postflop:hero-absent");
   }
-  return pass(17, `hero's ${name} carries weight ${w.toFixed(3)} in his range at the node`);
+  return pass(17, `hero's ${name} carries weight ${weightText(w)} in his range at the node${rel ? ` (${(100 * w / a.maxLive!).toFixed(w / a.maxLive! >= 0.1 ? 0 : 1)} % of his heaviest live combo ${weightText(a.maxLive!)})` : ""}`);
 }
 /** #3 for a GTO Wizard AI preflop answer (services/gtowAiPreflop.villainLinesOf) — one read on a FITTED line, or on an
  *  exact line the chart had no branch for (the fit rule, 2026-10-04): the villain actions on the line(s) hero's node

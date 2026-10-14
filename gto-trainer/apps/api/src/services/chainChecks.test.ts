@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import {
   CHECKS, SolveTimes, addChecks, asWalkedEarlier, checkAnswerClock, checkBoard, checkButtons, checkCode, checkFlopArrival,
-  checkFresh, checkHandoff, checkHeroCombo, checkLine, checkMistakeLines, checkMix, checkNodeReads, checkPotStack,
+  checkFresh, checkHandoff, checkHeroCombo, checkLine, checkMistakeLines, checkMix, checkNodeReads, checkPotStack, HERO_ABSENT_DUST, heroAbsentBound,
   checkPreflopInRange, checkRake, checkRangesSane, checkReasons, checkSeats, checkSolveTime, checkTrees, checkWarmTree,
   comboName, coverageReport, cumulativeOf, dealtSetName, expectedOrder, mergeChecks, sidePotParts, solvePopulation, SOLVE_FLAG_NOTE, type CheckResult, type PathChecks,
 } from "./chainChecks";
@@ -419,6 +419,21 @@ describe("#14 buttons, #15 mix, #16 fresh, #17 hero's combo", () => {
     expect(checkHeroCombo({ heroCombo: AdKc, weight: 0.3 }).status).toBe("pass");
     expect(checkHeroCombo({ heroCombo: AdKc, weight: 0 }).status).toBe("fail");
     expect(checkHeroCombo({ heroCombo: null, weight: null }).status).toBe("na");
+    // THE BOUND IS RELATIVE (2026-10-14): 1e-3 of his heaviest live combo — a thin range floored to 5 % of its heaviest
+    // combo (rel5) passes; without the heaviest combo the absolute 1e-3 holds as before
+    expect(heroAbsentBound(null)).toBe(1e-3);
+    expect(heroAbsentBound(1)).toBeCloseTo(1e-3, 12);
+    expect(heroAbsentBound(0.006)).toBeCloseTo(6e-6, 15);
+    expect(heroAbsentBound(0.0002)).toBe(HERO_ABSENT_DUST);   // never under the solver's dust: a range of dust is absent
+    const thin = checkHeroCombo({ heroCombo: AdKc, weight: 3e-4, maxLive: 0.006 });   // 16237: rel5's floor 0.05 × 0.0062
+    expect(thin.status).toBe("pass");
+    expect(thin.text).toContain("% of his heaviest live combo");
+    expect(checkHeroCombo({ heroCombo: AdKc, weight: 3e-4 }).status).toBe("fail");      // the absolute bound, as before
+    const under = checkHeroCombo({ heroCombo: AdKc, weight: 5e-6, maxLive: 0.006 });
+    expect(under.status).toBe("fail");
+    expect(under.covered).toBe("postflop:hero-absent");
+    expect(under.text).toContain("0.001 × his heaviest live combo");
+    expect(checkHeroCombo({ heroCombo: AdKc, weight: 9.5e-5, maxLive: 1 }).status).toBe("fail");
     expect(checkPreflopInRange({ notInRange: true, heroClass: "T4o" }).status).toBe("fail");
   });
 });
