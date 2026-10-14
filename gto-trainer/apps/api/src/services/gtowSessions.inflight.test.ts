@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { FLIGHT_MAX_MS, GtowSessions, routeInFlightOn, routeWhy } from "./gtowSessions";
+import { FLIGHT_MAX_MS, GtowSessions, ROUTED_MAX_MS, routeInFlightOn, routeWhy } from "./gtowSessions";
 
 /**
  * SOLVES IN FLIGHT FIRST (2026-10-14, hand 4924409679): GTO Wizard queues an account's custom solves, so inside a
@@ -40,6 +40,44 @@ describe("routing by solves in flight", () => {
     p.noteSolvePosted("primary", "p1");
     expect(p.route({ multiway: true })).toEqual(["primary"]);
     expect(p.route({ preflop: true, multiway: false })[0]).toBe("primary");       // preflop's group is the Ultras
+  });
+
+  // 2026-10-14, hand 4924571722: the three collapse trees of a 4-way flop were routed within 50 ms; each saw an empty ultra-2
+  // (a solve counts only once its POST has returned) and all three queued on it
+  it("a tree just routed counts as in flight at once, until its solve is posted, so trees routed in the same instant spread", () => {
+    const p = pool();
+    const t = Date.now();
+    expect(p.route({ multiway: false })).toEqual(["secondary", "primary"]);
+    p.noteTreeRouted("secondary", t);
+    expect(p.inFlight("secondary", t)).toBe(1);
+    expect(p.route({ multiway: false })).toEqual(["primary", "secondary"]);     // the next tree goes to the other account
+    p.noteSolvePosted("secondary", "s1", t + 400);                               // the POST came back: the solve replaces the routed tree
+    expect(p.inFlight("secondary", t + 400)).toBe(1);
+    p.noteSolveReady("s1");
+    expect(p.inFlight("secondary", t + 500)).toBe(0);
+  });
+
+  it("a routed tree whose POST never came back is forgotten after ROUTED_MAX_MS", () => {
+    const p = pool();
+    const t = Date.now();
+    p.noteTreeRouted("primary", t);
+    expect(p.inFlight("primary", t + ROUTED_MAX_MS)).toBe(1);
+    expect(p.inFlight("primary", t + ROUTED_MAX_MS + 1)).toBe(0);
+  });
+
+  it("idleFor: the accounts a hedge may go to — a live token in hand, not the hung owner, nothing of ours running or routed", () => {
+    const p = pool();
+    const live = (id: "primary" | "secondary") => { const s = (p as any).sessions.get(id); s.token = "t"; s.tokenExpMs = Date.now() + 3_600_000; };
+    expect(p.idleFor({ multiway: false }, ["secondary"])).toEqual([]);           // no token in hand anywhere: nobody
+    live("primary"); live("secondary");
+    expect(p.idleFor({ multiway: false }, ["secondary"])).toEqual(["primary"]);
+    expect(p.idleFor({ multiway: false }, [])).toEqual(["secondary", "primary"]);
+    p.noteSolvePosted("primary", "p1");
+    expect(p.idleFor({ multiway: false }, ["secondary"])).toEqual([]);
+    p.noteSolveReady("p1");
+    expect(p.idleFor({ multiway: false }, ["secondary"])).toEqual(["primary"]);
+    p.noteTreeRouted("primary");
+    expect(p.idleFor({ multiway: false }, ["secondary"])).toEqual([]);
   });
 
   it("a solve nobody reads stops counting after FLIGHT_MAX_MS", () => {

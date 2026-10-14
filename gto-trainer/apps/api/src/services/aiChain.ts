@@ -1944,7 +1944,20 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
       // cold tree's cost is still on the read's clock — the same tree is re-posted with that account LEFT OUT (no block:
       // its other solves go on), once; too little time left and gtowApi polls on to the clock, as before.
       const hung = !nq.ok && !!nq.hung;
-      if (hung && !rerouted && hungHedgeOn()) {
+      if (hung && !rerouted && lockedOnStreet) {
+        // A NODE-LOCKED CHILD IS NEVER HEDGED (2026-10-14, session_20261014_161508, hand 4924571783: the hung child 81227e90
+        // was "hedged" with the UNLOCKED street tree on the other account — a solve that, had its node won, would have
+        // answered as if locked). A lock lives on its parent's account and cannot be posted elsewhere; the child is polled
+        // on, on a fresh node clock, and a child still late then falls to the unlocked parent below (offTreeLockFallbackOn),
+        // which says so in the trace.
+        rerouted = true;
+        tstep("the locked solve is slow → waiting for it (a node lock cannot be solved again elsewhere)", { limitMs: postflopNodeTimeoutMs(n) });
+        const tKeep = Date.now();
+        ({ r: nq, src: nodeSrc, ms: nodeMs } = await readNode(String(ens.solId), codes.join("-"), postflopNodeTimeoutMs(n)));
+        tspan(`chain ${STREET[k]} locked child polled on after a hung poll (no hedge for a node lock)`, tKeep,
+          nq.ok ? `child ${String(ens.solId).slice(0, 8)} answered` : nq.error.slice(0, 120));
+        if (lockSoft?.lock) lockSoft.lock.slow = { ms: Date.now() - tKeep, answered: nq.ok };
+      } else if (hung && !rerouted && hungHedgeOn()) {
         // THE HEDGE (2026-10-14, hand 4924409679 — gtowApi header "WHAT A HUNG POLL IS"): the hung solve is still
         // RUNNING on GTO Wizard (a read of an unfinished solve is held, not refused), so it is not thrown away: this
         // read goes on polling it on a fresh node clock while the same tree is posted on another account (routing puts
@@ -1977,7 +1990,7 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
           streetRec.solId = String(made.solId);
           streetRec.account = made.session;
           if (made.route) streetRec.route = made.route;
-          streetRec.treeWhy = `${streetRec.treeWhy ? `${streetRec.treeWhy}; then ` : ""}a second solve on ${acct} answered first (hedge after a hung poll on ${from}; the first solve kept running${sibling ? "; the hedge was posted by an earlier attempt" : ""})`;
+          streetRec.treeWhy = `${streetRec.treeWhy ? `${streetRec.treeWhy}; then ` : ""}a second solve on ${acct} answered first (hedge after a hung poll on ${from}; the first solve kept running${sibling ? "; the hedge was posted by an earlier attempt" : made.created ? "" : "; this read joined the hedge another read posted"})`;
           streetRec.leak = { code: "tree:hung-hedge", why: `the ${STREET[k]!.toLowerCase()} tree was solved a second time on ${acct} after a poll on ${from} hung — the second solve answered first` };
           recordTree(true);
         } else {

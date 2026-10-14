@@ -89,7 +89,9 @@ export interface OffTreeSoft {
   /** a mid-street node lock that made the rest of the street read the soft range (OFFTREE_LOCK=on) */
   lock?: { ok: boolean; solId?: string; why?: string;
     /** the child was late (its read failed) and hero's node came from the unlocked parent (offTreeLockFallbackOn) */
-    late?: { why: string; parent: string } };
+    late?: { why: string; parent: string };
+    /** a read of the child hung (the hung-poll cap) and was polled on instead of hedged — a lock has no hedge (aiChain) */
+    slow?: { ms: number; answered: boolean } };
 }
 
 export interface OffTreeLine extends OffTreeStats {

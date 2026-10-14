@@ -128,6 +128,8 @@ export const routeInFlightOn = (env: Record<string, string | undefined> = proces
   !/^(off|0|false|no)$/i.test(env.GTOW_ROUTE_INFLIGHT?.trim() ?? "");
 /** a solve nobody has read a node of counts as running for at most this long (a lost read must not pin an account) */
 export const FLIGHT_MAX_MS = 45_000;
+/** a tree routed (noteTreeRouted) whose solve POST never came back stops counting after this long */
+export const ROUTED_MAX_MS = 5_000;
 const envNum = (v: string | undefined, d: number) => { const n = Number(v); return v != null && v.trim() !== "" && Number.isFinite(n) && n > 0 ? n : d; };
 export const hourBudget = (env: Record<string, string | undefined> = process.env): number => envNum(env.GTOW_HOUR_BUDGET, 1_800);
 export const dayBudget = (env: Record<string, string | undefined> = process.env): number => envNum(env.GTOW_DAY_BUDGET, 5_000);
@@ -303,9 +305,22 @@ class GtowSessions {
   private env: Record<string, string | undefined>;
   /** solves this process POSTed and has not yet read a node of: id → the account and when (see routeInFlightOn) */
   private flight = new Map<string, { id: GtowSessionId; at: number }>();
+  /** trees routed (noteTreeRouted) whose tree + solution POSTs are still on the wire: each counts as in flight AT ONCE, so
+   *  the trees of one decision routed in the same instant spread over the accounts (2026-10-14, hand 4924571722: the three
+   *  collapse trees of a 4-way flop were routed within 50 ms, every one saw an empty ultra-2, and all three queued on it).
+   *  The solve's own POST replaces the entry (noteSolvePosted); one that never comes back is forgotten after ROUTED_MAX_MS. */
+  private routed: { id: GtowSessionId; at: number }[] = [];
+
+  /** A tree is about to be POSTed on `id` (noteRouted): it counts as in flight until its solve is posted (or ROUTED_MAX_MS). */
+  noteTreeRouted(id: GtowSessionId, now = Date.now()): void {
+    this.routed.push({ id, at: now });
+    if (this.routed.length > 100) this.routed.shift();
+  }
 
   /** A solve was just POSTed on `id` (gtowApi / gtowAiPreflop): it counts against the account until noteSolveReady. */
   noteSolvePosted(id: GtowSessionId, solId: string, now = Date.now()): void {
+    const r = this.routed.findIndex((x) => x.id === id);
+    if (r >= 0) this.routed.splice(r, 1);          // the routed tree became this solve
     this.flight.set(solId, { id, at: now });
     if (this.flight.size > 500) this.flight.delete(this.flight.keys().next().value as string);
   }
@@ -322,7 +337,21 @@ class GtowSessions {
       if (now - f.at > FLIGHT_MAX_MS) { this.flight.delete(sol); continue; }
       if (f.id === id) n++;
     }
+    this.routed = this.routed.filter((x) => now - x.at <= ROUTED_MAX_MS);
+    for (const x of this.routed) if (x.id === id) n++;
     return n;
+  }
+
+  /**
+   * THE ACCOUNTS A HEDGE MAY GO TO NOW (gtowApi.hedgeIdleOnlyOn, 2026-10-14): able to do this kind of work, a live token in
+   * hand, not blocked, not in `avoid` (the hung solve's owner), and NOTHING of ours running or just routed on them. A hedge
+   * posted onto a busy account queues behind our own solve there — the hang storm of session_20261014_161508.
+   */
+  idleFor(need: GtowNeed = {}, avoid: GtowSessionId[] = [], now = Date.now()): GtowSessionId[] {
+    return this.ranked(need)
+      .filter((s) => s.cfg.enabled && this.allowed(s) && this.capable(s, need) && !this.blocked(s) && this.live(s)
+        && !avoid.includes(s.cfg.id) && this.inFlight(s.cfg.id, now) === 0)
+      .map((s) => s.cfg.id);
   }
 
   constructor(opts: { load?: LoadView | null; env?: Record<string, string | undefined> } = {}) {
@@ -500,6 +529,7 @@ class GtowSessions {
   noteRouted(id: GtowSessionId, need: GtowNeed, order: GtowSessionId[], skipped: string[] = []): string {
     const why = routeWhy(id, this.explainRoute(need, true), order, skipped);
     this.load?.reserve?.(id);
+    this.noteTreeRouted(id);
     return why;
   }
 
