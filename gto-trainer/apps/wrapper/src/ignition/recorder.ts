@@ -50,7 +50,7 @@ async function shotJpeg(ws: string, out: string, quality = 40): Promise<boolean>
 
 /** 0 for a folder that is gone: every table's wrapper prunes the same base at session start, so the folder another
  *  one is removing can vanish under the scan (2026-10-14: the ENOENT that killed table 1's router). */
-function dirSize(d: string): number {
+export function dirSize(d: string): number {
   let n = 0;
   let entries: any[];
   try {
