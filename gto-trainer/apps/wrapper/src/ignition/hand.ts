@@ -16,8 +16,27 @@ import { potVal } from "./dom";
 import { dealtCents, domBoardRefused, voluntaryActed, withoutRabbit } from "./ws";
 import { potAgrees, wsHand, type WsHand } from "./wsLine";
 import { seatWords, undealtStatus } from "./roster";
+import { KEEPALIVE_GRACE_S, KEEPALIVE_S } from "./stall";
 
 const ws = () => S.ws;
+
+/** THE BOUND SOCKET IS ALIVE while its last frame is this recent — and while it is, hero's turn is ITS word, never the
+ *  screen's (handStateIgnition). The threshold is the keep-alive-overdue mark stall.ts already uses (one PONG every
+ *  30 s + 5 s grace): every socket dump 2026-09-20 .. 10-14 (415,520 in-hand frame gaps) shows a healthy socket's
+ *  longest in-hand quiet is the 30 s PONG spacing (p99 31.2 s; p99.9 of all gaps 15.6 s), and the 42 gaps over 30 s
+ *  are the stalls (206 s, 132 s, 70 s …) — the one case the strip rule below is for. Hero's own ask (CO_SELECT_REQ)
+ *  never comes out of silence: in 9,284 of 9,284 asks it followed the previous frame on its socket by ≤ 0.32 s. */
+export const SOCKET_ALIVE_S = KEEPALIVE_S + KEEPALIVE_GRACE_S;
+
+/** The bound socket's word on itself: `alive` (a frame within SOCKET_ALIVE_S), `silent` (bound, but quiet longer —
+ *  a stall, a lost tap), `none` (no socket bound, or none heard yet: the fake table, a replay without rids). */
+export function socketWord(): { word: "alive" | "silent" | "none"; silentS: number | null } {
+  const rid = S.tapBound;
+  const L = rid ? S.tapLast.get(rid) : undefined;
+  if (!rid || !L) return { word: "none", silentS: null };
+  const silent = Math.max(0, time() - L.at);
+  return { word: silent <= SOCKET_ALIVE_S ? "alive" : "silent", silentS: Math.round(silent * 10) / 10 };
+}
 
 /** A strip reading older than this is no evidence of the buttons. The reader ticks every ~0.45 s (gaps up to 3.8 s
  *  under load: session_20260926_030543, 48 of 1,866 ticks over 2 s), so 6 s is a reader that has STOPPED reading, not
@@ -47,17 +66,21 @@ export function stripButtonsUp(): boolean {
   return !!S.liveStatus.toAct && !stripReadStale();
 }
 
-/** The three independent views of "hero to act", side by side. */
+/** The three independent views of "hero to act", side by side — and the socket's word on itself (`socket`), which says
+ *  whether the screen's strip was allowed to decide (handStateIgnition: only when the socket is not `alive`). */
 export function toActSources(buttonsUp: boolean): Record<string, any> {
   const hero = ws().heroSeat ?? null;
   const turn = ws().heroTurn ?? null;
   const age = screenReadAgeS();
   const stale = age !== null && age > BUTTONS_STALE_S;
+  const sock = socketWord();
   return {
     buttons: !!buttonsUp && !stale,
     ws: !!(turn && turn.hand === S.handNo && !ws().heroFolded),
     actionOn: hero !== null && (ws().actionOn ?? null) === hero,
     wsAt: (turn || {}).at ?? null, timeBank: (turn || {}).timeBank ?? null,
+    socket: sock.word,
+    ...(sock.word === "silent" ? { socketSilentS: sock.silentS } : {}),
     ...(stale && buttonsUp ? { buttonsStaleS: Math.round(age * 10) / 10 } : {}),
   };
 }
@@ -532,9 +555,33 @@ export function handStateIgnition(): Record<string, any> | null {
   const src = toActSources(!!S.liveStatus.toAct);
   const since = S.liveStatus.toActSince || 0.0;
   const buttonsHeld = !!src.buttons && pastGrace && !!since && time() - since >= 1.0;
-  if (actionOn !== hero && !heroFolded && (src.ws || (src.buttons && pastGrace && hasVoluntary) || buttonsHeld)) actionOn = hero;
+  // THE SCREEN'S STRIP DECIDES HERO'S TURN ONLY WHEN THE SOCKET CANNOT (2026-10-14, the answer-path audit's independent
+  // review of hand 4921603348): hero SB 8♥8♠ was answered twice (answers 8166 / 8167, "Raise 2.5" on a line padded
+  // F-F-F-F) 18.7 s and 15.7 s BEFORE the socket asked him (CO_SELECT_REQ 10:50:51.5; the HJ's raise 10:50:40.1), off
+  // toActSources {buttons: true, ws: false, actionOn: false}: the socket said action on seat 1 then 2, and the strip
+  // counted as his turn through the held-buttons rule 0.14 s past the deal grace — Ignition's PRE-ACTION buttons
+  // ("CALL 3", CO_SELECT_SPEED_BTN) carry a digit and satisfy dom.ts toAct. Nine such answers in six hands since 09-20,
+  // all preflop. While the bound socket is alive (socketWord, a frame within SOCKET_ALIVE_S) the ask will come on it
+  // — it never comes out of silence — so the turn is the socket's: its own ask (ws), or action-on hero with the
+  // buttons up. The strip's two rules (buttons past the grace with a voluntary action in; buttons held 1 s) stay
+  // for the socket that is silent (a stall, a lost tap) or absent (the fake table, no rid). This only makes the turn
+  // EARLIER, never later: Ignition draws the buttons 3-4 s after the socket's ask (session_20261013_223500).
+  const stripDecides = src.socket !== "alive";
+  if (actionOn !== hero && !heroFolded && (src.ws || (stripDecides && ((src.buttons && pastGrace && hasVoluntary) || buttonsHeld)))) actionOn = hero;
   const actionOnOnly = actionOn === hero && !src.ws && !src.buttons;
   const toActHero = actionOn === hero && !actionOnOnly;
+  // THE CLIENT'S OWN PRICE (2026-10-14, the same review): CO_SELECT_REQ.bet is the amount hero is asked to CALL when
+  // the ask offers FOLD (btns bit 1024; equal to hero's own later call in 754 of 754 dumps' asks), and the MIN BET when
+  // it offers CHECK (bit 64; hero owes 0). Exported as `askedToCall` (bb, 4 dp) for the API's capture gate to hold
+  // against the line's toCall — a line padded with folds the socket never saw cannot agree with it. `askedSizes`
+  // carries the ask's pot-size presets (bb) for the record. Only this hand's ask, only once the blinds scaled it.
+  const turn = w.heroTurn && w.heroTurn.hand === S.handNo && !heroFolded ? w.heroTurn : null;
+  const askBits = turn ? Number(turn.btns) || 0 : 0;
+  const bb4 = (c: unknown) => (scaled && typeof c === "number" && Number.isFinite(c) ? pyRound(c / bb, 4) : null);
+  const askedToCall = turn && typeof turn.bet === "number" ? (askBits & 64 ? 0 : askBits & 1024 ? bb4(turn.bet) : null) : null;
+  const askedSizes = turn && (turn.betPot != null || turn.halfPot != null)
+    ? { ...(bb4(turn.betPot) !== null ? { betPot: bb4(turn.betPot) } : {}), ...(bb4(turn.halfPot) !== null ? { halfPot: bb4(turn.halfPot) } : {}) }
+    : null;
   const foldedSeats = proto ? proto.folded : new Set(actsSrc.filter((a) => a.type === "fold").map((a) => a.seat));
   const villains = dealt.filter((s) => s !== hero);
   const heroWon = !heroFolded && villains.length > 0 && villains.every((s) => foldedSeats.has(s));
@@ -552,6 +599,7 @@ export function handStateIgnition(): Record<string, any> | null {
     : heroFolded ? "hero folded" : heroWon ? "hand won"
     : status === "sitting-out" || status === "waiting-for-bb" ? `status ${status}`
     : src.buttonsStaleS !== undefined ? `the screen's buttons are a stale read (${src.buttonsStaleS} s old, the reader stood down) — not trusted`
+    : src.buttons && !stripDecides ? `the screen shows turn buttons but the table's connection is alive and has not asked you to act (its ask decides; ${actionOnRaw !== null ? `action on seat ${pyStr(actionOnRaw)}` : "action-on unknown"})`
     : actionOnOnly ? "action-on names you but the client has not asked and shows no buttons"
     : actionOnRaw !== null ? `action on seat ${pyStr(actionOnRaw)}`
     : "action-on unknown";
@@ -592,6 +640,11 @@ export function handStateIgnition(): Record<string, any> | null {
     heroFolded,
     heroWon,
     ended: heroFolded || heroWon,
+    // the client's own ask (CO_SELECT_REQ): what hero is asked to call (0 when it offers CHECK), its pot presets
+    ...(askedToCall !== null ? { askedToCall } : {}),
+    ...(askedSizes && Object.keys(askedSizes).length ? { askedSizes } : {}),
+    // the socket joined this hand after it began (ws.ts CO_TABLE_INFO): its earlier actions were never seen
+    ...(w.joinedMidHand ? { joinedMidHand: true } : {}),
     buttonsUp: !!src.buttons,
     toActSources: src,
     heroStatus: status,

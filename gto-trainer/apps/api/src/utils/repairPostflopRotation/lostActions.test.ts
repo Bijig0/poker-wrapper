@@ -361,3 +361,56 @@ describe("lostActionFaults — 0. exact per-seat chips (the table's own counts)"
     expect(lostActionFaults(h)).toEqual([]);
   });
 });
+
+describe("lostActionFaults — 0b. the client's own price (CO_SELECT_REQ.bet, 2026-10-14)", () => {
+  // hand 4921603348: hero SB 8♥8♠; the table went UTG fold, HJ raise to 2, CO call, BTN call — the socket asked hero
+  // 1.6bb. The premature export had the unseen seats padded as folds, hero owing 0.5bb.
+  const padded = [...blinds, act(3, "fold", "preflop"), act(4, "fold", "preflop"), act(5, "fold", "preflop"), act(6, "fold", "preflop")];
+  const played = [...blinds, act(3, "fold", "preflop"), act(4, "raise", "preflop", 2), act(5, "call", "preflop", 2), act(6, "call", "preflop", 2)];
+  const asked = (h: ParsedHand, askedToCall: number, extra: Partial<ParsedHand> = {}): ParsedHand => ({ ...h, askedToCall, lineSource: "ws", ...extra });
+
+  it("the line's price agrees with the ask: silent", () => {
+    // (the fixture's SB posted 0.5bb, so the line's price is 1.5; the real hand's 2-cent post of a 5-cent blind made it 1.6)
+    expect(lostActionFaults(asked(hand({ actions: played, hero: 1, committed: { 1: 0.5, 2: 1, 4: 2, 5: 2, 6: 2 }, pot: 7.5, toCall: 1.5 }), 1.5))).toEqual([]);
+  });
+
+  it("a line padded with folds the socket never saw cannot agree with the ask — a named capture fault, on the shared gate too", () => {
+    const h = asked(hand({ actions: padded, hero: 1, committed: { 1: 0.5, 2: 1 }, pot: 1.5, toCall: 0.5 }), 1.6);
+    const f = lostActionFaults(h);
+    expect(f).toEqual([expect.stringContaining("the client asked SB to call 1.6bb but the captured line has him owing 0.5bb")]);
+    expect(f[0]).toContain("never seen");
+    expect(captureFaults(h).some((x) => /the client asked SB to call 1.6bb/.test(x))).toBe(true);
+  });
+
+  it("the other way too: a line that holds chips the table never asked for", () => {
+    const f = lostActionFaults(asked(hand({ actions: played, hero: 1, committed: { 1: 0.5, 2: 1, 4: 2, 5: 2, 6: 2 }, pot: 7.5, toCall: 1.5 }), 0.5));
+    expect(f).toEqual([expect.stringContaining("the client asked SB to call 0.5bb but the captured line has him owing 1.5bb")]);
+    expect(f[0]).toContain("never asked him for");
+  });
+
+  it("hero's stack bounds the price: the client caps the call at what he has behind (an all-in call)", () => {
+    const h = hand({ actions: played, hero: 1, committed: { 1: 0.5, 2: 1, 4: 2, 5: 2, 6: 2 }, pot: 7.5, toCall: 1.5 });
+    // 0.8bb behind, asked 0.8: the line's 1.5 is capped — no fault
+    expect(lostActionFaults(asked(h, 0.8, { wsStack: { 1: 0.8 }, startStacks: { 1: 1.3 }, wsInFront: { 1: 0.5 } }))).toEqual([]);
+    // 0.8bb behind but asked the full 1.5: the stack and the ask disagree — a fault, naming the cap
+    const f = lostActionFaults(asked(h, 1.5, { wsStack: { 1: 0.8 }, startStacks: { 1: 1.3 }, wsInFront: { 1: 0.5 } }));
+    expect(f.some((x) => /the client asked SB to call 1.5bb but the captured line has him owing 0.8bb \(hero's 0.8bb behind caps the 1.5bb the line asks\)/.test(x))).toBe(true);
+  });
+
+  it("the export's rounding is forgiven: a cent on the WS line, a tenth on the reconciler's", () => {
+    const h = hand({ actions: played, hero: 1, committed: { 1: 0.5, 2: 1, 4: 2, 5: 2, 6: 2 }, pot: 7.5, toCall: 1.5 });
+    expect(lostActionFaults(asked(h, 1.51))).toEqual([]);
+    expect(lostActionFaults(asked(h, 1.53))).toHaveLength(1);
+    expect(lostActionFaults(asked(h, 1.54, { lineSource: "reconciled" }))).toEqual([]);
+    expect(lostActionFaults(asked(h, 1.58, { lineSource: "reconciled" }))).toHaveLength(1);
+  });
+
+  it("only hero's own decision is priced: absent, or not hero's turn, nothing is checked", () => {
+    const h = hand({ actions: padded, hero: 1, committed: { 1: 0.5, 2: 1 }, pot: 1.5, toCall: 0.5 });
+    expect(lostActionFaults(h)).toEqual([]);
+    expect(lostActionFaults({ ...asked(h, 1.6), currentNode: { ...h.currentNode, toActIsHero: false, toActSeatId: 4 } })).toEqual([]);
+    // the ask that offers CHECK is 0 to call, and agrees with a line that owes nothing
+    const free = hand({ actions: [...blinds, act(3, "fold", "preflop"), act(4, "fold", "preflop"), act(5, "fold", "preflop"), act(6, "fold", "preflop"), act(1, "call", "preflop", 0.5)], hero: 2, committed: { 1: 1, 2: 1 }, pot: 2, toCall: 0 });
+    expect(lostActionFaults(asked(free, 0))).toEqual([]);
+  });
+});

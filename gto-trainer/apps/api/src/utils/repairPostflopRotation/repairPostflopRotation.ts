@@ -391,6 +391,8 @@ export function lostActionFaults(hand: ParsedHand): string[] {
   // 0. exact per-seat chips, when the table's own counts are in the export
   const exact = !!((hand.wsStack && Object.keys(hand.wsStack).length) || (hand.wsInFront && Object.keys(hand.wsInFront).length));
   if (exact) faults.push(...exactChipFaults(hand, per, street, folded, seatOf, pos));
+  // 0b. the client's own price for hero's decision, when the export carries it
+  if (hand.askedToCall != null && hand.currentNode?.toActIsHero) faults.push(...askedToCallFaults(hand, pos));
 
   // 1. this round's chips against this round's captured actions
   const cur = per.get(street) ?? new Map<number, number>();
@@ -463,6 +465,32 @@ export function lostActionFaults(hand: ParsedHand): string[] {
     }
   }
   return faults;
+}
+
+/**
+ * Rule 0b of lostActionFaults — THE CLIENT'S OWN PRICE (2026-10-14, the answer-path audit's independent review of hand
+ * 4921603348): Ignition's CO_SELECT_REQ names what hero is asked to call, independently of the captured line. Hero SB
+ * 8♥8♠ was answered "Raise 2.5" on a line padded F-F-F-F while the table had gone F-R2-C-C: the screen's strip had
+ * called it his turn 18.7 s before the ask, the token walk padded the unseen seats as folds, and nothing contradicted
+ * it — the wrapper's own money agreed with its own line. The ask does not: it said 1.6bb to call, the line said 0.5.
+ * A disagreement beyond the export's rounding (0.01bb per amount on the WS line, 0.05 on the reconciler's) is a
+ * capture fault — terminal, never an answer on the padded line. Bounded by hero's stack: the client caps the call at
+ * what hero has behind (an all-in call), so a toCall above his `wsStack` is held against that stack instead.
+ */
+function askedToCallFaults(hand: ParsedHand, pos: (s: number) => string): string[] {
+  const asked = Number(hand.askedToCall);
+  const toCall = Number(hand.currentNode?.toCall ?? 0);
+  if (!Number.isFinite(asked) || !Number.isFinite(toCall)) return [];
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  const behind = hand.wsStack?.[hand.heroSeatId];
+  const expected = behind != null && Number.isFinite(behind) && behind < toCall ? behind : toCall;
+  const unit = hand.lineSource === "reconciled" ? 0.05 : 0.01;
+  if (Math.abs(asked - expected) <= unit + 1e-6) return [];
+  const bound = expected !== toCall ? ` (hero's ${r2(behind!)}bb behind caps the ${r2(toCall)}bb the line asks)` : "";
+  const what = asked > expected
+    ? "an action that put chips in before his turn (a raise, a call) was never seen"
+    : "the line holds chips the table never asked him for (an action filed twice, or to the wrong seat)";
+  return [`the client asked ${pos(hand.heroSeatId)} to call ${r2(asked)}bb but the captured line has him owing ${r2(expected)}bb${bound} — ${what}`];
 }
 
 /** Rule 0 of lostActionFaults: each seat's money as the table reports it against the chips its captured actions put in. */

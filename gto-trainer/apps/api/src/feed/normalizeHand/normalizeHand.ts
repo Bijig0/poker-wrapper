@@ -190,6 +190,16 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
   const wsStack = seatMoney(input.wsStack);
   const wsInFront = seatMoney(input.wsInFront);
   const wsDead = seatMoney(input.wsDead);
+  // THE CLIENT'S OWN ASK (optional; see ParsedHand.askedToCall, 2026-10-14): a finite non-negative number, else absent —
+  // never zero by default (absent = no ask was heard). The presets the same way, kept only when one is a number.
+  const money = (v: unknown): number | undefined => (v != null && Number.isFinite(Number(v)) && Number(v) >= 0 ? Number(v) : undefined);
+  const askedToCall = money(input.askedToCall);
+  let askedSizes: { betPot?: number; halfPot?: number } | undefined;
+  if (isRecord(input.askedSizes)) {
+    const betPot = money(input.askedSizes.betPot), halfPot = money(input.askedSizes.halfPot);
+    if (betPot !== undefined || halfPot !== undefined) askedSizes = { ...(betPot !== undefined ? { betPot } : {}), ...(halfPot !== undefined ? { halfPot } : {}) };
+  }
+  const joinedMidHand = input.joinedMidHand === true;
   const lineSource = input.lineSource === "ws" || input.lineSource === "reconciled" ? input.lineSource : undefined;
   const roster = rosterOf(input.roster);
 
@@ -257,6 +267,9 @@ export const normalizeHand = (input: unknown): NormalizeResult => {
     ...(wsStack ? { wsStack } : {}),
     ...(wsInFront ? { wsInFront } : {}),
     ...(wsDead ? { wsDead } : {}),
+    ...(askedToCall !== undefined ? { askedToCall } : {}),
+    ...(askedSizes ? { askedSizes } : {}),
+    ...(joinedMidHand ? { joinedMidHand } : {}),
     ...(lineSource ? { lineSource } : {}),
     ...(result ? { result } : {}),
     ...(roster ? { roster } : {}),

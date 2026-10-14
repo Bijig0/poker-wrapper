@@ -834,6 +834,7 @@ export function beginHand(hid: string | null): void {
   w.domGraceUntil = time() + 2.5;
   w.bbSeen = false;
   delete w.rabbit;                 // the rabbit hunt's card by board position (withoutRabbit) — only set by its frame
+  delete w.joinedMidHand;          // the socket joined the hand after it began (CO_TABLE_INFO) — only set by that snapshot
   feedAdd("───── new hand ─────");
   if (hid) feedAdd(`(hand id ${hid})`);
 }
@@ -930,7 +931,10 @@ export function onGameMsg(d: Record<string, any>): void {
     feedAdd(`Seat ${pyStr(d.seat ?? null)} posts ` + (label ? `${label} (${amt(bet)})` : `(${amt(bet)})`));
     if (w.bbGuessed) S.feed[S.feed.length - 1]!.guessCents = bet;
   } else if (pid === "CO_SELECT_REQ") {
-    w.heroTurn = { at: time(), hand: S.handNo, timeBank: d.timeBank ?? null, bet: d.bet ?? null, raise: d.raise ?? null, btns: d.btns ?? null };
+    // the client's own ask: `bet` = the call when FOLD is offered (btns bit 1024), the min bet when CHECK is (bit 64);
+    // `betPot` / `halfPot` its pot presets (hand.ts askedToCall / askedSizes, 2026-10-14)
+    w.heroTurn = { at: time(), hand: S.handNo, timeBank: d.timeBank ?? null, bet: d.bet ?? null, raise: d.raise ?? null, btns: d.btns ?? null,
+                   betPot: d.betPot ?? null, halfPot: d.halfPot ?? null };
   } else if (pid === "CO_SELECT_INFO") {
     if (d.seat !== null && d.seat !== undefined && d.seat === w.heroSeat) w.heroTurn = null;
     applySelect(d.seat ?? null, d.btn ?? null, d.bet || 0, d.raise || 0, d.account ?? null);
@@ -1101,6 +1105,23 @@ export function onGameMsg(d: Record<string, any>): void {
     // and the snapshot's own accounts are mid-hand readings — the next result frame starts the ledger again
     w.tableCents = new Map<number, DealCents>();
     delete w.tableCentsAt;
+    // JOINED MID-HAND (2026-10-14, the answer-path audit's independent review): every socket open starts with
+    // PLAY_STAGE_INFO + CO_OPTION_INFO + this snapshot — `tableState` (2 opened, 4 blinds, 8 dealt / preflop, 16 flop,
+    // 32 turn, 64 river, 32768 showdown, 65536 result), `pbet` (chips in front per seat), `currentSeat`. A snapshot
+    // of a hand already in play, with no blind or deal frame of this hand heard (ws_dump-3 04:50:17 rid 27500.2642:
+    // state 8, cur 2, dealer 1, pbet [5, 2, 0, 5]), is a hand whose earlier actions were never seen: ~5 hero decisions
+    // in 24 days. Flagged on the hand (hand.ts exports it; the API refuses its decisions, relay.ts presses nothing and
+    // never folds it on no answer, steps.ts says why) and cleared when the next hand opens (beginHand). What the
+    // snapshot could rebuild (pbet, pcard, mySeat) is NOT read — that is the review's item 3, not built.
+    const state = Number(d.tableState) || 0;
+    const pbet: unknown[] = Array.isArray(d.pbet) ? d.pbet : [];
+    const inPlay = [8, 16, 32, 64].includes(state) || (state === 4 && pbet.some((x) => Number(x) > 0));
+    if (inPlay && !w.bbSeen && !(w.dealt || []).length && !w.joinedMidHand) {
+      w.joinedMidHand = { at: time(), tableState: state, currentSeat: d.currentSeat ?? null, dealerSeat: d.dealerSeat ?? null };
+      feedAdd("⚠ Joined this hand mid-way — the table's earlier actions were not seen: nothing is answered or pressed in it");
+      log(`[ws] hand #${S.handNo} joined mid-way (tableState ${state}, action on seat ${pyStr(d.currentSeat ?? null)}, dealer ${pyStr(d.dealerSeat ?? null)}): `
+          + "no answers, no presses and no no-answer fold in it");
+    }
   }
 }
 

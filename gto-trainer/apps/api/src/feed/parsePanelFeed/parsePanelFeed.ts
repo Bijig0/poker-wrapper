@@ -117,6 +117,18 @@ export interface ParsedHand {
   wsStack?: Record<number, number>;
   wsInFront?: Record<number, number>;
   wsDead?: Record<number, number>;
+  /** THE CLIENT'S OWN PRICE (Ignition wrapper since 2026-10-14, CO_SELECT_REQ.bet): what hero is asked to CALL on this
+   *  decision (bb, 4 dp; 0 when the ask offers CHECK). Independent of the captured line — the capture gate holds the
+   *  line's toCall against it (utils/repairPostflopRotation.lostActionFaults): a line padded with folds the socket
+   *  never saw (hand 4921603348: F-F-F-F for F-R2-C-C, hero asked 1.6bb) cannot agree with it. Absent = no ask yet, an
+   *  older row, another site. */
+  askedToCall?: number;
+  /** the ask's pot presets (bb), for the record */
+  askedSizes?: { betPot?: number; halfPot?: number };
+  /** THE SOCKET JOINED THIS HAND AFTER IT BEGAN (Ignition wrapper since 2026-10-14): its first frames were the join
+   *  snapshot, so the table's earlier actions were never seen. Every decision of such a hand is refused
+   *  (fastSolve.unsolvableCapture, kind joined-mid-hand); the wrapper presses nothing in it. */
+  joinedMidHand?: boolean;
   /** Whose betting line `actions` is (wrapper CONTRACT §1c): the WebSocket's own ("ws", amounts exact to the cent) or the
    *  level reconciler's off the chips on screen ("reconciled", amounts to the 0.1bb the screen shows). */
   lineSource?: "ws" | "reconciled";

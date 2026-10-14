@@ -100,6 +100,14 @@ export const Hand = obj({
   wsInFront: z.record(z.string(), z.number()).optional(),
   /** a dead blind a seat posted (bb): out of its stack, in no bet */
   wsDead: z.record(z.string(), z.number()).optional(),
+  /** THE CLIENT'S OWN ASK (CO_SELECT_REQ, 2026-10-14): what hero is asked to call (bb, 4 dp; 0 when the ask offers
+   *  CHECK). Present only on this hand's own ask — the API's capture gate holds the line's toCall against it */
+  askedToCall: z.number().optional(),
+  /** the ask's pot presets (bb): the pot-size bet and the half-pot bet, when the client sent them */
+  askedSizes: obj({ betPot: z.number().optional(), halfPot: z.number().optional() }).optional(),
+  /** the socket joined this hand after it began (its first frames were the join snapshot): the table's earlier actions
+   *  were never seen — the API refuses the hand's decisions, nothing is pressed in it (2026-10-14) */
+  joinedMidHand: z.literal(true).optional(),
   heroFolded: z.boolean(), heroWon: z.boolean(), ended: z.boolean(),
 });
 

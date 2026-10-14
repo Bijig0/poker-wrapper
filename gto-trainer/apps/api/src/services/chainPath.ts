@@ -176,8 +176,9 @@ export function classifyPath(p: Omit<DecisionPath, "verdict" | "reasons" | "v"> 
 export const faultPath = (street: string, kind: string | null | undefined, reason: string): DecisionPath =>
   classifyPath({ street, streets: [], fault: { v: "fault", code: `fault:${kind || "no-answer"}`, text: reason.slice(0, 300) } });
 
-/** No-answer kinds that say nothing about the chain: hero acted first, the hand ended, the export lagged the buttons. */
-export const NEUTRAL_FAIL_KINDS = new Set(["not-heros-turn", "hand-over", "abandoned-stale"]);
+/** No-answer kinds that say nothing about the chain: hero acted first, the hand ended, the export lagged the buttons,
+ *  the socket joined the hand after it began (nothing was asked of the chain). */
+export const NEUTRAL_FAIL_KINDS = new Set(["not-heros-turn", "hand-over", "abandoned-stale", "joined-mid-hand"]);
 
 /** The first reason worth a person's attention, short — the panel's one line. */
 export function headline(p: Pick<DecisionPath, "verdict" | "reasons">): string | null {
