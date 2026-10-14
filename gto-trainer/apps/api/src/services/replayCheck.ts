@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite";
-import { gtowApi } from "./gtowApi";
-import { solveAiChain, type ChainTrace, type ChainTraceNode } from "./aiChain";
+import { gtowApi, huMenuMode, menuPotMode, threeWayMenuMode } from "./gtowApi";
+import { forgetAnsweredHeroNodes, seedAnsweredHeroNodes, solveAiChain, walkPolicy, type ChainTrace, type ChainTraceNode } from "./aiChain";
 import { openStore, solvesDbPath } from "./storePaths";
 
 /**
@@ -14,10 +14,69 @@ import { openStore, solvesDbPath } from "./storePaths";
  * NOT FOR THE LIVE PROCESS: replayTrace swaps gtowApi's network calls for the recording while it runs. It is called by
  * scripts/replayDeterminism.ts, a process of its own (services/replayScheduler starts it once a day when the table is
  * quiet); the API only reads the results table.
+ *
+ * WHAT THE REPLAY SEEDS (2026-10-14, the audit's finding 6): the replay runs under a hand key of its own, so the live
+ * walk's hero narrowing — his earlier action multiplied by the strategy he was ANSWERED with on another tree or SERVED
+ * on another plan (aiChain heroAnswered, retree-consistency) — is seeded from the trace before the walk
+ * (aiChain.seedAnsweredHeroNodes, the hero-floor A/B harness's mechanism); until then every one of the 16 range-weight
+ * fails in replay_checks was hero's seat narrowed by the walking tree instead (8441 / 4923565359 turn SB 210.08 live vs
+ * 105.15). A MENU RULE THAT CHANGED since the hand was played (HU_FIXED_MENU, THREEWAY_MENU, MENU_POT — 4923350087's
+ * AUTOMATIC trees replayed after the fixed menu landed) makes the request's bet sizes differ and nothing else: that is
+ * `note: menu-rule-changed`, not replayable, never a fail.
+ *
+ * WHAT THE REPLAY RUNS UNDER (2026-10-14): the rules the live walk ran under — the trace's `policy` (aiChain.walkPolicy,
+ * recorded since 2026-10-14), set in process.env for the walk and restored after; a trace from before it gets what the
+ * trace itself shows (derivedWalkPolicy: the off-tree soft record's mode / weight / temperature and whether a lock was
+ * posted, the hero floor's mode — abs when no floor record exists). Seven of the audit's 16 range fails were the
+ * off-tree rule alone (played under OFFTREE_RANGE=soft, replayed under the 10-13 blend + lock: 7468 / 4923391721 SB
+ * 142.51 live vs 29.65). A live mid-street node lock is replayed as the recording: the child's nodes are the ones read.
  */
 
 export interface ReplayDiff { what: string; live: string; replay: string }
+/** ok null = not replayable: the note says why (`menu-rule-changed: …` when only the menu differs — see the header) */
 export interface ReplayResult { ok: boolean | null; diffs: ReplayDiff[]; note: string | null }
+
+/** The menu a tree request asked for, seat by seat on its first street: "OOP AUTOMATIC · IP FIXED 33%/75% | 60%". */
+export function menuOf(sent: unknown): string {
+  type Seat = { position?: string; type?: string; bet_sizes?: string[]; raise_sizes?: string[] };
+  const first = (sent as { bet_sizes?: { street_bet_sizes?: { position_bet_sizes?: Seat[] }[] } } | null)?.bet_sizes?.street_bet_sizes?.[0];
+  if (!first?.position_bet_sizes?.length) return "?";
+  return first.position_bet_sizes.map((p) => `${p.position ?? "?"} ${p.type ?? "?"}${p.bet_sizes?.length ? ` ${p.bet_sizes.join("/")}` : ""}${p.raise_sizes?.length ? ` | ${p.raise_sizes.join("/")}` : ""}`).join(" · ");
+}
+/** The menu rules in effect for this replay (gtowApi reads them at every tree). */
+export const menuRulesNow = (): string => `HU_FIXED_MENU=${huMenuMode()}, THREEWAY_MENU=${threeWayMenuMode()}, MENU_POT=${menuPotMode()}`;
+
+/** The rules a trace from before the policy record (2026-10-14) shows it ran under — only what the trace carries: the
+ *  off-tree soft record (OFFTREE_RANGE=soft was the rule 10-06 .. 10-13, the blend since; no `soft` on an off-tree node
+ *  = off), its blend weight and temperature, whether a lock was posted; hero's class floor (abs until 10-14: no record). */
+export function derivedWalkPolicy(trace: Pick<ChainTrace, "streets" | "nodes">): Record<string, string> {
+  const out: Record<string, string> = {};
+  const floor = (trace.streets ?? []).map((s) => s.heroFloor?.mode).find((m) => !!m);
+  out.HERO_CLASS_FLOOR = floor ?? "abs";
+  const offs = (trace.nodes ?? []).map((n) => n.offTree).filter((o): o is NonNullable<ChainTraceNode["offTree"]> => !!o);
+  if (offs.length) {
+    const soft = offs.map((o) => o.soft).find((s) => !!s);
+    out.OFFTREE_RANGE = soft?.mode ?? "off";
+    if (soft?.w != null) out.OFFTREE_BLEND_W = String(soft.w);
+    if (soft?.t != null) out.OFFTREE_RANGE_T = String(soft.t);
+    out.OFFTREE_LOCK = offs.some((o) => o.soft?.lock) ? "on" : "off";
+  }
+  return out;
+}
+
+/** Run `fn` with these env values set (restored after, set or unset as they were). */
+export async function withEnv<T>(env: Record<string, string>, fn: () => Promise<T>): Promise<T> {
+  const before = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+  for (const [k, v] of Object.entries(env)) process.env[k] = v;
+  try { return await fn(); } finally {
+    for (const [k, v] of Object.entries(before)) { if (v == null) delete process.env[k]; else process.env[k] = v; }
+  }
+}
+/** The keys of `policy` whose value is not today's (the rules a replay had to set). */
+const policyDiffers = (policy: Record<string, string>): string[] => {
+  const now = walkPolicy();
+  return Object.entries(policy).filter(([k, v]) => (now[k] ?? "") !== v).map(([k, v]) => `${k}=${v || "(unset)"}`);
+};
 
 type NodeData = { action_solutions: unknown[] };
 
@@ -67,15 +126,17 @@ export async function replayTrace(trace: ChainTrace): Promise<ReplayResult> {
   const rec = recording(trace);
   const api = gtowApi as any;
   const saved = { ensure: api.ensureCustomSolution, node: api.customNode, peek: api.peekSolution, peekNode: api.peekNode, forget: api.forgetSolution,
-    summary: api.treeRequestSummary };
+    summary: api.treeRequestSummary, lock: api.lockedCustomSolution };
   const asked: string[] = [];
+  // a node address asked on a street's locked child is the recording's node at that address (the live walk read it there)
+  const streetOf = (solId: string) => String(solId).replace(/^replay-/, "").replace(/#lock$/, "");
   api.ensureCustomSolution = async (input: any) => {
     const street = String(input.startingStreet ?? "FLOP");
     if (!rec.streets.has(street)) return { ok: false, status: 404, error: `the replay asked for a ${street} tree the live walk never built` };
     return { ok: true, solId: `replay-${street}`, created: false, session: "replay" };
   };
   api.customNode = async (solId: string, q: any) => {
-    const street = String(solId).replace(/^replay-/, "");
+    const street = streetOf(solId);
     const codes = String(q.flopActions ?? q.turnActions ?? q.riverActions ?? "");
     const data = rec.nodes.get(`${street}|${codes}`);
     if (!data) { asked.push(`${street} [${codes || "root"}]`); return { ok: false, status: 404, error: `the replay needed node ${street} [${codes || "root"}], which the live walk never read` }; }
@@ -93,34 +154,71 @@ export async function replayTrace(trace: ChainTrace): Promise<ReplayResult> {
     return JSON.stringify(asked.bet_sizes) === JSON.stringify(live.bet_sizes) ? `replay-${street}` : null;
   };
   api.peekNode = (solId: string, q: any) => {
-    const data = rec.nodes.get(`${String(solId).replace(/^replay-/, "")}|${String(q.flopActions ?? q.turnActions ?? q.riverActions ?? "")}`);
+    const data = rec.nodes.get(`${streetOf(solId)}|${String(q.flopActions ?? q.turnActions ?? q.riverActions ?? "")}`);
     return data ?? null;
   };
   api.forgetSolution = () => {};
+  // THE MID-STREET LOCK AS THE LIVE WALK HAD IT (OFFTREE_LOCK): posted where the live street's off-tree node records one
+  // that succeeded (its nodes are the recorded ones), refused where it did not — never GTO Wizard's
+  const lockedStreets = new Set<string>((trace.nodes ?? []).filter((n) => n.offTree?.soft?.lock?.ok).map((n) => n.street));
+  api.lockedCustomSolution = async (parent: string) => {
+    const street = streetOf(parent);
+    return lockedStreets.has(street) ? { ok: true, solId: `replay-${street}#lock`, created: false, session: "replay" }
+      : { ok: false, status: 0, error: `the live walk posted no node lock on the ${street} (replay)` };
+  };
+  // the rules the live walk ran under (the header): recorded on the trace, else derived from it
+  const policy = trace.policy ?? derivedWalkPolicy(trace);
+  const policySet = policyDiffers(policy);
+  // a fresh hand key: the replay must not find (or leave) any of the live hand's memo or facts
+  const handKey = `replay:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`;
   try {
-    // a fresh hand key: the replay must not find (or leave) any of the live hand's memo or facts
-    const r = await solveAiChain({ ...trace.spec, handKey: `replay:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}` });
+    // … except hero's own narrowing, which is the live hand's state and not something a walk under this key can
+    // produce (the header): seeded from the trace, the checkpoint's nodes included (this walk starts at the root)
+    const seeded = seedAnsweredHeroNodes(trace, handKey, { checkpoint: true });
+    const notes = (...more: string[]): string | null => {
+      const parts = [...more, ...(asked.length ? [`asked for unrecorded nodes: ${asked.join(", ")}`] : []), ...(seeded ? [`${seeded} hero node${seeded === 1 ? "" : "s"} seeded from the trace`] : []),
+        ...(policySet.length ? [`replayed under the hand's rules (${trace.policy ? "recorded" : "derived from the trace"}): ${policySet.join(", ")}`] : [])];
+      return parts.length ? parts.join("; ") : null;
+    };
+    const r = await withEnv(policy, () => solveAiChain({ ...trace.spec, handKey }));
     const diffs: ReplayDiff[] = [];
+    const menuDiffs: ReplayDiff[] = [];
     const replayTraceOut = r.trace;
     if (!r.ok || !replayTraceOut) {
       diffs.push({ what: "result", live: `ok · ${trace.result.line ?? ""}`, replay: `failed: ${(r as { why?: string }).why ?? "?"}` });
-      return { ok: false, diffs, note: asked.length ? `asked for unrecorded nodes: ${asked.join(", ")}` : null };
+      return { ok: false, diffs, note: notes() };
     }
     if ((r.line ?? "") !== (trace.result.line ?? "")) diffs.push({ what: "line", live: trace.result.line ?? "—", replay: r.line ?? "—" });
+    const menus: string[] = [];
     for (const ls of trace.streets) {
       const rs = replayTraceOut.streets.find((s) => s.street === ls.street);
       if (!rs) { diffs.push({ what: `${ls.street} street`, live: "walked", replay: "not walked" }); continue; }
       if (Math.abs(ls.potIn - rs.potIn) > 1e-6) diffs.push({ what: `${ls.street} pot in`, live: String(ls.potIn), replay: String(rs.potIn) });
       if (Math.abs(ls.stackIn - rs.stackIn) > 1e-6) diffs.push({ what: `${ls.street} stack in`, live: String(ls.stackIn), replay: String(rs.stackIn) });
-      if (ls.sent && rs.sent) compareSent(ls.sent, rs.sent, `${ls.street} tree request`, diffs);
+      if (ls.sent && rs.sent) {
+        // the request's menu (bet_sizes) is compared apart from the rest: a menu rule that changed since the hand
+        // differs there and nowhere else, and must not hide a pot or range difference behind the diff cap
+        const { bet_sizes: lm, ...lrest } = ls.sent as Record<string, unknown>;
+        const { bet_sizes: rm, ...rrest } = rs.sent as Record<string, unknown>;
+        compareSent(lrest, rrest, `${ls.street} tree request`, diffs);
+        const before = menuDiffs.length;
+        compareSent(lm, rm, `${ls.street} tree request.bet_sizes`, menuDiffs);
+        if (menuDiffs.length > before) menus.push(`${ls.street} live ${menuOf(ls.sent)} / replay ${menuOf(rs.sent)}`);
+      }
       const lw = walkOf(trace.nodes ?? [], ls.street), rw = walkOf(replayTraceOut.nodes ?? [], ls.street);
       if (lw !== rw) diffs.push({ what: `${ls.street} walk`, live: lw || "—", replay: rw || "—" });
     }
-    return { ok: diffs.length === 0, diffs, note: null };
+    if (!diffs.length && menuDiffs.length) {
+      return { ok: null, diffs: menuDiffs, note: notes(`menu-rule-changed: only the menu differs — ${menus.join("; ")} (now ${menuRulesNow()})`) };
+    }
+    diffs.push(...menuDiffs);
+    return { ok: diffs.length === 0, diffs, note: diffs.length ? notes() : null };
   } catch (e) {
     return { ok: null, diffs: [], note: `the replay threw: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200) };
   } finally {
     api.ensureCustomSolution = saved.ensure; api.customNode = saved.node; api.peekSolution = saved.peek; api.peekNode = saved.peekNode; api.forgetSolution = saved.forget;
+    api.lockedCustomSolution = saved.lock;
+    forgetAnsweredHeroNodes(handKey);
   }
 }
 

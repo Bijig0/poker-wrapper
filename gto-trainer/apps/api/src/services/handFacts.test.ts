@@ -107,6 +107,22 @@ describe("handFacts — the hand's facts, write-through (2026-09-25)", () => {
     expect(new HandFacts(path).preflop("4920000004")).toBeUndefined();
   });
 
+  it("a tree recorded as a re-route keeps the mark when a later decision records it plain (2026-10-14, 4923405062)", () => {
+    const f = new HandFacts(":memory:");
+    const rec = { k: 0, first: 0, plan: null, sizeFree: true, seats: ["SB", "BB"], created: false, at: 1 };
+    f.recordTree("4923405062", { ...rec, origin: "warm", solId: "0322e5a9", created: true });
+    f.recordTree("4923405062", { ...rec, origin: "live", solId: "0322e5a9" });
+    f.recordTree("4923405062", { ...rec, origin: "live", solId: "6514cb7e", created: true, reroute: true });
+    f.recordTree("4923405062", { ...rec, origin: "live", solId: "6514cb7e" });          // the next decision's cached find
+    f.recordTree("4923405062", { ...rec, origin: "warm", solId: "6514cb7e" });          // a warm-up's too
+    const trees = f.trees("4923405062");
+    expect(trees.filter((t) => t.solId === "6514cb7e").map((t) => [t.origin, !!t.reroute])).toEqual([["live", true], ["warm", true]]);
+    expect(trees.filter((t) => t.solId === "0322e5a9").every((t) => !t.reroute)).toBe(true);
+    // a different tree recorded plain is plain: a real second default tree still counts
+    f.recordTree("4923405062", { ...rec, origin: "live", solId: "d0d0d0d0", created: true });
+    expect(f.trees("4923405062").find((t) => t.solId === "d0d0d0d0")?.reroute).toBeUndefined();
+  });
+
   it("a street record replaces the one with the same key and kind (a re-ask moves hero's resume point on)", () => {
     const f = new HandFacts(":memory:");
     const rec = { k: 0, first: 0, plan: null, root: "r", entry: "r", key: "r", kind: "partial" as const, at: 1 };

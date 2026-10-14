@@ -1,4 +1,4 @@
-import { bbAmount, coldTreeMs, gtowApi, hungHedgeOn, postflopNodeTimeoutMs, type CarriedMenus, type CarriedSeat, type CustomTreeInput, type NodeSource, type PlayedWager } from "./gtowApi";
+import { bbAmount, coldTreeMs, gtowApi, huMenuMode, hungHedgeOn, menuPotMode, postflopNodeTimeoutMs, threeWayMenuMode, type CarriedMenus, type CarriedSeat, type CustomTreeInput, type NodeSource, type PlayedWager } from "./gtowApi";
 import { solveStore } from "./solveStore";
 import { isDurableKey } from "./handFacts";
 import { servedActionIndex, servedHeroStrategy, type ServedMix } from "./servedStrategy";
@@ -16,7 +16,7 @@ import { chipsAfter, contestedChips, effectiveStack } from "../utils/tableMoney/
 import { handFacts, type StreetRecord } from "./handFacts";
 import type { RangeCheck, StreetPath } from "./chainPath";
 import {
-  OFF_TREE_DUST, blendOffTreeRange, isOffTreePostflop, offTreeBlendW, offTreeLock, offTreeLockFallbackOn, offTreeLockOn, offTreeRangeMode, offTreeSoftT, offTreeStats, softOffTreeRange,
+  OFF_TREE_DUST, blendOffTreeRange, isOffTreePostflop, offTreeBlendW, offTreeLock, offTreeLockFallbackOn, offTreeLockOn, offTreeMaxHand, offTreeRangeMode, offTreeSoftT, offTreeStats, softOffTreeRange,
   type OffTreeLine, type OffTreeSoft,
 } from "./offTree";
 
@@ -219,6 +219,11 @@ export interface HeroAnswered {
 }
 export interface ChainTrace {
   spec: AiChainSpec;
+  /** THE RULES THE WALK RAN UNDER (2026-10-14, walkPolicy): every switch that changes what the chain sends or carries,
+   *  as read at this call. The replay check (services/replayCheck) runs its walk under them, so a rule that changed
+   *  since the hand — the off-tree blend of 10-13, the relative hero floor of 10-14, a menu — is not reported as our
+   *  code being non-deterministic. Absent on traces before 2026-10-14: the replay derives what it can from the trace. */
+  policy?: Record<string, string>;
   streets: {
     si: number; street: "FLOP" | "TURN" | "RIVER"; board: string; potIn: number; stackIn: number;
     labels: string[]; fixedLevels: string[] | null; solId: string | null; created: boolean;
@@ -1150,6 +1155,41 @@ export function recordAnsweredHeroNode(a: AnsweredAt, solId: string, data: any):
   });
 }
 
+/** tests and offline walks: forget the answered hero nodes recorded under one hand key (a replay's seeds, when it ends) */
+export function forgetAnsweredHeroNodes(handKey: string): void {
+  for (const key of [...answeredNodes.keys()]) if ((JSON.parse(key) as unknown[])[0] === handKey) answeredNodes.delete(key);
+  for (const key of [...answeredMisses]) if ((JSON.parse(key) as unknown[])[0] === handKey) answeredMisses.delete(key);
+}
+
+/**
+ * SEED AN OFFLINE WALK'S HERO NARROWING FROM A STORED TRACE (2026-10-14; the hero-floor A/B harness first, the replay
+ * check since the audit's finding 6). A live walk narrows hero's earlier action by the strategy he was ANSWERED with on
+ * another tree, or SERVED on another plan (heroAnswered above) — state of the hand's key that a walk under a fresh key
+ * cannot produce: with nothing recorded it narrows by the walking tree's own node, and hero's range entering the next
+ * street is not the live one (replay_checks 2026-10-14: all 16 range-weight fails were hero's seat — 8441 /
+ * 4923565359 turn SB 210.08 live vs 105.15 replayed). Every trace node that carries a `heroAnswered.strategy` (4 dp)
+ * is recorded under `handKey` as the node his action there was answered on (one action: the one he took), unless the
+ * key already answered that point; the walk then narrows by it, as live. `checkpoint`: seed the nodes the live walk
+ * took from the hand's checkpoint too (a replay walks every street from the root under its own key; the A/B harness
+ * walks the hand decision by decision and has answered them itself). Returns how many were seeded.
+ */
+export function seedAnsweredHeroNodes(trace: Pick<ChainTrace, "spec" | "nodes">, handKey: string, opts: { checkpoint?: boolean } = {}): number {
+  const sp = trace.spec;
+  const first = sp.firstStreet ?? 0;
+  let seeded = 0;
+  for (const n of trace.nodes ?? []) {
+    const ha = n.heroAnswered;
+    if (!ha?.strategy || n.taken == null || (n.fromCheckpoint && !opts.checkpoint)) continue;
+    const at: AnsweredAt = { handKey, plan: sp.planTag ?? null, first, k: n.si + first, earlier: sp.streets.slice(0, n.si), prefix: (sp.streets[n.si] ?? []).slice(0, n.ti) };
+    if (answeredHeroNode(at)) continue;
+    const taken = n.actions[n.taken];
+    if (!taken) continue;
+    recordAnsweredHeroNode(at, `seed:${ha.src}:${ha.solId}`, { action_solutions: [{ action: { code: taken.code, display_name: taken.name, betsize: taken.betsize ?? "" }, strategy: ha.strategy }] });
+    seeded++;
+  }
+  return seeded;
+}
+
 /** A wager as GTO Wizard's % of the pot (its betsize_by_pot) — the % a FIXED raise list takes. */
 const pctOfPot = (x: unknown): string | null => {
   const v = Number(x);
@@ -1295,8 +1335,23 @@ export function retreeNotesOf(trace: Pick<ChainTrace, "streets" | "nodes"> & Par
   return out;
 }
 
+/** The switches that change what the chain sends or carries, with the value in effect — each spelt as its own env
+ *  variable takes it, so a replay that sets process.env from this record walks under the same rules. Recorded on every
+ *  trace (ChainTrace.policy). A new switch that changes ranges or trees belongs here. */
+export const WALK_POLICY_KEYS = ["HERO_CLASS_FLOOR", "HERO_STREET_AS_ANSWERED", "OFFTREE_RANGE", "OFFTREE_BLEND_W", "OFFTREE_RANGE_T", "OFFTREE_MAX_HAND",
+  "OFFTREE_LOCK", "OFFTREE_LOCK_FALLBACK", "HU_FIXED_MENU", "THREEWAY_MENU", "MENU_POT"] as const;
+export function walkPolicy(): Record<string, string> {
+  const maxHand = offTreeMaxHand();
+  return {
+    HERO_CLASS_FLOOR: heroClassFloorMode(), HERO_STREET_AS_ANSWERED: heroStreetAsAnsweredOn() ? "on" : "off",
+    OFFTREE_RANGE: offTreeRangeMode(), OFFTREE_BLEND_W: String(offTreeBlendW()), OFFTREE_RANGE_T: String(offTreeSoftT()),
+    OFFTREE_MAX_HAND: Number.isFinite(maxHand) ? String(maxHand) : "", OFFTREE_LOCK: offTreeLockOn() ? "on" : "off", OFFTREE_LOCK_FALLBACK: offTreeLockFallbackOn() ? "on" : "off",
+    HU_FIXED_MENU: huMenuMode(), THREEWAY_MENU: threeWayMenuMode(), MENU_POT: menuPotMode(),
+  };
+}
+
 export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
-  const trace: ChainTrace = { spec, streets: [], nodes: [], result: { ok: false } };
+  const trace: ChainTrace = { spec, policy: walkPolicy(), streets: [], nodes: [], result: { ok: false } };
   const sizeSnaps: string[] = [];
   /** hero's earlier actions on a street narrowed by his answered strategy on this call (retree-consistency) */
   const heroNarrowed: HeroAnswered[] = [];
@@ -1802,7 +1857,8 @@ export async function solveAiChain(spec: AiChainSpec): Promise<AiChainResult> {
         guardCheck(6, () => checkLine({ captured, walked: walkedActs })),
         guardCheck(9, () => checkTrees({ street, tree: streetRec.created ? "created" : "cached", leak: streetRec.leak, trees })),
         guardCheck(10, () => checkNodeReads({ leak: streetRec.leak, reads: streetRec.nodeSrc })),
-        guardCheck(11, () => checkWarmTree({ street, origin, solId: streetRec.solId, fixed: fixedLevels, warm: [...new Set(warm.map((t) => t.solId))] })),
+        guardCheck(11, () => checkWarmTree({ street, origin, solId: streetRec.solId, fixed: fixedLevels, warm: [...new Set(warm.map((t) => t.solId))],
+          reroutes: [...new Set(trees.filter((t) => t.reroute).map((t) => t.solId))] })),
         guardCheck(12, () => checkSolveTime({ street, ms, median: base.median, samples: base.samples, created: streetRec.created, population })),
       ];
       solveTimes.record(timeKey, ms);
