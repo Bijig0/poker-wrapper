@@ -99,6 +99,10 @@ export interface AnswerRow {
    *  session for the seat's current occupant, VPIP and PFR counts, how the occupant was carried (JSON). Logging only:
    *  the groundwork for a session-VPIP band (memory player-type-study). Null when the table was never observed. */
   seatStats?: string | null;
+  /** WHAT THE API SAW (2026-10-14, hand 4924546540): the hand this decision was asked on, compact (captureJson below) —
+   *  every action as seatId:type[:amount], the wrapper's lineSource / lineUncertain / lineNote, positions, live seats,
+   *  start stacks, toCall. Written on EVERY row the poller writes, failed ones included. */
+  captureJson?: string | null;
 }
 
 const DDL = `CREATE TABLE IF NOT EXISTS answers (
@@ -162,6 +166,8 @@ const EXTRA_COLUMNS: [string, string][] = [
   ["press", "TEXT"],
   // PER-SEAT SESSION VPIP / PFR (2026-10-09, services/seatStats): logging only, the player-type groundwork
   ["seat_stats", "TEXT"],
+  // WHAT THE API SAW (2026-10-14, hand 4924546540): the live hand per decision — see captureJson
+  ["capture_json", "TEXT"],
 ];
 
 /**
@@ -334,7 +340,106 @@ export interface LoggedAnswer {
   path_verdict: string | null;
   path: string | null;
   chain: string | null;
+  /** read per hand / session (forHand, forSession); left out of the in-memory view, so rows(days) may not carry it */
+  capture_json?: string | null;
 }
+
+/**
+ * WHAT THE API SAW (2026-10-14, hand 4924546540, session_20261014_131738). A live decision got no answer because the
+ * action list the API received carried a fold for a seat that was ALL-IN; the wrapper's own archive of the hand (written
+ * 20 s later) had no such fold, and its /state carried it through two asks. Nothing kept the live hand per decision —
+ * decision_json is written for served answers only, the wrapper's lineSource nowhere — so the occurrence could not be
+ * attributed. Every row the poller writes now carries this: the hand as the solve read it (the /fast-solver reply's
+ * `hand`), else as the probe read it (/ingest's `hand`). Bounded: at most CAPTURE_MAX_ACTIONS actions and
+ * CAPTURE_MAX_CHARS characters, shrunk with a `truncated` marker rather than refused — a capture never blocks a row.
+ */
+export const CAPTURE_MAX_ACTIONS = 60;
+export const CAPTURE_MAX_CHARS = 4096;
+
+/** The hand fields a capture reads — /fast-solver's and /ingest's `hand` projection (both loose JSON here). */
+export interface CaptureHand {
+  street?: string | null;
+  actions?: unknown[] | null;
+  positions?: Record<string, unknown> | null;
+  liveSeats?: unknown;
+  startStacks?: Record<string, unknown> | null;
+  node?: { toCall?: number | null } | null;
+  lineSource?: string | null;
+  lineUncertain?: string | null;
+  lineNote?: string | null;
+}
+
+const capNum = (v: unknown): number | null => {
+  const x = typeof v === "number" ? v : v == null || v === "" ? NaN : Number(v);
+  return Number.isFinite(x) ? Math.round(x * 1000) / 1000 : null;
+};
+
+/** One action as `seatId:type[:amount]` (amount rounded to 0.001). */
+const captureAction = (a: unknown): string => {
+  if (typeof a !== "object" || a === null) return "?";
+  const r = a as { seatId?: unknown; type?: unknown; amount?: unknown };
+  const amt = capNum(r.amount);
+  return `${r.seatId ?? "?"}:${String(r.type ?? "?")}${amt != null ? `:${amt}` : ""}`;
+};
+
+/** The capture_json of one decision: null only when there is no hand at all. */
+export function captureJson(hand: CaptureHand | null | undefined): string | null {
+  if (!hand || typeof hand !== "object") return null;
+  try {
+    const acts = Array.isArray(hand.actions) ? hand.actions : [];
+    const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+    const nums = (o: unknown): Record<string, number> | undefined => {
+      if (typeof o !== "object" || o === null) return undefined;
+      const out: Record<string, number> = {};
+      for (const [k, v] of Object.entries(o)) { const x = capNum(v); if (x != null) out[k] = x; }
+      return Object.keys(out).length ? out : undefined;
+    };
+    const positions: Record<string, string> = {};
+    if (typeof hand.positions === "object" && hand.positions !== null) {
+      for (const [k, v] of Object.entries(hand.positions)) if (typeof v === "string") positions[k] = v;
+    }
+    const cap: Record<string, unknown> = {
+      lineSource: str(hand.lineSource),
+      lineUncertain: str(hand.lineUncertain),
+      lineNote: str(hand.lineNote),
+      street: typeof hand.street === "string" ? hand.street : null,
+      actions: acts.slice(0, CAPTURE_MAX_ACTIONS).map(captureAction),
+      positions,
+      liveSeats: Array.isArray(hand.liveSeats) ? hand.liveSeats.filter((s) => typeof s === "number")
+        : typeof hand.liveSeats === "object" && hand.liveSeats !== null ? Object.keys(hand.liveSeats).map(Number) : [],
+      ...((): { startStacks?: Record<string, number> } => { const ss = nums(hand.startStacks); return ss ? { startStacks: ss } : {}; })(),
+      toCall: capNum(hand.node?.toCall),
+      actionCount: acts.length,
+      ...(acts.length > CAPTURE_MAX_ACTIONS ? { truncated: `actions: first ${CAPTURE_MAX_ACTIONS} of ${acts.length}` } : {}),
+    };
+    let out = JSON.stringify(cap);
+    if (out.length <= CAPTURE_MAX_CHARS) return out;
+    // too long: the free-text notes first, then the action list from its end — the marker says what went
+    for (const k of ["lineNote", "lineUncertain", "lineSource"] as const) {
+      if (typeof cap[k] === "string" && (cap[k] as string).length > 200) cap[k] = `${(cap[k] as string).slice(0, 200)}…`;
+    }
+    const list = cap.actions as string[];
+    for (;;) {
+      cap.truncated = `size: ${list.length} of ${acts.length} actions kept`;
+      out = JSON.stringify(cap);
+      if (out.length <= CAPTURE_MAX_CHARS || !list.length) break;
+      list.splice(Math.max(0, list.length - 8));
+    }
+    return out.length <= CAPTURE_MAX_CHARS ? out
+      : JSON.stringify({ street: cap.street, lineSource: typeof cap.lineSource === "string" ? (cap.lineSource as string).slice(0, 200) : null, actionCount: acts.length, truncated: "size: capture dropped" });
+  } catch {
+    return null;   // a capture is evidence, never a reason to lose the row
+  }
+}
+
+/** The in-memory view's copy of a row: without capture_json (read per hand, never by the window readers — ~0.5-1 KB a
+ *  row the view would otherwise hold for 400 days). */
+const forView = (r: LoggedAnswer): LoggedAnswer => {
+  if (r.capture_json === undefined) return r;
+  const { capture_json: _drop, ...rest } = r;
+  void _drop;
+  return rest as LoggedAnswer;
+};
 
 /**
  * NO TEST EVER OPENS A REAL ANSWER LOG (2026-09-25). Setting ANSWERS_DB_PATH inside a test file was not enough:
@@ -467,8 +572,8 @@ class AnswerLog {
              hero_cards, decision_key, text, pick, roll, tier, warning, latency_ms, fail_reason, chart,
              strategy_mode, source, band_lo, band_hi, exploit_pick, chart_pick, exploit_tag,
              mes_family, mes_board, mes_ev_gain_bb, mes_exact, bb_cents, table_seats, table_slot, hero_pos,
-             depth, set_id, decision_json, line, solve_id, session_id, fail_kind, path_verdict, path, chain, press, seat_stats)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+             depth, set_id, decision_json, line, solve_id, session_id, fail_kind, path_verdict, path, chain, press, seat_stats, capture_json)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
         )
         .run(
           row.ts, row.wrapperHandId, row.clientHandId, row.street, row.board,
@@ -481,7 +586,8 @@ class AnswerLog {
           row.bbCents ?? null, row.tableSeats ?? null, row.tableSlot ?? null, row.heroPos ?? null,
           row.depth ?? null, row.setId ?? null, row.decisionJson ?? null, row.line ?? null, row.solveId ?? null, row.sessionId ?? null,
           row.text == null ? (row.failKind ?? failKindOf(row.failReason)) : null,
-          row.pathVerdict ?? null, row.path ?? null, row.chain ?? null, row.press ?? null, row.seatStats ?? null
+          row.pathVerdict ?? null, row.path ?? null, row.chain ?? null, row.press ?? null, row.seatStats ?? null,
+          row.captureJson ?? null
         );
       this.writeSeq++;
       this.pushToView(Number(res.lastInsertRowid));
@@ -549,7 +655,7 @@ class AnswerLog {
             sql: "SELECT * FROM answers WHERE id > $after AND ts >= $cutoff ORDER BY id LIMIT $limit", params: { cutoff },
             after: lastId,
             onPage: (rows: LoggedAnswer[], derived?: unknown[]) => {
-              for (let i = 0; i < rows.length; i++) v.upsert(rows[i]!, derived?.[i] as string[] | undefined, now);
+              for (let i = 0; i < rows.length; i++) v.upsert(forView(rows[i]!), derived?.[i] as string[] | undefined, now);
               lastId = Math.max(lastId, rows[rows.length - 1]!.id);
             },
           });
@@ -604,7 +710,7 @@ class AnswerLog {
     if (m <= this.viewTailId) return;
     for (;;) {
       const rows = db.query<LoggedAnswer, [number]>("SELECT * FROM answers WHERE id > ? ORDER BY id LIMIT 1000").all(this.viewTailId);
-      for (const r of rows) v.upsert(r);
+      for (const r of rows) v.upsert(forView(r));
       if (rows.length) this.viewTailId = rows[rows.length - 1]!.id;
       if (rows.length < 1000) return;
     }
@@ -612,7 +718,7 @@ class AnswerLog {
 
   private readIntoView(v: AnswerView, id: number): void {
     const row = this.open().query<LoggedAnswer, [number]>("SELECT * FROM answers WHERE id = ?").get(id);
-    if (row) v.upsert(row);
+    if (row) v.upsert(forView(row));
   }
 
   /** The writer's push: the row just written (or changed) goes into the view at once (one primary-key read). */

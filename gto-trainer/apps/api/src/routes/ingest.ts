@@ -203,6 +203,8 @@ app.post("/", async (c) => {
       lineSource: liveExtras?.lineSource ?? null,
       lineUncertain: liveExtras?.lineUncertain ?? null,
       lineNote: liveExtras?.lineNote ?? null,
+      // the stacks as dealt, when the wrapper exported them — the answer row's capture_json (services/answerLog.captureJson)
+      ...(hand.startStacks ? { startStacks: hand.startStacks } : {}),
     },
   };
 

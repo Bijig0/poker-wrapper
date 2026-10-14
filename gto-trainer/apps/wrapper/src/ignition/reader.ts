@@ -22,7 +22,7 @@ import {
   mySel, pinFrame, sameHole, splitStrip, tableJs, toAct, watchJs, type Node,
 } from "./dom";
 import { actAdd, actSeen, boardCap, dumpEvent, dumpMark, lastStanding, mkey, noteDomBoard, noteEndUnseen, tapSocketClosed, tapVerify, withoutRabbit } from "./ws";
-import { handState, heroPosition, toActSources } from "./hand";
+import { handState, heroPosition, noteFoldNothingBehind, stackBb, toActSources } from "./hand";
 import { handleModal, stateCheck, topUpReceipt } from "./checks";
 import { shadowTick } from "./shadow";
 import { dbgRecord, writeHandIds } from "./recorder";
@@ -714,6 +714,10 @@ export async function feedTick(): Promise<void> {
         if (num === w.heroSeat) w.heroFolded = true;
         actAdd(num, "fold", null, streetDom);
         feedAdd(`Seat ${num} folds`);
+        // WHICH LINE WAS SERVED (2026-10-14, hand 4924546540): a DOM fold for a seat with nothing behind is logged
+        const st = cs.stack ?? null;
+        noteFoldNothingBehind(num, badge === "FOLD" && ticks.get(num) === 2 ? "the DOM backfill (FOLD badge)" : "the DOM backfill (cards gone)",
+                              /ALL.?IN/i.test(String(st ?? "")) || potVal(st) === 0 ? 0 : stackBb(st));
         continue;
       }
       if (badge === "CHECK" && obBadge !== "CHECK" && !actSeen(["check", num])) {

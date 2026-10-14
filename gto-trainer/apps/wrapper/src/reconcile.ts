@@ -133,6 +133,14 @@ export class HandReconciler {
   ended = false;
   revivals: { seq: number; why: string }[] = [];
   maxLive = 0;
+  /** Each seat's chips behind as the screen last READ them (bb; 0 for an "ALL-IN" label; an unreadable tick keeps the
+   *  last). Read only by `onFold` — the line never depends on it. */
+  private behindNow = new Map<number, number>();
+  /** WHICH LINE WAS SERVED (2026-10-14, hand 4924546540): told of every fold this reconciler files for a seat other
+   *  than hero, with how it was read and the seat's chips behind on screen — shadow.ts hands it to
+   *  hand.ts noteFoldNothingBehind, which logs a fold read for a seat with nothing behind. A DIAGNOSTIC SEAM: it can
+   *  never change the line (null = nobody listening: the tests, the fuzzer, the shadow audit's replays). */
+  onFold: ((seat: number, via: string, behindBb: number | null) => void) | null = null;
 
   constructor(handNo: number) {
     this.handNo = handNo;
@@ -147,6 +155,11 @@ export class HandReconciler {
     if (note) a.note = note;
     if (this.allin.has(seat)) this.violate(seq, "action by an all-in seat", { seat, kind, amount, via });
     this.journal.push(a);
+    if (kind === "fold" && seat !== this.hero && this.onFold) {
+      try {
+        this.onFold(seat, via, this.behindNow.get(seat) ?? null);
+      } catch {}
+    }
     if (seat === this.hero) this.heroGoneAt = null;
     return a;
   }
@@ -355,6 +368,8 @@ export class HandReconciler {
       this.cardHold.set(num, cards === 0 && this.dealt.has(num) ? (this.cardHold.get(num) || 0) + 1 : 0);
       this.foldHold.set(num, badge === "FOLD" ? (this.foldHold.get(num) || 0) + 1 : 0);
       const stBb = bb(s.stack);
+      const behind = stBb !== null ? stBb : /ALL.?IN/i.test(String(s.stack ?? "")) ? 0 : null;
+      if (behind !== null) this.behindNow.set(num, behind);
       this.jamHold.set(num, stBb !== null && stBb <= TOL ? (this.jamHold.get(num) || 0) + 1 : 0);
       if (this.jamHold.get(num) === HOLD_TICKS) this.confirmJam(num);
       const now = !!(this.cardHold.get(num) || this.foldHold.get(num));

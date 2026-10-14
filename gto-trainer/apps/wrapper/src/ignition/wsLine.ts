@@ -40,6 +40,14 @@ export type WsHand = {
   potCheck: { potCents: number; lineCents: number } | null;
   /** frames the reducer could not place (an action from a seat not dealt in, or one that already folded) */
   faults: string[];
+  /**
+   * AN ALL-IN THE FRAME DID NOT TYPE AS ONE (2026-10-14, hand 4924546540): the button's whole 2.2bb went in on btn 4096
+   * "raise" (bet 5, raise 11, account 0) and the line filed a raise. Every money frame that leaves its seat with
+   * nothing behind (`account` 0) under a verb other than all-in, and every fold from a seat whose account was already 0,
+   * in frame order. DIAGNOSTIC ONLY: the rows above are typed as before (retyping is Brady's call), and nothing
+   * serializes this — hand.ts logs it once per seat per hand.
+   */
+  nothingBehind: { seat: number; verb: string; type: string; street: string; toCents: number }[];
 };
 
 /** A wire card as ws.ts names it ("7♣", "10♦") — the /hand export's own spelling; compare with dom.cardKey. */
@@ -57,6 +65,8 @@ export function wsHand(frames: readonly Record<string, any>[], bbCents: number |
   let street = "preflop", maxBet = 0, dealt: number[] = [], heroSeat: number | null = null, heroCards: string[] = [];
   let potCheck: WsHand["potCheck"] = null;
   let returned = 0, deadCents = 0;
+  const nothingBehind: WsHand["nothingBehind"] = [];
+  const behind = new Map<number, number>();      // each seat's latest account (chips behind) — nothingBehind only
   const bb = (cents: number) => (bbCents ? pyRound(cents / bbCents, 2) : undefined);
   const push = (seatId: number, type: string, cents: number | null) => {
     const r: WsRow = { seatId, hero: seatId === heroSeat, type, street };
@@ -82,6 +92,13 @@ export function wsHand(frames: readonly Record<string, any>[], bbCents: number |
     const to = prior + added;
     moneyIn.set(seat, (moneyIn.get(seat) ?? 0) + added);
     account(seat, acct);
+    const before = behind.get(seat);
+    if (typeof acct === "number" && Number.isFinite(acct)) behind.set(seat, acct);
+    if (added > 0 && verb !== "all-in" && acct === 0) {
+      nothingBehind.push({ seat, verb, type: verb === "call" && to > maxBet ? "bet" : verb, street, toCents: to });
+    } else if (verb === "fold" && (before === 0 || acct === 0)) {
+      nothingBehind.push({ seat, verb, type: "fold", street, toCents: prior });
+    }
     if (verb === "raise") push(seat, "raise", to);
     else if (verb === "all-in") push(seat, "all-in", to);
     else if (verb === "call") {
@@ -106,6 +123,7 @@ export function wsHand(frames: readonly Record<string, any>[], bbCents: number |
         moneyIn.set(seat, (moneyIn.get(seat) ?? 0) + bet + (Number(d.dead) || 0));
         deadCents += Number(d.dead) || 0;
         account(seat, d.account);
+        if (typeof d.account === "number" && Number.isFinite(d.account)) behind.set(seat, d.account);
         // btn 16 = a returning player's post WITH a dead small blind (bet = the live blind, dead = the dead one): the
         // live part is a post like btn 8's; the dead part is in the pot as nobody's bet (hands 4921653890 / 4921673957)
         if (bet && (d.btn === 2 || d.btn === 4 || d.btn === 8 || d.btn === 16)) push(seat, d.btn === 2 ? "post-sb" : d.btn === 4 ? "post-bb" : "post", bet);
@@ -167,7 +185,7 @@ export function wsHand(frames: readonly Record<string, any>[], bbCents: number |
       }
     }
   }
-  return { actions: rows, board: board.filter(Boolean), dealt, heroSeat, heroCards, startCents, folded, deadCents, potCheck, faults };
+  return { actions: rows, board: board.filter(Boolean), dealt, heroSeat, heroCards, startCents, folded, deadCents, potCheck, faults, nothingBehind };
 }
 
 /** Does the protocol's own pot agree with the chips the line put in? The pot frame counts every chip of the closed

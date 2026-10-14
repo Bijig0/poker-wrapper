@@ -1812,6 +1812,7 @@ export const NOT_DEPARTURES: {
     "NOT NEEDED": "a refusal reason: the cold-call lock (or, since 2026-10-09, the limp lock under the trigger rule) was not needed — the unlocked tree gives the action a real share",
   },
   logging: {
+    "answers.capture_json": "what the API saw for the decision (services/answerLog.captureJson, 2026-10-14, hand 4924546540): the wrapper's lineSource / lineUncertain / lineNote, the hand's actions as seat:type:amount, positions, liveSeats, startStacks, toCall — logged on EVERY answer row, failed and no-answer rows included, so a line the wrapper served that differs from its own archive is attributable; read by no answer",
     "answers.seat_stats": "per-seat session VPIP / PFR (services/seatStats, 2026-10-09): every villain seat's hands seen this session for its current occupant (seat + stack continuity — Ignition is anonymous), VPIP and PFR counts, logged on each answer row; the column is not read by any answer — groundwork for a session-VPIP band (memory player-type-study). The in-memory store behind it IS read since 2026-10-10 by one departure, pool-sbflat-v2 (SB_FLAT_TABLE=v2: the SB flatter's VPIP keys the SB-flat table — seatStats.seatHistoryFor), registered there"
   },
 };
